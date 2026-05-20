@@ -1,0 +1,7 @@
+{
+	"name": "@offbeat/protocol",
+	"private": true,
+	"scripts": {
+		"check": "tsc --noEmit && biome check src/"
+	}
+}

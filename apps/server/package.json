@@ -1,0 +1,14 @@
+{
+	"name": "@offbeat/server",
+	"private": true,
+	"scripts": {
+		"check": "tsc --noEmit && biome check src/"
+	},
+	"dependencies": {
+		"hono": "^4.12.21"
+	},
+	"devDependencies": {
+		"@cloudflare/workers-types": "^4.20260520.1",
+		"wrangler": "^4.93.0"
+	}
+}

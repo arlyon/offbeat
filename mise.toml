@@ -1,0 +1,4 @@
+[tools]
+flutter = "latest"
+rust = "latest"
+wrangler = "latest"

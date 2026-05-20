@@ -1,0 +1,8 @@
+[package]
+name = "offbeat-bridge"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+offbeat-core = { path = "../core" }
+flutter_rust_bridge = "2"

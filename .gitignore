@@ -1,0 +1,12 @@
+node_modules
+.turbo
+target
+.svelte-kit
+.wrangler
+dist
+*.sqlite
+.dart_tool
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages

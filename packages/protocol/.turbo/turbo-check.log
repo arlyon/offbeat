@@ -1,0 +1,5 @@
+
+> @offbeat/protocol@ check /home/arlyon/Programming/offbeat/packages/protocol
+> tsc --noEmit && biome check src/
+
+Checked 1 file in 2ms. No fixes applied.

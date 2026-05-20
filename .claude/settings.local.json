@@ -1,0 +1,14 @@
+{
+	"includeCoAuthoredBy": false,
+	"permissions": {
+		"allow": [
+			"Bash(git --version)",
+			"Bash(gs --version)",
+			"Bash(flutter:*)",
+			"Bash(pnpm:*)"
+		]
+	},
+	"enableAllProjectMcpServers": true,
+	"enabledMcpjsonServers": ["homeassistant"],
+	"showClearContextOnPlanAccept": true
+}

@@ -1,0 +1,200 @@
+{
+  "project_id": "offbeat",
+  "name": "OFFBEAT — Festival Timeline Tracker",
+  "technical_context": {
+    "stack": [
+      "Flutter (mobile UI, iOS + Android)",
+      "flutter_rust_bridge v2 (Dart ↔ Rust FFI)",
+      "Cloudflare Workers + Durable Objects",
+      "iroh (unified P2P transport: IP + relay + BLE + meshtastic)",
+      "iroh-gossip (topic-based pub/sub for all data propagation)",
+      "Yrs (Rust Yjs port, CRDT state for lineup + group docs)",
+      "SQLite (rusqlite on client, DO storage on server)",
+      "WebAuthn (passkeys)",
+      "AES-256-GCM (group doc encryption)",
+      "ed25519 (lineup signing via iroh NodeId)",
+      "BLE custom transport (iroh unstable-custom-transports)",
+      "Meshtastic custom transport (BLE GATT + protobuf + LoRa)",
+      "Turborepo monorepo",
+      "pnpm",
+      "Biome (lint + format)"
+    ],
+    "entry_points": [
+      "apps/mobile/lib/main.dart",
+      "crates/core/src/lib.rs",
+      "crates/bridge/src/api.rs",
+      "apps/server/src/index.ts",
+      "packages/protocol/src/index.ts"
+    ],
+    "monorepo_structure": {
+      "crates/core": "Rust core — iroh, Yrs, gossip, crypto, DB. All business logic. Fully testable.",
+      "crates/bridge": "Thin FRB wrapper — annotated functions delegating to core. Minimal logic.",
+      "apps/mobile": "Flutter project — UI only, calls Rust via FRB",
+      "apps/server": "Cloudflare Workers — Main DO, Festival DO, REST API",
+      "packages/protocol": "Shared TypeScript types, Clashfinder parser"
+    },
+    "gossip_topics": {
+      "{fest}/state": "Signed Yrs updates (lineup, stages, announcements). Festival DO is author.",
+      "{fest}/chat/{stage}": "Public chat messages scoped to a stage. Auto-subscribe on check-in.",
+      "{fest}/chat/campsite": "Public campsite chat.",
+      "{fest}/chat/general": "Public general/off-topic chat.",
+      "{group}/state": "Encrypted Yrs updates (members, presence, stars, pins). Group members only.",
+      "{group}/chat": "Encrypted chat messages. Group members only."
+    },
+    "transport_layers": {
+      "IP": "Built-in iroh. WiFi, cellular, internet. Primary path.",
+      "Relay": "Built-in iroh. WebSocket relay for NAT traversal. DO acts as relay peer.",
+      "BLE": "Custom iroh transport (0x424C45). Direct peer sync. ~247B MTU, needs fragmentation.",
+      "Meshtastic": "Custom iroh transport. BLE GATT to LoRa radio. ~228B MTU, needs fragmentation."
+    }
+  },
+  "phases": [
+    {
+      "id": "phase_1",
+      "task_name": "Scaffold monorepo",
+      "description": "Initialize pnpm workspace, turborepo, Cargo workspace (crates/core + crates/bridge), Flutter project, Cloudflare Workers project, protocol package. Wire pnpm check with biome + tsc + cargo clippy + cargo test.",
+      "files_impacted": [
+        "pnpm-workspace.yaml",
+        "turbo.json",
+        "biome.json",
+        "package.json",
+        "Cargo.toml",
+        ".cargo/config.toml",
+        ".gitignore",
+        "crates/core/Cargo.toml",
+        "crates/core/src/lib.rs",
+        "crates/bridge/Cargo.toml",
+        "crates/bridge/src/lib.rs",
+        "crates/bridge/src/api.rs",
+        "apps/mobile/pubspec.yaml",
+        "apps/mobile/lib/main.dart",
+        "apps/server/package.json",
+        "apps/server/wrangler.toml",
+        "apps/server/tsconfig.json",
+        "apps/server/src/index.ts",
+        "packages/protocol/package.json",
+        "packages/protocol/tsconfig.json",
+        "packages/protocol/src/index.ts"
+      ],
+      "definition_of_done": "pnpm turbo check --ui stream --output-logs errors-only",
+      "dependencies": []
+    },
+    {
+      "id": "phase_2",
+      "task_name": "Protocol and data model",
+      "description": "Define shared TS types, Clashfinder parser with tests, Rust types with serde, IPC types, SQLite schemas with migrations, sample fixture data (Field Day 2026).",
+      "files_impacted": [
+        "packages/protocol/src/types.ts",
+        "packages/protocol/src/clashfinder.ts",
+        "packages/protocol/src/clashfinder.test.ts",
+        "packages/protocol/fixtures/fieldday26.json",
+        "crates/core/src/types.rs",
+        "crates/core/src/db/schema.sql",
+        "crates/core/src/db/mod.rs",
+        "apps/server/src/schema.sql"
+      ],
+      "definition_of_done": "pnpm turbo check --ui stream --output-logs errors-only. Clashfinder parser test passes. cargo test passes for DB module.",
+      "dependencies": ["phase_1"]
+    },
+    {
+      "id": "phase_3",
+      "task_name": "Server — Main DO and Festival DO",
+      "description": "Main DO with festival CRUD REST API and passkey auth. Festival DO as iroh gossip persistent peer: signs lineup Yrs updates, stores chat history, blind mailbox for encrypted group gossip. Lazy creation within active window. Archival on window close.",
+      "files_impacted": [
+        "apps/server/src/index.ts",
+        "apps/server/src/main-do.ts",
+        "apps/server/src/festival-do.ts",
+        "apps/server/src/api.ts",
+        "apps/server/src/auth.ts",
+        "apps/server/src/signing.ts",
+        "apps/server/wrangler.toml",
+        "apps/server/package.json"
+      ],
+      "definition_of_done": "pnpm turbo check --ui stream --output-logs errors-only. GET /festivals returns seeded data. Festival DO creates on first connection within window.",
+      "dependencies": ["phase_2"]
+    },
+    {
+      "id": "phase_4",
+      "task_name": "Rust core — iroh + Yrs + gossip",
+      "description": "iroh::Endpoint with IP + relay. DocManager for Yrs doc lifecycle with signed update verification and group encryption. Gossip manager for topic subscriptions. Gossip-to-doc bridge. OffbeatNode public API. Topic ID derivation. All in crates/core, fully testable.",
+      "files_impacted": [
+        "crates/core/Cargo.toml",
+        "crates/core/src/lib.rs",
+        "crates/core/src/doc_manager.rs",
+        "crates/core/src/gossip_manager.rs",
+        "crates/core/src/crypto.rs",
+        "crates/core/src/signing.rs",
+        "crates/core/src/topics.rs",
+        "crates/core/src/db/mod.rs"
+      ],
+      "definition_of_done": "pnpm turbo check --ui stream --output-logs errors-only. cargo test passes for DocManager, crypto, signing, topic derivation.",
+      "dependencies": ["phase_3"]
+    },
+    {
+      "id": "phase_5",
+      "task_name": "Flutter bridge and UI",
+      "description": "Thin FRB bridge in crates/bridge wrapping core OffbeatNode. Flutter UI with OFFBEAT design system, app shell Variant A, festival list, festival detail views (Gantt V1, Day Tabs V2, Stage Tabs V3, Filters V4). All wired to Rust core via FRB streams.",
+      "files_impacted": [
+        "crates/bridge/src/api.rs",
+        "crates/bridge/Cargo.toml",
+        "apps/mobile/lib/main.dart",
+        "apps/mobile/lib/theme/*.dart",
+        "apps/mobile/lib/widgets/*.dart",
+        "apps/mobile/lib/screens/*.dart",
+        "apps/mobile/lib/services/*.dart"
+      ],
+      "definition_of_done": "pnpm turbo check --ui stream --output-logs errors-only. Flutter app renders festival list from Rust core. Festival detail shows gantt + tabs + filters.",
+      "dependencies": ["phase_4"]
+    },
+    {
+      "id": "phase_6",
+      "task_name": "Auth and friend groups",
+      "description": "Passkey registration/auth via webview bridge. iroh identity generation. Group creation (key gen, Yrs doc, QR). Group join (QR scan, sync). Group leave. Presence UI with check-in. Shared stars. Location pins.",
+      "files_impacted": [
+        "apps/server/src/auth.ts",
+        "crates/core/src/auth.rs",
+        "crates/core/src/groups.rs",
+        "crates/bridge/src/api.rs",
+        "apps/mobile/lib/screens/groups_screen.dart",
+        "apps/mobile/lib/screens/group_detail_screen.dart",
+        "apps/mobile/lib/widgets/qr_code.dart",
+        "apps/mobile/lib/widgets/qr_scanner.dart",
+        "apps/mobile/lib/widgets/group_presence.dart",
+        "apps/mobile/lib/widgets/check_in_button.dart"
+      ],
+      "definition_of_done": "pnpm turbo check --ui stream --output-logs errors-only. Create group → QR → scan → both see members + presence. Check-in propagates. Stars visible. Leave removes member.",
+      "dependencies": ["phase_5"]
+    },
+    {
+      "id": "phase_7",
+      "task_name": "Chat system",
+      "description": "Stage-scoped festival chat via gossip. Auto-subscribe on check-in. Group encrypted chat. DO catch-up on reconnect. Chat UI with stage filter. History browsing.",
+      "files_impacted": [
+        "crates/core/src/gossip_manager.rs",
+        "apps/mobile/lib/screens/chat_screen.dart",
+        "apps/mobile/lib/widgets/chat_view.dart",
+        "apps/mobile/lib/widgets/chat_input.dart",
+        "apps/mobile/lib/widgets/stage_filter.dart"
+      ],
+      "definition_of_done": "pnpm turbo check --ui stream --output-logs errors-only. Stage chat received by subscribers. Group chat encrypted. Catch-up from DO after offline.",
+      "dependencies": ["phase_6"]
+    },
+    {
+      "id": "phase_8",
+      "task_name": "P2P transports — BLE and Meshtastic",
+      "description": "BLE custom iroh transport with GATT and fragmentation layer. Meshtastic custom iroh transport with BLE GATT to device and protobuf wrapping. Transport status UI showing all active paths. Multi-transport fallback integration test.",
+      "files_impacted": [
+        "crates/core/Cargo.toml",
+        "crates/core/src/transport/mod.rs",
+        "crates/core/src/transport/ble.rs",
+        "crates/core/src/transport/meshtastic.rs",
+        "crates/core/src/transport/fragmentation.rs",
+        "crates/core/proto/meshtastic.proto",
+        "crates/core/build.rs",
+        "apps/mobile/lib/widgets/connection_status.dart"
+      ],
+      "definition_of_done": "pnpm turbo check --ui stream --output-logs errors-only. BLE: two devices sync group doc. Meshtastic: connect to device, send/receive. Fragmentation unit tests pass.",
+      "dependencies": ["phase_6"]
+    }
+  ]
+}

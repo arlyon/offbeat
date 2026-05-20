@@ -1,0 +1,22 @@
+[package]
+name = "offbeat-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+aes-gcm = "0.10.3"
+anyhow = "1.0.102"
+base64 = "0.22.1"
+blake3 = "1.8.5"
+ed25519-dalek = { version = "2.2.0", features = ["rand_core"] }
+iroh = { version = "1.0.0-rc.0", features = ["unstable-custom-transports"] }
+iroh-gossip = "0.99.0"
+rand = "0.10.1"
+rusqlite = { version = "0.39.0", features = ["bundled"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+tokio = { version = "1.52.3", features = ["full"] }
+tracing = "0.1.44"
+tracing-subscriber = "0.3.23"
+uuid = { version = "1.23.1", features = ["v4"] }
+yrs = "0.26.0"

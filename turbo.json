@@ -1,0 +1,13 @@
+{
+	"$schema": "https://turbo.build/schema.json",
+	"tasks": {
+		"check": {
+			"dependsOn": ["^check"],
+			"outputs": []
+		},
+		"check:rust": {
+			"inputs": ["crates/**/*.rs", "Cargo.toml", "Cargo.lock"],
+			"outputs": []
+		}
+	}
+}
