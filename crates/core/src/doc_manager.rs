@@ -123,6 +123,27 @@ impl DocManager {
         }
     }
 
+    /// Read all key-value pairs from the root map of a doc.
+    ///
+    /// Returns a `Vec<(key, value)>` where value is the string representation.
+    /// Non-string entries are silently skipped.
+    pub fn read_map_values_with_prefix(&mut self, doc_id: &str) -> Vec<(String, String)> {
+        self.get_or_create(doc_id);
+        let doc = match self.docs.get(doc_id) {
+            Some(d) => d,
+            None => return vec![],
+        };
+        let map = doc.get_or_insert_map("root");
+        let txn = doc.transact();
+        let mut out = Vec::new();
+        for (k, v) in map.iter(&txn) {
+            if let Out::Any(Any::String(s)) = v {
+                out.push((k.to_string(), s.to_string()));
+            }
+        }
+        out
+    }
+
     // --- Group doc helpers ---
 
     /// Decrypt and apply an encrypted update.

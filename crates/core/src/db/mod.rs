@@ -188,6 +188,47 @@ impl Database {
         Ok(msgs)
     }
 
+    // --- credentials ---
+
+    /// Read a named credential value (arbitrary bytes).
+    pub fn get_credential(&self, key: &str) -> Result<Option<Vec<u8>>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT value FROM credentials WHERE key = ?1")?;
+        let mut rows = stmt.query(params![key])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(row.get(0)?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Upsert a named credential value.
+    pub fn set_credential(&self, key: &str, value: &[u8]) -> Result<()> {
+        self.conn.lock().unwrap().execute(
+            "INSERT OR REPLACE INTO credentials (key, value) VALUES (?1, ?2)",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
+    // --- group key lookup ---
+
+    /// Load the AES key for a group, returning None if not found.
+    pub fn load_group_key(&self, group_id: &str) -> Result<Option<[u8; 32]>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT key FROM groups WHERE id = ?1")?;
+        let mut rows = stmt.query(params![group_id])?;
+        if let Some(row) = rows.next()? {
+            let bytes: Vec<u8> = row.get(0)?;
+            let arr: [u8; 32] = bytes
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("group key has wrong length"))?;
+            Ok(Some(arr))
+        } else {
+            Ok(None)
+        }
+    }
+
     // --- gossip log ---
 
     /// Save a gossip entry and return the assigned sequence number.

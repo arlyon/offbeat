@@ -25,6 +25,41 @@ pub struct ChatMessageDto {
     pub timestamp: String,
 }
 
+pub struct GroupCreateResultDto {
+    pub group_id: String,
+    pub invite_payload: String,
+}
+
+pub struct GroupJoinResultDto {
+    pub group_id: String,
+}
+
+pub struct GroupMemberDto {
+    pub user_id: String,
+    pub display_name: String,
+    pub status: String,
+    pub stage_id: Option<String>,
+    pub custom_location: Option<String>,
+}
+
+pub struct GroupPinDto {
+    pub id: String,
+    pub label: String,
+    pub location: String,
+    pub pinned_by: String,
+}
+
+pub struct GroupStateDto {
+    pub name: String,
+    pub members: Vec<GroupMemberDto>,
+    pub pins: Vec<GroupPinDto>,
+}
+
+pub struct IdentityDto {
+    pub user_id: String,
+    pub display_name: Option<String>,
+}
+
 // ---------------------------------------------------------------------------
 // Opaque node handle
 // ---------------------------------------------------------------------------
@@ -193,6 +228,201 @@ impl AppNode {
             .ok_or_else(|| anyhow::anyhow!("networking not started"))?;
 
         gm.lock().await.publish(topic_id, bytes).await
+    }
+
+    // -----------------------------------------------------------------------
+    // Identity
+    // -----------------------------------------------------------------------
+
+    /// Return the local identity (user_id + optional display_name).
+    pub fn get_identity(&self) -> anyhow::Result<IdentityDto> {
+        use offbeat_core::auth;
+        let signing_key = auth::generate_or_load_identity(&self.inner.db)?;
+        let user_id = auth::get_user_id(&signing_key);
+        let display_name = auth::get_display_name(&self.inner.db)?;
+        Ok(IdentityDto { user_id, display_name })
+    }
+
+    /// Persist a display name for the local user.
+    pub fn set_display_name(&self, name: String) -> anyhow::Result<()> {
+        offbeat_core::auth::set_display_name(&self.inner.db, &name)
+    }
+
+    // -----------------------------------------------------------------------
+    // Group lifecycle
+    // -----------------------------------------------------------------------
+
+    /// Create a new group and return its ID + shareable invite payload.
+    pub async fn create_group(
+        &self,
+        festival_id: String,
+        name: String,
+        display_name: String,
+    ) -> anyhow::Result<GroupCreateResultDto> {
+        use offbeat_core::auth;
+        let signing_key = auth::generate_or_load_identity(&self.inner.db)?;
+        let user_id = auth::get_user_id(&signing_key);
+
+        let result = self
+            .inner
+            .group_manager
+            .create_group(&festival_id, &name, &user_id, &display_name)
+            .await?;
+
+        Ok(GroupCreateResultDto {
+            group_id: result.group_id,
+            invite_payload: result.invite_payload,
+        })
+    }
+
+    /// Join an existing group from an invite payload.
+    pub async fn join_group(
+        &self,
+        invite_payload: String,
+        display_name: String,
+    ) -> anyhow::Result<GroupJoinResultDto> {
+        use offbeat_core::auth;
+        let signing_key = auth::generate_or_load_identity(&self.inner.db)?;
+        let user_id = auth::get_user_id(&signing_key);
+
+        let result = self
+            .inner
+            .group_manager
+            .join_group(&invite_payload, &user_id, &display_name)
+            .await?;
+
+        Ok(GroupJoinResultDto {
+            group_id: result.group_id,
+        })
+    }
+
+    /// Leave a group.
+    pub async fn leave_group(&self, group_id: String) -> anyhow::Result<()> {
+        use offbeat_core::auth;
+        let signing_key = auth::generate_or_load_identity(&self.inner.db)?;
+        let user_id = auth::get_user_id(&signing_key);
+
+        self.inner
+            .group_manager
+            .leave_group(&group_id, &user_id)
+            .await?;
+        Ok(())
+    }
+
+    /// Record the current location and optionally publish via gossip.
+    pub async fn check_in(
+        &self,
+        group_id: String,
+        stage_id: Option<String>,
+        custom_location: Option<String>,
+    ) -> anyhow::Result<()> {
+        use offbeat_core::auth;
+        let signing_key = auth::generate_or_load_identity(&self.inner.db)?;
+        let user_id = auth::get_user_id(&signing_key);
+
+        let encrypted = self
+            .inner
+            .group_manager
+            .check_in(
+                &group_id,
+                &user_id,
+                stage_id.as_deref(),
+                custom_location.as_deref(),
+            )
+            .await?;
+
+        if let Some(gm) = &self.inner.gossip_manager {
+            use offbeat_core::topics;
+            if let Some(group_key) = self.inner.db.load_group_key(&group_id)? {
+                let topic = topics::group_topic(&group_key, "state");
+                gm.lock().await.publish(topic, encrypted).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Update the shared stars for the current user in a group.
+    pub async fn update_shared_stars(
+        &self,
+        group_id: String,
+        set_ids: Vec<String>,
+    ) -> anyhow::Result<()> {
+        use offbeat_core::auth;
+        let signing_key = auth::generate_or_load_identity(&self.inner.db)?;
+        let user_id = auth::get_user_id(&signing_key);
+
+        let encrypted = self
+            .inner
+            .group_manager
+            .update_stars(&group_id, &user_id, set_ids)
+            .await?;
+
+        if let Some(gm) = &self.inner.gossip_manager {
+            use offbeat_core::topics;
+            if let Some(group_key) = self.inner.db.load_group_key(&group_id)? {
+                let topic = topics::group_topic(&group_key, "state");
+                gm.lock().await.publish(topic, encrypted).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Add a map pin to a group and optionally publish via gossip.
+    pub async fn add_pin(
+        &self,
+        group_id: String,
+        label: String,
+        location: String,
+    ) -> anyhow::Result<()> {
+        use offbeat_core::auth;
+        let signing_key = auth::generate_or_load_identity(&self.inner.db)?;
+        let user_id = auth::get_user_id(&signing_key);
+
+        let pin_id = uuid::Uuid::new_v4().to_string();
+        let encrypted = self
+            .inner
+            .group_manager
+            .add_pin(&group_id, &pin_id, &label, &location, &user_id)
+            .await?;
+
+        if let Some(gm) = &self.inner.gossip_manager {
+            use offbeat_core::topics;
+            if let Some(group_key) = self.inner.db.load_group_key(&group_id)? {
+                let topic = topics::group_topic(&group_key, "state");
+                gm.lock().await.publish(topic, encrypted).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Read the current state of a group from the local Yrs doc.
+    pub async fn get_group_state(&self, group_id: String) -> anyhow::Result<GroupStateDto> {
+        let state = self.inner.group_manager.get_group_state(&group_id).await?;
+
+        Ok(GroupStateDto {
+            name: state.name,
+            members: state
+                .members
+                .into_iter()
+                .map(|m| GroupMemberDto {
+                    user_id: m.user_id,
+                    display_name: m.display_name,
+                    status: m.status,
+                    stage_id: m.stage_id,
+                    custom_location: m.custom_location,
+                })
+                .collect(),
+            pins: state
+                .pins
+                .into_iter()
+                .map(|p| GroupPinDto {
+                    id: p.id,
+                    label: p.label,
+                    location: p.location,
+                    pinned_by: p.pinned_by,
+                })
+                .collect(),
+        })
     }
 }
 

@@ -867,3 +867,126 @@ async fn test_d1_disconnect_d2_sends_d1_catchup() {
     drop(sink_d1_new);
     drop(sink_d2);
 }
+
+// =============================================================================
+// Test: Group encrypted state sync via DO relay
+// =============================================================================
+
+#[tokio::test]
+#[ignore = "requires running DO server"]
+async fn test_group_encrypted_state_sync_via_relay() {
+    use base64::Engine as _;
+    use offbeat_core::{OffbeatNode, crypto};
+
+    let festival_id = "relay-group-test-1";
+    let topic = format!("festival/{festival_id}/state");
+
+    // D1 creates a group and a shared key via GroupManager.
+    let node_d1 = OffbeatNode::new_in_memory().unwrap();
+    let create_result = node_d1
+        .group_manager
+        .create_group(festival_id, "Test Crew", "d1-user", "D1 User")
+        .await
+        .unwrap();
+
+    let group_id = &create_result.group_id;
+    let group_key = node_d1.db.load_group_key(group_id).unwrap().unwrap();
+
+    // D2 joins the group using the invite payload (shares the same key).
+    let node_d2 = OffbeatNode::new_in_memory().unwrap();
+    node_d2
+        .group_manager
+        .join_group(&create_result.invite_payload, "d2-user", "D2 User")
+        .await
+        .unwrap();
+
+    // Connect both to the DO relay.
+    let (mut sink_d1, mut stream_d1) = connect_and_subscribe(festival_id, &topic).await.unwrap();
+    let (mut sink_d2, mut stream_d2) = connect_and_subscribe(festival_id, &topic).await.unwrap();
+
+    // D1 adds a pin, encrypts the update.
+    let encrypted_d1 = node_d1
+        .group_manager
+        .add_pin(group_id, "pin-relay-1", "Tent Area", "51.5,-0.1", "d1-user")
+        .await
+        .unwrap();
+
+    // D1 sends the encrypted update as a relay message.
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&encrypted_d1);
+    send_json(
+        &mut sink_d1,
+        &json!({
+            "type": "relay",
+            "topic": topic,
+            "data": encoded
+        }),
+    )
+    .await
+    .unwrap();
+
+    // D2 receives and applies the update.
+    let recv = wait_for_message_type(&mut stream_d2, "relay", 5).await.unwrap();
+    let received_encoded = recv["data"].as_str().unwrap();
+    let received_encrypted = base64::engine::general_purpose::STANDARD
+        .decode(received_encoded)
+        .unwrap();
+
+    let decrypted = crypto::decrypt(&group_key, &received_encrypted).unwrap();
+    node_d2
+        .doc_manager
+        .lock()
+        .await
+        .apply_update(&format!("group/{group_id}"), &decrypted)
+        .unwrap();
+
+    // Verify D2 sees the pin.
+    let state_d2 = node_d2.group_manager.get_group_state(group_id).await.unwrap();
+    assert_eq!(state_d2.pins.len(), 1);
+    assert_eq!(state_d2.pins[0].label, "Tent Area");
+
+    // D2 makes a change (check-in), sends back.
+    let encrypted_d2 = node_d2
+        .group_manager
+        .check_in(group_id, "d2-user", Some("main-stage"), None)
+        .await
+        .unwrap();
+
+    let encoded_d2 = base64::engine::general_purpose::STANDARD.encode(&encrypted_d2);
+    send_json(
+        &mut sink_d2,
+        &json!({
+            "type": "relay",
+            "topic": topic,
+            "data": encoded_d2
+        }),
+    )
+    .await
+    .unwrap();
+
+    // D1 receives and applies.
+    let recv_d1 = wait_for_message_type(&mut stream_d1, "relay", 5).await.unwrap();
+    let received_encoded_d1 = recv_d1["data"].as_str().unwrap();
+    let received_encrypted_d1 = base64::engine::general_purpose::STANDARD
+        .decode(received_encoded_d1)
+        .unwrap();
+
+    let decrypted_d1 = crypto::decrypt(&group_key, &received_encrypted_d1).unwrap();
+    node_d1
+        .doc_manager
+        .lock()
+        .await
+        .apply_update(&format!("group/{group_id}"), &decrypted_d1)
+        .unwrap();
+
+    // D1 sees D2's location.
+    let state_d1 = node_d1.group_manager.get_group_state(group_id).await.unwrap();
+    let d2_member = state_d1
+        .members
+        .iter()
+        .find(|m| m.user_id == "d2-user")
+        .expect("d2-user should be in state");
+    assert_eq!(d2_member.stage_id.as_deref(), Some("main-stage"));
+
+    drop(sink_d1);
+    drop(sink_d2);
+}
