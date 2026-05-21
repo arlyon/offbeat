@@ -7,7 +7,20 @@
       "Bash(flutter:*)",
       "Bash(pnpm:*)",
       "WebFetch(domain:clashfinder.com)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(cargo check:*)",
+      "Bash(cargo test:*)",
+      "WebFetch(domain:passkeys.dev)",
+      "WebFetch(domain:pub.dev)",
+      "WebFetch(domain:blog.nicco.io)",
+      "WebFetch(domain:www.w3.org)",
+      "WebFetch(domain:developer.chrome.com)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:caniuse.com)",
+      "WebFetch(domain:chromium.googlesource.com)",
+      "WebFetch(domain:groups.google.com)",
+      "WebFetch(domain:www.corbado.com)",
+      "WebFetch(domain:w3c.github.io)"
     ]
   },
   "enableAllProjectMcpServers": true,

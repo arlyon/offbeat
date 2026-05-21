@@ -759,9 +759,11 @@ export class MainDO extends DurableObject {
 					body.challenge,
 					{
 						id: credential.id,
-						publicKey: credential.publicKey,
+						publicKey: credential.publicKey as Uint8Array<ArrayBuffer>,
 						counter: credential.counter,
-						transports: credential.transports as import("@simplewebauthn/server").AuthenticatorTransportFuture[] | undefined,
+						transports: credential.transports as
+							| import("@simplewebauthn/server").AuthenticatorTransportFuture[]
+							| undefined,
 					},
 					env,
 				);
@@ -821,9 +823,11 @@ export class MainDO extends DurableObject {
 					body.challenge,
 					{
 						id: credential.id,
-						publicKey: credential.publicKey,
+						publicKey: credential.publicKey as Uint8Array<ArrayBuffer>,
 						counter: credential.counter,
-						transports: credential.transports as import("@simplewebauthn/server").AuthenticatorTransportFuture[] | undefined,
+						transports: credential.transports as
+							| import("@simplewebauthn/server").AuthenticatorTransportFuture[]
+							| undefined,
 					},
 					env,
 				);
@@ -915,7 +919,9 @@ export class MainDO extends DurableObject {
 		// GET /admins/requests — list pending admin requests
 		if (method === "GET" && path === "/admins/requests") {
 			const rows = this.sql
-				.exec("SELECT public_key, display_name, requested_at FROM pending_admins ORDER BY requested_at")
+				.exec(
+					"SELECT public_key, display_name, requested_at FROM pending_admins ORDER BY requested_at",
+				)
 				.toArray() as { public_key: string; display_name: string; requested_at: string }[];
 			return Response.json(
 				rows.map((r) => ({

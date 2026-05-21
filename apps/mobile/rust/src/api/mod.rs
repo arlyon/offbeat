@@ -351,12 +351,27 @@ impl AppNode {
         Ok(())
     }
 
-    /// Subscribe to the gossip topic for a festival.
+    /// Subscribe to the gossip topic for a festival and perform a state vector
+    /// exchange with the DO so we only receive updates we don't already have.
     pub async fn subscribe_festival(&mut self, festival_id: String) -> anyhow::Result<()> {
         let topic_id = offbeat_core::topics::festival_topic(&festival_id, "state");
+        let topic_str = format!("festival/{festival_id}/state");
+        let doc_id = topic_str.clone();
 
         if let Some(gm) = &self.inner.gossip_manager {
             gm.lock().await.subscribe(topic_id, vec![]).await?;
+        }
+
+        if let Some(ws) = &self.inner.ws_relay {
+            ws.subscribe(vec![topic_str]).await?;
+
+            // Send our state vector so the DO can compute a targeted diff
+            let sv = {
+                let mut dm = self.inner.doc_manager.lock().await;
+                dm.get_or_create(&doc_id);
+                dm.get_state_vector(&doc_id)?
+            };
+            ws.sv_exchange(&doc_id, &sv).await?;
         }
 
         Ok(())

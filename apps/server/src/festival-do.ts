@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import * as Y from "yjs";
 import { generateKeypair, sign, verify } from "./signing";
 
 interface Session {
@@ -59,6 +60,12 @@ export class FestivalDO extends DurableObject {
 
 			CREATE TABLE IF NOT EXISTS admins (
 				public_key TEXT PRIMARY KEY
+			);
+
+			CREATE TABLE IF NOT EXISTS yrs_docs (
+				doc_id TEXT PRIMARY KEY,
+				data BLOB NOT NULL,
+				updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 			);
 		`);
 	}
@@ -520,6 +527,62 @@ export class FestivalDO extends DurableObject {
 						type: "catchup",
 						topic: parsed.topic,
 						messages,
+					}),
+				);
+				break;
+			}
+
+			case "sv_exchange": {
+				const { docId, sv: svBase64 } = parsed as { type: string; docId: string; sv: string };
+				if (!docId || !svBase64) {
+					ws.send(JSON.stringify({ type: "error", error: "sv_exchange requires docId and sv" }));
+					break;
+				}
+
+				// Determine topic from docId (e.g., "festival/fest-1/state")
+				const topic = docId;
+
+				// Load or create server doc
+				const serverDoc = new Y.Doc();
+				const stored = this.sql
+					.exec("SELECT data FROM yrs_docs WHERE doc_id = ?", docId)
+					.toArray() as { data: ArrayBuffer }[];
+
+				if (stored.length > 0) {
+					Y.applyUpdate(serverDoc, new Uint8Array(stored[0].data));
+				}
+
+				// Apply any gossip_log entries that are festival_updates for this topic
+				const logEntries = this.sql
+					.exec("SELECT message FROM gossip_log WHERE topic = ? ORDER BY seq", topic)
+					.toArray() as { message: string }[];
+
+				for (const entry of logEntries) {
+					const wireMsg = JSON.parse(entry.message) as GossipWireMessage;
+					if (wireMsg.kind === "festival_update" && wireMsg.payload) {
+						const signedUpdate = JSON.parse(wireMsg.payload) as { update: string };
+						const updateBytes = base64ToBytes(signedUpdate.update);
+						Y.applyUpdate(serverDoc, updateBytes);
+					}
+				}
+
+				// Save the consolidated doc
+				const fullState = Y.encodeStateAsUpdate(serverDoc);
+				this.sql.exec(
+					"INSERT OR REPLACE INTO yrs_docs (doc_id, data, updated_at) VALUES (?, ?, datetime('now'))",
+					docId,
+					fullState,
+				);
+
+				// Compute diff from client's state vector
+				const clientSV = base64ToBytes(svBase64);
+				const diff = Y.encodeStateAsUpdate(serverDoc, clientSV);
+
+				ws.send(
+					JSON.stringify({
+						type: "sv_diff",
+						docId,
+						diff: bytesToBase64(diff),
 					}),
 				);
 				break;

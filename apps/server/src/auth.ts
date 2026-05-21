@@ -1,20 +1,20 @@
-import {
-	generateRegistrationOptions as genRegOpts,
-	verifyRegistrationResponse,
-	generateAuthenticationOptions as genAuthOpts,
-	verifyAuthenticationResponse,
-} from "@simplewebauthn/server";
 import type {
 	AuthenticationResponseJSON,
 	RegistrationResponseJSON,
 	WebAuthnCredential,
+} from "@simplewebauthn/server";
+import {
+	generateAuthenticationOptions as genAuthOpts,
+	generateRegistrationOptions as genRegOpts,
+	verifyAuthenticationResponse,
+	verifyRegistrationResponse,
 } from "@simplewebauthn/server";
 
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
 
-const ANDROID_PACKAGE = "com.offbeat.offbeat_mobile";
+const _ANDROID_PACKAGE = "com.offbeat.offbeat_mobile";
 
 /** RP ID — the domain passkeys are bound to.
  *  In dev: "localhost". In production: "offbeat.app". */
@@ -165,4 +165,11 @@ export async function verifyAuthentication(
 // Helpers (kept for potential future use)
 // ---------------------------------------------------------------------------
 
-type AuthenticatorTransport = "ble" | "cable" | "hybrid" | "internal" | "nfc" | "smart-card" | "usb";
+type AuthenticatorTransport =
+	| "ble"
+	| "cable"
+	| "hybrid"
+	| "internal"
+	| "nfc"
+	| "smart-card"
+	| "usb";

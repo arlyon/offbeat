@@ -107,6 +107,11 @@ pub enum WsServerMessage {
         topic: String,
         messages: Vec<CatchupEntry>,
     },
+    SvDiff {
+        #[serde(rename = "docId")]
+        doc_id: String,
+        diff: String, // base64
+    },
     Error {
         error: String,
     },
@@ -211,6 +216,27 @@ impl WsRelaySink {
             since_seq,
         })
         .await
+    }
+
+    /// Send a state vector exchange request to the DO for a CRDT doc.
+    ///
+    /// The DO will respond with a `sv_diff` message containing the Yrs update
+    /// bytes (base64) that the client is missing based on its state vector.
+    pub async fn sv_exchange(&self, doc_id: &str, sv: &[u8]) -> anyhow::Result<()> {
+        use base64::Engine as _;
+        let b64 = base64::engine::general_purpose::STANDARD;
+        let msg = serde_json::json!({
+            "type": "sv_exchange",
+            "docId": doc_id,
+            "sv": b64.encode(sv),
+        });
+        let text = serde_json::to_string(&msg)?;
+        self.sink
+            .lock()
+            .await
+            .send(Message::Text(text.into()))
+            .await
+            .map_err(|e| anyhow::anyhow!("ws send error: {e}"))
     }
 
     /// Get the set of topics currently subscribed to.
@@ -513,6 +539,20 @@ async fn handle_server_message(
                     tracing::warn!("ws_relay catchup dispatch error: {e}");
                 }
             }
+            Ok(())
+        }
+        WsServerMessage::SvDiff { doc_id, diff } => {
+            use base64::Engine as _;
+            let b64 = base64::engine::general_purpose::STANDARD;
+            let diff_bytes = b64
+                .decode(&diff)
+                .map_err(|e| anyhow::anyhow!("sv_diff base64 decode: {e}"))?;
+            let mut dm = doc_manager.lock().await;
+            dm.apply_update(&doc_id, &diff_bytes)?;
+            tracing::info!(
+                "ws_relay: applied sv_diff for {doc_id} ({} bytes)",
+                diff_bytes.len()
+            );
             Ok(())
         }
         WsServerMessage::Subscribed { topics } => {
