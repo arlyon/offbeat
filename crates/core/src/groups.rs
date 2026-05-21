@@ -219,12 +219,10 @@ impl GroupManager {
 
         let doc_id = format!("group/{group_id}");
         let mut dm = self.doc_manager.lock().await;
-        dm.set_map_value(&doc_id, &format!("location/{user_id}"), &location_json)?;
-        // Encrypt full state so peers without prior state can apply it.
-        let full_state = dm.encode_full_state(&doc_id)?;
+        let diff = dm.set_map_value(&doc_id, &format!("location/{user_id}"), &location_json)?;
         drop(dm);
 
-        let encrypted = crypto::encrypt(&group_key, &full_state)?;
+        let encrypted = crypto::encrypt(&group_key, &diff)?;
         Ok(encrypted)
     }
 
@@ -246,11 +244,10 @@ impl GroupManager {
         let stars_json = serde_json::to_string(&set_ids)?;
         let doc_id = format!("group/{group_id}");
         let mut dm = self.doc_manager.lock().await;
-        dm.set_map_value(&doc_id, &format!("stars/{user_id}"), &stars_json)?;
-        let full_state = dm.encode_full_state(&doc_id)?;
+        let diff = dm.set_map_value(&doc_id, &format!("stars/{user_id}"), &stars_json)?;
         drop(dm);
 
-        let encrypted = crypto::encrypt(&group_key, &full_state)?;
+        let encrypted = crypto::encrypt(&group_key, &diff)?;
         Ok(encrypted)
     }
 
@@ -281,11 +278,10 @@ impl GroupManager {
 
         let doc_id = format!("group/{group_id}");
         let mut dm = self.doc_manager.lock().await;
-        dm.set_map_value(&doc_id, &format!("pin/{pin_id}"), &pin_json)?;
-        let full_state = dm.encode_full_state(&doc_id)?;
+        let diff = dm.set_map_value(&doc_id, &format!("pin/{pin_id}"), &pin_json)?;
         drop(dm);
 
-        let encrypted = crypto::encrypt(&group_key, &full_state)?;
+        let encrypted = crypto::encrypt(&group_key, &diff)?;
         Ok(encrypted)
     }
 
@@ -359,6 +355,54 @@ impl GroupManager {
             members,
             pins,
         })
+    }
+
+    // -----------------------------------------------------------------------
+    // SV handshake helpers
+    // -----------------------------------------------------------------------
+
+    /// Build an encrypted `sync_request` payload containing the local Yrs
+    /// state vector for the group doc.  The caller should send this as a relay
+    /// message so other peers can compute and return a targeted diff.
+    pub async fn request_group_sync(&self, group_id: &str) -> anyhow::Result<Vec<u8>> {
+        let group_key = self
+            .db
+            .load_group_key(group_id)?
+            .ok_or_else(|| anyhow::anyhow!("group not found: {group_id}"))?;
+
+        let doc_id = format!("group/{group_id}");
+        let mut dm = self.doc_manager.lock().await;
+        // Ensure the doc exists so we can read its SV.
+        dm.get_or_create(&doc_id);
+        let sv_bytes = dm.get_state_vector(&doc_id)?;
+        drop(dm);
+
+        // Encrypt the SV so it doesn't leak doc structure to bystanders.
+        let encrypted_sv = crypto::encrypt(&group_key, &sv_bytes)?;
+        Ok(encrypted_sv)
+    }
+
+    /// Given an encrypted remote state vector, compute the diff and return it
+    /// encrypted so the requester can apply it to catch up.
+    pub async fn handle_sync_request(
+        &self,
+        group_id: &str,
+        remote_sv_encrypted: &[u8],
+    ) -> anyhow::Result<Vec<u8>> {
+        let group_key = self
+            .db
+            .load_group_key(group_id)?
+            .ok_or_else(|| anyhow::anyhow!("group not found: {group_id}"))?;
+
+        let remote_sv = crypto::decrypt(&group_key, remote_sv_encrypted)?;
+
+        let doc_id = format!("group/{group_id}");
+        let dm = self.doc_manager.lock().await;
+        let diff = dm.encode_diff(&doc_id, &remote_sv)?;
+        drop(dm);
+
+        let encrypted_diff = crypto::encrypt(&group_key, &diff)?;
+        Ok(encrypted_diff)
     }
 }
 
@@ -615,5 +659,108 @@ mod tests {
         let id1 = auth::get_user_id(&key);
         let id2 = auth::get_user_id(&key);
         assert_eq!(id1, id2);
+    }
+
+    /// D1 creates a group and makes some changes.  D2 joins and has only its
+    /// own member entry.  D2 sends its SV (encrypted) as a sync_request; D1
+    /// computes the diff and returns it as a sync_response; D2 applies the diff
+    /// and now has all of D1's changes.  Then D2 makes a change, sends the diff
+    /// to D1, and D1 applies it successfully because they are now in sync.
+    #[tokio::test]
+    async fn test_sync_request_response_roundtrip() {
+        let gm_d1 = make_manager();
+        let gm_d2 = make_manager();
+
+        // D1 creates group and makes changes.
+        let create = gm_d1
+            .create_group("fest-1", "SV Crew", "d1", "D1")
+            .await
+            .unwrap();
+        let group_id = &create.group_id;
+
+        gm_d1
+            .add_pin(group_id, "pin-1", "Meeting Point", "0,0", "d1")
+            .await
+            .unwrap();
+        gm_d1
+            .check_in(group_id, "d1", Some("main-stage"), None)
+            .await
+            .unwrap();
+
+        // D2 joins the group (has only its member entry).
+        gm_d2
+            .join_group(&create.invite_payload, "d2", "D2")
+            .await
+            .unwrap();
+
+        // D2 produces an encrypted SV (sync_request payload).
+        let encrypted_sv = gm_d2.request_group_sync(group_id).await.unwrap();
+
+        // D1 handles the sync_request: computes diff, returns encrypted diff.
+        let encrypted_diff = gm_d1
+            .handle_sync_request(group_id, &encrypted_sv)
+            .await
+            .unwrap();
+
+        // D2 applies the diff.
+        let group_key = gm_d2.db.load_group_key(group_id).unwrap().unwrap();
+        let diff = crate::crypto::decrypt(&group_key, &encrypted_diff).unwrap();
+        gm_d2
+            .doc_manager
+            .lock()
+            .await
+            .apply_update(&format!("group/{group_id}"), &diff)
+            .unwrap();
+
+        // D2 should now see D1's pin and location.
+        let state_d2 = gm_d2.get_group_state(group_id).await.unwrap();
+        assert_eq!(state_d2.pins.len(), 1, "D2 should see D1's pin");
+        assert_eq!(state_d2.pins[0].label, "Meeting Point");
+
+        let d1_member = state_d2
+            .members
+            .iter()
+            .find(|m| m.user_id == "d1")
+            .expect("D2 should see D1 as member");
+        assert_eq!(d1_member.stage_id.as_deref(), Some("main-stage"));
+
+        // First, also sync D2's state (member/d2) to D1 via a reverse handshake.
+        // D1 sends its current SV; D2 computes the diff (containing member/d2) and
+        // sends it back; D1 applies it so D1 knows about D2 as a member.
+        let encrypted_sv_d1 = gm_d1.request_group_sync(group_id).await.unwrap();
+        let encrypted_diff_d2_to_d1 = gm_d2
+            .handle_sync_request(group_id, &encrypted_sv_d1)
+            .await
+            .unwrap();
+        let diff_join = crate::crypto::decrypt(&group_key, &encrypted_diff_d2_to_d1).unwrap();
+        gm_d1
+            .doc_manager
+            .lock()
+            .await
+            .apply_update(&format!("group/{group_id}"), &diff_join)
+            .unwrap();
+
+        // D2 makes a change and sends the diff to D1.
+        let encrypted_update_d2 = gm_d2
+            .check_in(group_id, "d2", Some("side-stage"), None)
+            .await
+            .unwrap();
+
+        // D1 applies D2's diff (they are now fully bidirectionally synced).
+        let diff_d2 = crate::crypto::decrypt(&group_key, &encrypted_update_d2).unwrap();
+        gm_d1
+            .doc_manager
+            .lock()
+            .await
+            .apply_update(&format!("group/{group_id}"), &diff_d2)
+            .unwrap();
+
+        let state_d1 = gm_d1.get_group_state(group_id).await.unwrap();
+        let d2_member = state_d1
+            .members
+            .iter()
+            .find(|m| m.user_id == "d2")
+            .expect("D1 should see D2 as member after bidirectional sync");
+        assert_eq!(d2_member.stage_id.as_deref(), Some("side-stage"));
     }
 }

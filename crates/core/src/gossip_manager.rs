@@ -35,6 +35,26 @@ pub enum GossipMessage {
         group_key: [u8; 32],
         encrypted: Vec<u8>,
     },
+    /// Peer is requesting a sync: payload is an encrypted Yrs state vector.
+    SyncRequest {
+        doc_id: String,
+        /// Encrypted Yrs state vector bytes.
+        encrypted_sv: Vec<u8>,
+        group_key: [u8; 32],
+    },
+    /// Response to a sync_request: payload is an encrypted Yrs diff.
+    SyncResponse {
+        doc_id: String,
+        /// Encrypted Yrs update (diff since requester's SV).
+        encrypted_diff: Vec<u8>,
+        group_key: [u8; 32],
+    },
+    /// A single incremental update (diff from one change), encrypted.
+    SyncUpdate {
+        doc_id: String,
+        encrypted_diff: Vec<u8>,
+        group_key: [u8; 32],
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -45,6 +65,7 @@ pub enum GossipMessage {
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub struct GossipWireMessage {
     /// Discriminator: "festival_update" | "group_update" | "chat" | "encrypted_chat"
+    ///               | "sync_request" | "sync_response" | "sync_update"
     pub kind: String,
     /// Document ID for CRDT-backed messages.
     pub doc_id: Option<String>,
@@ -100,6 +121,28 @@ pub fn dispatch_message(
             let chat: ChatMessage = serde_json::from_slice(&plaintext)
                 .map_err(|e| anyhow::anyhow!("deserialise chat: {e}"))?;
             db.save_chat_message(&chat)?;
+        }
+
+        GossipMessage::SyncResponse {
+            doc_id,
+            encrypted_diff,
+            group_key,
+        } => {
+            doc_manager.apply_encrypted_update(&doc_id, &encrypted_diff, &group_key)?;
+        }
+
+        GossipMessage::SyncUpdate {
+            doc_id,
+            encrypted_diff,
+            group_key,
+        } => {
+            doc_manager.apply_encrypted_update(&doc_id, &encrypted_diff, &group_key)?;
+        }
+
+        // SyncRequest is handled at a higher level (requires sending a response).
+        // If it somehow ends up here, log a warning and skip.
+        GossipMessage::SyncRequest { doc_id, .. } => {
+            tracing::warn!("dispatch_message: unhandled sync_request for doc {doc_id}; handle at gossip layer");
         }
     }
 
@@ -202,6 +245,34 @@ impl GossipManager {
         let bytes = serde_json::to_vec(&wire)?;
         self.publish(topic_id, bytes).await
     }
+
+    /// Broadcast a `sync_request` for `doc_id` on `topic_id`.
+    ///
+    /// The local state vector is encrypted with `group_key` before sending so
+    /// that eavesdroppers cannot infer doc structure.
+    pub async fn request_sync(
+        &mut self,
+        topic_id: TopicId,
+        doc_id: &str,
+        group_key: &[u8; 32],
+    ) -> anyhow::Result<()> {
+        use crate::crypto;
+
+        let sv_bytes = {
+            let mut dm = self.doc_manager.lock().await;
+            // Ensure doc exists (creates an empty one if not).
+            dm.get_or_create(doc_id);
+            dm.get_state_vector(doc_id)?
+        };
+
+        let encrypted_sv = crypto::encrypt(group_key, &sv_bytes)?;
+        let msg = GossipMessage::SyncRequest {
+            doc_id: doc_id.to_string(),
+            encrypted_sv,
+            group_key: *group_key,
+        };
+        self.publish_message(topic_id, &msg).await
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -253,6 +324,39 @@ fn encode_gossip_message(msg: &GossipMessage) -> anyhow::Result<GossipWireMessag
             payload: b64.encode(encrypted),
             group_key_id: Some(crypto::group_id_from_key(group_key)),
         }),
+
+        GossipMessage::SyncRequest {
+            doc_id,
+            encrypted_sv,
+            group_key,
+        } => Ok(GossipWireMessage {
+            kind: "sync_request".to_string(),
+            doc_id: Some(doc_id.clone()),
+            payload: b64.encode(encrypted_sv),
+            group_key_id: Some(crypto::group_id_from_key(group_key)),
+        }),
+
+        GossipMessage::SyncResponse {
+            doc_id,
+            encrypted_diff,
+            group_key,
+        } => Ok(GossipWireMessage {
+            kind: "sync_response".to_string(),
+            doc_id: Some(doc_id.clone()),
+            payload: b64.encode(encrypted_diff),
+            group_key_id: Some(crypto::group_id_from_key(group_key)),
+        }),
+
+        GossipMessage::SyncUpdate {
+            doc_id,
+            encrypted_diff,
+            group_key,
+        } => Ok(GossipWireMessage {
+            kind: "sync_update".to_string(),
+            doc_id: Some(doc_id.clone()),
+            payload: b64.encode(encrypted_diff),
+            group_key_id: Some(crypto::group_id_from_key(group_key)),
+        }),
     }
 }
 
@@ -278,25 +382,25 @@ async fn handle_wire_bytes(
                 signed_update,
             }
         }
-        "group_update" => {
-            // NOTE: The group key itself cannot be reconstructed from the key_id alone.
-            // In a real node the caller would look up the key from local storage.
-            anyhow::bail!(
-                "group_update requires group key lookup (key_id={:?}); not yet implemented in wire path",
-                wire.group_key_id
-            );
-        }
         "chat" => {
             let chat: ChatMessage = serde_json::from_str(&wire.payload)?;
             GossipMessage::Chat(chat)
         }
-        "encrypted_chat" => {
-            anyhow::bail!(
-                "encrypted_chat requires group key lookup (key_id={:?}); not yet implemented in wire path",
+        "group_update" | "encrypted_chat" | "sync_request" | "sync_response" | "sync_update" => {
+            // These require group key lookup from local storage — not implemented
+            // in this generic wire path. Callers with key access (GroupManager,
+            // WsRelay) handle them directly.
+            tracing::warn!(
+                "gossip: {} requires group key lookup (key_id={:?}); skipping in generic wire path",
+                wire.kind,
                 wire.group_key_id
             );
+            return Ok(());
         }
-        other => anyhow::bail!("unknown gossip message kind: {other}"),
+        other => {
+            tracing::warn!("gossip: unknown message kind: {other}; skipping");
+            return Ok(());
+        }
     };
 
     let mut dm = doc_manager.lock().await;
@@ -462,5 +566,69 @@ mod tests {
         assert_eq!(wire.doc_id.as_deref(), Some("doc-1"));
         let decoded: SignedUpdate = serde_json::from_str(&wire.payload).unwrap();
         assert_eq!(decoded.author, signed.author);
+    }
+
+    #[test]
+    fn test_wire_roundtrip_sync_request() {
+        use crate::crypto;
+
+        let group_key = crypto::generate_group_key();
+        let fake_sv = b"fake-yrs-sv-bytes";
+        let encrypted_sv = crypto::encrypt(&group_key, fake_sv).unwrap();
+
+        let msg = GossipMessage::SyncRequest {
+            doc_id: "group/doc-1".to_string(),
+            encrypted_sv: encrypted_sv.clone(),
+            group_key,
+        };
+        let wire = encode_gossip_message(&msg).unwrap();
+        assert_eq!(wire.kind, "sync_request");
+        assert_eq!(wire.doc_id.as_deref(), Some("group/doc-1"));
+        assert!(wire.group_key_id.is_some());
+
+        // The payload round-trips through base64.
+        let decoded_sv = base64::engine::general_purpose::STANDARD
+            .decode(&wire.payload)
+            .unwrap();
+        let plaintext = crypto::decrypt(&group_key, &decoded_sv).unwrap();
+        assert_eq!(plaintext, fake_sv);
+
+        // JSON serialise / deserialise.
+        let json = serde_json::to_vec(&wire).unwrap();
+        let wire2: GossipWireMessage = serde_json::from_slice(&json).unwrap();
+        assert_eq!(wire2.kind, "sync_request");
+        assert_eq!(wire2.doc_id, wire.doc_id);
+        assert_eq!(wire2.payload, wire.payload);
+    }
+
+    #[test]
+    fn test_wire_roundtrip_sync_response() {
+        use crate::crypto;
+
+        let group_key = crypto::generate_group_key();
+        let fake_diff = b"fake-yrs-diff-bytes";
+        let encrypted_diff = crypto::encrypt(&group_key, fake_diff).unwrap();
+
+        let msg = GossipMessage::SyncResponse {
+            doc_id: "group/doc-2".to_string(),
+            encrypted_diff: encrypted_diff.clone(),
+            group_key,
+        };
+        let wire = encode_gossip_message(&msg).unwrap();
+        assert_eq!(wire.kind, "sync_response");
+        assert_eq!(wire.doc_id.as_deref(), Some("group/doc-2"));
+
+        let decoded_diff = base64::engine::general_purpose::STANDARD
+            .decode(&wire.payload)
+            .unwrap();
+        let plaintext = crypto::decrypt(&group_key, &decoded_diff).unwrap();
+        assert_eq!(plaintext, fake_diff);
+
+        // JSON round-trip.
+        let json = serde_json::to_vec(&wire).unwrap();
+        let wire2: GossipWireMessage = serde_json::from_slice(&json).unwrap();
+        assert_eq!(wire2.kind, "sync_response");
+        assert_eq!(wire2.doc_id, wire.doc_id);
+        assert_eq!(wire2.payload, wire.payload);
     }
 }

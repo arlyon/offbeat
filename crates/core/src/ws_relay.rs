@@ -279,17 +279,36 @@ async fn handle_server_message(
             match serde_json::from_slice::<crate::gossip_manager::GossipWireMessage>(&raw) {
                 Ok(wire) => {
                     tracing::debug!("ws_relay: relay kind={}", wire.kind);
-                    // Group-key messages cannot be dispatched without the
-                    // local key store; log and skip for now.
-                    if wire.kind == "group_update" || wire.kind == "encrypted_chat" {
-                        tracing::warn!(
-                            "ws_relay: skipping {} — group key lookup not yet wired",
-                            wire.kind
-                        );
+                    match wire.kind.as_str() {
+                        "sync_response" | "sync_update" => {
+                            // These carry an encrypted Yrs diff that we can apply
+                            // if we have the group key.  For now the group-key lookup
+                            // is not wired into WsRelay, so log and skip.
+                            tracing::warn!(
+                                "ws_relay: skipping {} — group key lookup not yet wired",
+                                wire.kind
+                            );
+                        }
+                        "sync_request" => {
+                            // A peer is requesting a sync.  Responding requires
+                            // the group key and a write-capable reference back to
+                            // the sink — not available in this read-only handler.
+                            // Higher-level integration code should intercept these.
+                            tracing::debug!(
+                                "ws_relay: received sync_request for doc {:?} — response not handled here",
+                                wire.doc_id
+                            );
+                        }
+                        "group_update" | "encrypted_chat" => {
+                            tracing::warn!(
+                                "ws_relay: skipping {} — group key lookup not yet wired",
+                                wire.kind
+                            );
+                        }
+                        other => {
+                            tracing::debug!("ws_relay: relay kind={other} — no special handling");
+                        }
                     }
-                    // Other wire kinds (festival_update, chat) could be
-                    // handled here if needed; for now the primary path is
-                    // through the gossip layer.
                 }
                 Err(_) => {
                     tracing::debug!("ws_relay: relay payload is not a GossipWireMessage — ignoring");
@@ -317,6 +336,8 @@ async fn handle_server_message(
                     serde_json::from_slice::<crate::gossip_manager::GossipWireMessage>(&raw)
                 {
                     tracing::debug!("ws_relay catchup: relay kind={}", wire.kind);
+                    // sync_request/sync_response/sync_update in catchup are
+                    // informational only; applying them requires group keys.
                 }
             }
             Ok(())
