@@ -3,13 +3,12 @@ import type { ClashfinderEvent, ClashfinderSource, Lineup } from "@offbeat/proto
 import { fetchClashfinder, parseClashfinder, parseClashfinderApi } from "@offbeat/protocol";
 import fieldday26 from "../../../packages/protocol/fixtures/fieldday26.json";
 import {
-	createJwt,
 	generateAuthenticationOptions,
 	generateRegistrationOptions,
 	verifyAuthentication,
 	verifyRegistration,
 } from "./auth";
-import { verify } from "./signing";
+import { generateKeypair, sign, verify } from "./signing";
 
 const FIELDDAY26_ID = "fieldday26";
 
@@ -28,6 +27,9 @@ const FIELDDAY26_META = {
 };
 
 export class MainDO extends DurableObject {
+	#publicKey: Uint8Array | null = null;
+	#secretKey: Uint8Array | null = null;
+
 	get sql() {
 		return this.ctx.storage.sql;
 	}
@@ -35,11 +37,26 @@ export class MainDO extends DurableObject {
 	constructor(ctx: DurableObjectState, env: Record<string, unknown>) {
 		super(ctx, env);
 
-		// Create schema and seed data
+		// Create schema, init keypair, and seed data
 		this.ctx.blockConcurrencyWhile(async () => {
 			this.#initSchema();
+			await this.#initKeypair();
 			await this.#seed();
 		});
+	}
+
+	async #initKeypair() {
+		const stored = (await this.ctx.storage.get("ed25519_secret_key")) as Uint8Array | undefined;
+		if (stored) {
+			this.#secretKey = stored;
+			this.#publicKey = (await this.ctx.storage.get("ed25519_public_key")) as Uint8Array;
+		} else {
+			const { publicKey, secretKey } = generateKeypair();
+			this.#publicKey = publicKey;
+			this.#secretKey = secretKey;
+			await this.ctx.storage.put("ed25519_secret_key", secretKey);
+			await this.ctx.storage.put("ed25519_public_key", publicKey);
+		}
 	}
 
 	#initSchema() {
@@ -102,6 +119,12 @@ export class MainDO extends DurableObject {
 
 			CREATE TABLE IF NOT EXISTS admins (
 				public_key TEXT PRIMARY KEY
+			);
+
+			CREATE TABLE IF NOT EXISTS revocations (
+				public_key TEXT PRIMARY KEY,
+				revoked_at TEXT NOT NULL DEFAULT (datetime('now')),
+				reason TEXT
 			);
 		`);
 	}
@@ -252,6 +275,26 @@ export class MainDO extends DurableObject {
 				color: s.color,
 				order: s.sort_order,
 			})),
+		};
+	}
+
+	/** Issue a signed attestation binding an Ed25519 public key to a WebAuthn registration. */
+	async #issueAttestation(ed25519PubkeyHex: string): Promise<{
+		message: string;
+		signature: string;
+		issuer: string;
+	}> {
+		if (!this.#secretKey || !this.#publicKey) {
+			throw new Error("MainDO keypair not initialized");
+		}
+		const issuedAt = Math.floor(Date.now() / 1000);
+		const expiresAt = issuedAt + 30 * 24 * 60 * 60; // 30 days
+		const message = `attestation:v1:${ed25519PubkeyHex}:${issuedAt}:${expiresAt}`;
+		const sig = await sign(this.#secretKey, new TextEncoder().encode(message));
+		return {
+			message,
+			signature: bytesToHex(sig),
+			issuer: bytesToHex(this.#publicKey),
 		};
 	}
 
@@ -559,39 +602,108 @@ export class MainDO extends DurableObject {
 			return Response.json(this.#getLineup(id));
 		}
 
+		// GET /auth/public-key — MainDO's Ed25519 public key (attestation issuer)
+		if (method === "GET" && path === "/auth/public-key") {
+			if (!this.#publicKey) {
+				return new Response("Key not initialized", { status: 500 });
+			}
+			return new Response(bytesToHex(this.#publicKey), {
+				headers: { "Content-Type": "text/plain" },
+			});
+		}
+
 		// POST /auth/register/begin
 		if (method === "POST" && path === "/auth/register/begin") {
 			const body = (await request.json()) as { userId: string };
 			const options = await generateRegistrationOptions(body.userId);
+			// Store challenge for verification (5-min TTL)
+			const challenge = (options as { challenge: string }).challenge;
+			await this.ctx.storage.put(`challenge:${challenge}`, body.userId);
+			await this.ctx.storage.setAlarm(Date.now() + 5 * 60 * 1000);
 			return Response.json(options);
 		}
 
 		// POST /auth/register/complete
 		if (method === "POST" && path === "/auth/register/complete") {
-			const body = await request.json();
-			const result = await verifyRegistration(body);
+			const body = (await request.json()) as {
+				webauthnResponse: unknown;
+				ed25519PublicKey: string;
+			};
+			if (!body.ed25519PublicKey || body.ed25519PublicKey.length !== 64) {
+				return new Response("ed25519PublicKey must be 64 hex chars", { status: 400 });
+			}
+			const result = await verifyRegistration(body.webauthnResponse);
 			if (!result.verified) {
 				return new Response("Registration failed", { status: 400 });
 			}
-			const token = await createJwt(result.credentialId ?? "unknown");
-			return Response.json({ token });
+			// Store WebAuthn credential with the Ed25519 public key
+			this.sql.exec(
+				`INSERT INTO credentials (id, user_id, public_key, credential_data, created_at)
+				 VALUES (?, ?, ?, ?, datetime('now'))`,
+				result.credentialId ?? crypto.randomUUID(),
+				body.ed25519PublicKey,
+				body.ed25519PublicKey,
+				JSON.stringify(result),
+			);
+			const attestation = await this.#issueAttestation(body.ed25519PublicKey);
+			return Response.json({ attestation });
 		}
 
-		// POST /auth/authenticate/begin
-		if (method === "POST" && path === "/auth/authenticate/begin") {
+		// POST /auth/recover/begin — new device recovery
+		if (method === "POST" && path === "/auth/recover/begin") {
 			const options = await generateAuthenticationOptions();
 			return Response.json(options);
 		}
 
-		// POST /auth/authenticate/complete
-		if (method === "POST" && path === "/auth/authenticate/complete") {
-			const body = await request.json();
-			const result = await verifyAuthentication(body);
+		// POST /auth/recover/complete — verify assertion, confirm Ed25519 key matches
+		if (method === "POST" && path === "/auth/recover/complete") {
+			const body = (await request.json()) as {
+				assertion: unknown;
+				ed25519PublicKey: string;
+			};
+			if (!body.ed25519PublicKey || body.ed25519PublicKey.length !== 64) {
+				return new Response("ed25519PublicKey must be 64 hex chars", { status: 400 });
+			}
+			const result = await verifyAuthentication(body.assertion);
 			if (!result.verified) {
 				return new Response("Authentication failed", { status: 400 });
 			}
-			const token = await createJwt(result.userId ?? "unknown");
-			return Response.json({ token });
+			// Verify the Ed25519 key matches what we stored at registration
+			const stored = this.sql
+				.exec("SELECT public_key FROM credentials WHERE public_key = ?", body.ed25519PublicKey)
+				.toArray();
+			if (stored.length === 0) {
+				return new Response("Ed25519 key does not match registered key", { status: 403 });
+			}
+			const attestation = await this.#issueAttestation(body.ed25519PublicKey);
+			return Response.json({ attestation });
+		}
+
+		// POST /auth/refresh — re-issue attestation for existing credential
+		if (method === "POST" && path === "/auth/refresh") {
+			const body = (await request.json()) as { assertion: unknown; ed25519PublicKey: string };
+			if (!body.ed25519PublicKey || body.ed25519PublicKey.length !== 64) {
+				return new Response("ed25519PublicKey must be 64 hex chars", { status: 400 });
+			}
+			const result = await verifyAuthentication(body.assertion);
+			if (!result.verified) {
+				return new Response("Authentication failed", { status: 400 });
+			}
+			// Check key is registered and not revoked
+			const stored = this.sql
+				.exec("SELECT public_key FROM credentials WHERE public_key = ?", body.ed25519PublicKey)
+				.toArray();
+			if (stored.length === 0) {
+				return new Response("Unknown key", { status: 403 });
+			}
+			const revoked = this.sql
+				.exec("SELECT 1 FROM revocations WHERE public_key = ?", body.ed25519PublicKey)
+				.toArray();
+			if (revoked.length > 0) {
+				return new Response("Key revoked", { status: 423 });
+			}
+			const attestation = await this.#issueAttestation(body.ed25519PublicKey);
+			return Response.json({ attestation });
 		}
 
 		// PUT /admins — register a global admin public key.
@@ -650,4 +762,10 @@ function hexToBytes(hex: string): Uint8Array {
 		bytes[i / 2] = Number.parseInt(hex.substring(i, i + 2), 16);
 	}
 	return bytes;
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+	return Array.from(bytes)
+		.map((b) => b.toString(16).padStart(2, "0"))
+		.join("");
 }

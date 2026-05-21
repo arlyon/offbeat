@@ -55,6 +55,11 @@ app.put("/festivals/:id/lineup", (c) => {
 	return forwardToMainDO(c.env, `/festivals/${id}/lineup`, c.req.raw);
 });
 
+// GET /auth/public-key — MainDO's attestation issuer key
+app.get("/auth/public-key", (c) => {
+	return forwardToMainDO(c.env, "/auth/public-key", c.req.raw);
+});
+
 // POST /auth/register/begin
 app.post("/auth/register/begin", (c) => {
 	return forwardToMainDO(c.env, "/auth/register/begin", c.req.raw);
@@ -65,14 +70,19 @@ app.post("/auth/register/complete", (c) => {
 	return forwardToMainDO(c.env, "/auth/register/complete", c.req.raw);
 });
 
-// POST /auth/authenticate/begin
-app.post("/auth/authenticate/begin", (c) => {
-	return forwardToMainDO(c.env, "/auth/authenticate/begin", c.req.raw);
+// POST /auth/recover/begin — new device recovery
+app.post("/auth/recover/begin", (c) => {
+	return forwardToMainDO(c.env, "/auth/recover/begin", c.req.raw);
 });
 
-// POST /auth/authenticate/complete
-app.post("/auth/authenticate/complete", (c) => {
-	return forwardToMainDO(c.env, "/auth/authenticate/complete", c.req.raw);
+// POST /auth/recover/complete — verify assertion + Ed25519 key match
+app.post("/auth/recover/complete", (c) => {
+	return forwardToMainDO(c.env, "/auth/recover/complete", c.req.raw);
+});
+
+// POST /auth/refresh — re-issue attestation
+app.post("/auth/refresh", (c) => {
+	return forwardToMainDO(c.env, "/auth/refresh", c.req.raw);
 });
 
 // GET /festivals/:id/public-key — fetch Festival DO's Ed25519 public key

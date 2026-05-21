@@ -3,6 +3,8 @@ import { generateKeypair, sign, verify } from "./signing";
 
 interface Session {
 	topics: Set<string>;
+	authenticated: boolean;
+	publicKey: string | null;
 }
 
 /**
@@ -318,12 +320,12 @@ export class FestivalDO extends DurableObject {
 		const sessionId = crypto.randomUUID();
 		this.ctx.acceptWebSocket(server, [sessionId]);
 
-		this.#sessions.set(server, { topics: new Set() });
+		this.#sessions.set(server, { topics: new Set(), authenticated: false, publicKey: null });
 
 		return new Response(null, { status: 101, webSocket: client });
 	}
 
-	webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {
+	async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
 		let parsed: {
 			type: string;
 			topics?: string[];
@@ -345,17 +347,90 @@ export class FestivalDO extends DurableObject {
 		if (!sess) {
 			// Session not in memory — happens after hibernation, restore from attachment
 			const raw = ws.deserializeAttachment() as string | null;
-			const topics = new Set<string>(raw ? (JSON.parse(raw) as string[]) : []);
-			sess = { topics };
+			const attachment = raw
+				? (JSON.parse(raw) as {
+						topics?: string[];
+						authenticated?: boolean;
+						publicKey?: string | null;
+					})
+				: {};
+			sess = {
+				topics: new Set<string>(attachment.topics ?? []),
+				authenticated: attachment.authenticated ?? false,
+				publicKey: attachment.publicKey ?? null,
+			};
 			this.#sessions.set(ws, sess);
 		}
 
 		switch (parsed.type) {
+			case "auth": {
+				const authData = parsed as unknown as {
+					publicKey: string;
+					attestation: { message: string; signature: string; issuer: string };
+					signature: string;
+					timestamp: string;
+				};
+				if (!authData.publicKey || !authData.attestation || !authData.signature) {
+					ws.send(JSON.stringify({ type: "error", error: "Invalid auth message" }));
+					break;
+				}
+				// Verify attestation signature against MainDO's public key (issuer)
+				const attMsg = new TextEncoder().encode(authData.attestation.message);
+				const attValid = await verify(
+					hexToBytes(authData.attestation.issuer),
+					attMsg,
+					hexToBytes(authData.attestation.signature),
+				);
+				if (!attValid) {
+					ws.send(JSON.stringify({ type: "error", error: "Invalid attestation signature" }));
+					break;
+				}
+				// Check attestation expiry (with 7-day grace period)
+				const parts = authData.attestation.message.split(":");
+				const expiresAt = Number.parseInt(parts[4], 10);
+				const graceExpiry = expiresAt + 7 * 24 * 60 * 60;
+				if (Date.now() / 1000 > graceExpiry) {
+					ws.send(JSON.stringify({ type: "error", error: "Attestation expired" }));
+					break;
+				}
+				// Verify session signature (proves ownership of the Ed25519 key)
+				const sessionMsg = new TextEncoder().encode(`session:${authData.timestamp}`);
+				const sessionValid = await verify(
+					hexToBytes(authData.publicKey),
+					sessionMsg,
+					hexToBytes(authData.signature),
+				);
+				if (!sessionValid) {
+					ws.send(JSON.stringify({ type: "error", error: "Invalid session signature" }));
+					break;
+				}
+				sess.authenticated = true;
+				sess.publicKey = authData.publicKey;
+				ws.serializeAttachment(
+					JSON.stringify({
+						topics: [...sess.topics],
+						authenticated: true,
+						publicKey: authData.publicKey,
+					}),
+				);
+				const adminCount = (
+					this.sql.exec("SELECT COUNT(*) as cnt FROM admins").one() as { cnt: number }
+				).cnt;
+				ws.send(JSON.stringify({ type: "auth_ok", authenticated: true, adminCount }));
+				break;
+			}
+
 			case "subscribe": {
 				for (const topic of parsed.topics ?? []) {
 					sess.topics.add(topic);
 				}
-				ws.serializeAttachment(JSON.stringify([...sess.topics]));
+				ws.serializeAttachment(
+					JSON.stringify({
+						topics: [...sess.topics],
+						authenticated: sess.authenticated,
+						publicKey: sess.publicKey,
+					}),
+				);
 				ws.send(JSON.stringify({ type: "subscribed", topics: [...sess.topics] }));
 				break;
 			}
@@ -364,13 +439,29 @@ export class FestivalDO extends DurableObject {
 				for (const topic of parsed.topics ?? []) {
 					sess.topics.delete(topic);
 				}
-				ws.serializeAttachment(JSON.stringify([...sess.topics]));
+				ws.serializeAttachment(
+					JSON.stringify({
+						topics: [...sess.topics],
+						authenticated: sess.authenticated,
+						publicKey: sess.publicKey,
+					}),
+				);
 				ws.send(JSON.stringify({ type: "subscribed", topics: [...sess.topics] }));
 				break;
 			}
 
 			case "gossip": {
 				if (!parsed.topic || !parsed.message) break;
+
+				if (!sess.authenticated) {
+					ws.send(
+						JSON.stringify({
+							type: "error",
+							error: "Auth required for writes",
+						}),
+					);
+					break;
+				}
 
 				if (!this.#isWithinWindow()) {
 					ws.send(

@@ -27,7 +27,9 @@ iroh automatically selects the best available transport:
 **Sync capabilities by transport:**
 - **Internet / WiFi Direct**: Full sync — all data types, no restrictions
 - **BLE**: Group state + recent group chat. Festival chat too large.
-- **Meshtastic**: Group state only. Presence updates, stars, pins. No chat.
+- **Meshtastic**: Group state, check-ins, chat. All writes carry 68B
+  Ed25519 signature overhead except check-ins (GCM auth only).
+  See [`auth-protocol.md`](auth-protocol.md) for signing details.
 
 ---
 

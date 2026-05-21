@@ -9,6 +9,7 @@
 	"dependencies": {
 		"@noble/curves": "^2.2.0",
 		"@offbeat/protocol": "workspace:*",
+		"@simplewebauthn/server": "^13.3.0",
 		"hono": "^4.12.21",
 		"jose": "^6.2.3"
 	},

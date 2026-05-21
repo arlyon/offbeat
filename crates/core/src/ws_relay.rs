@@ -8,12 +8,14 @@
 //! ## DO protocol
 //!
 //! **Client→DO:**
+//! - `{ type: "auth", publicKey, attestation, signature, timestamp }`
 //! - `{ type: "subscribe", topics: ["..."] }`
 //! - `{ type: "unsubscribe", topics: ["..."] }`
 //! - `{ type: "gossip", topic: "...", message: GossipWireMessage }`
 //! - `{ type: "catchup", topic: "...", sinceSeq: 0 }`
 //!
 //! **DO→Client:**
+//! - `{ type: "auth_ok", authenticated: true, adminCount: N }`
 //! - `{ type: "subscribed", topics: [...] }`
 //! - `{ type: "gossip", topic: "...", seq: N, message: GossipWireMessage }`
 //! - `{ type: "catchup", topic: "...", messages: [...] }`
@@ -27,6 +29,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
 
+use crate::auth::Attestation;
 use crate::db::Database;
 use crate::doc_manager::DocManager;
 use crate::gossip_manager::GossipWireMessage;
@@ -35,10 +38,35 @@ use crate::gossip_manager::GossipWireMessage;
 // Protocol types
 // ---------------------------------------------------------------------------
 
+/// Attestation payload sent in the auth message.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct AttestationPayload {
+    pub message: String,
+    pub signature: String,
+    pub issuer: String,
+}
+
+impl From<Attestation> for AttestationPayload {
+    fn from(att: Attestation) -> Self {
+        Self {
+            message: att.message,
+            signature: att.signature,
+            issuer: att.issuer,
+        }
+    }
+}
+
 /// Messages sent by the client to the DO.
 #[derive(Serialize, Debug)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum WsClientMessage {
+    Auth {
+        #[serde(rename = "publicKey")]
+        public_key: String,
+        attestation: AttestationPayload,
+        signature: String,
+        timestamp: String,
+    },
     Subscribe {
         topics: Vec<String>,
     },
@@ -60,6 +88,11 @@ pub enum WsClientMessage {
 #[derive(Deserialize, Debug, Clone)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum WsServerMessage {
+    AuthOk {
+        authenticated: bool,
+        #[serde(rename = "adminCount")]
+        admin_count: u32,
+    },
     Subscribed {
         topics: Vec<String>,
     },
@@ -107,9 +140,39 @@ pub struct WsRelaySink {
     sink: Arc<Mutex<WsSink>>,
     subscribed_topics: Arc<Mutex<HashSet<String>>>,
     last_seen_seq: Arc<Mutex<HashMap<String, u64>>>,
+    authenticated: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl WsRelaySink {
+    /// Send an auth message to the DO with attestation and session signature.
+    pub async fn authenticate(
+        &self,
+        public_key_hex: &str,
+        attestation: &Attestation,
+        signing_key: &ed25519_dalek::SigningKey,
+    ) -> anyhow::Result<()> {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs()
+            .to_string();
+        let session_msg = format!("session:{timestamp}");
+        let sig = crate::signing::sign(signing_key, session_msg.as_bytes());
+        let sig_hex: String = sig.iter().map(|b| format!("{b:02x}")).collect();
+
+        self.send_msg(&WsClientMessage::Auth {
+            public_key: public_key_hex.to_string(),
+            attestation: AttestationPayload::from(attestation.clone()),
+            signature: sig_hex,
+            timestamp,
+        })
+        .await
+    }
+
+    /// Whether the session has been authenticated.
+    pub fn is_authenticated(&self) -> bool {
+        self.authenticated.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     /// Send a gossip message to the DO on the given topic.
     pub async fn send_gossip(&self, topic: &str, msg: &GossipWireMessage) -> anyhow::Result<()> {
         self.send_msg(&WsClientMessage::Gossip {
@@ -201,6 +264,7 @@ pub async fn connect(
         sink: Arc::new(Mutex::new(sink)),
         subscribed_topics: Arc::new(Mutex::new(HashSet::new())),
         last_seen_seq: Arc::new(Mutex::new(HashMap::new())),
+        authenticated: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
     let recv_sink = relay_sink.clone();
@@ -393,6 +457,17 @@ async fn handle_server_message(
     festival_public_key: Option<[u8; 32]>,
 ) -> anyhow::Result<()> {
     match msg {
+        WsServerMessage::AuthOk {
+            authenticated,
+            admin_count,
+        } => {
+            sink.authenticated
+                .store(authenticated, std::sync::atomic::Ordering::Relaxed);
+            tracing::info!(
+                "ws_relay: auth result: authenticated={authenticated}, admin_count={admin_count}"
+            );
+            Ok(())
+        }
         WsServerMessage::Gossip {
             seq, message, topic,
         } => {

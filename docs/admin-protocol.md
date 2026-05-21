@@ -4,8 +4,9 @@ This document describes the authentication, authorization, and festival
 lifecycle protocol used by the offbeat server. All admin operations use
 Ed25519 key pairs for identity and request signing.
 
-> **Future work:** WebAuthn passkey registration will derive the Ed25519
-> public key used here, replacing manual key management on the mobile app.
+> **See also:** [`auth-protocol.md`](auth-protocol.md) — WebAuthn
+> registration, attestation, session auth, and per-message signing.
+> Admin identity is built on top of the verified identity described there.
 
 ---
 
