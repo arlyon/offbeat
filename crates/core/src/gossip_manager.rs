@@ -516,6 +516,7 @@ mod tests {
             topic: "festival/f1".to_string(),
             stage_id: None,
             timestamp: "2026-06-14T20:00:00Z".to_string(),
+            writer_seq: 0,
         };
 
         dispatch_message(
@@ -619,6 +620,7 @@ mod tests {
             topic: "festival/test/chat".to_string(),
             stage_id: None,
             timestamp: "2026-06-14T21:00:00Z".to_string(),
+            writer_seq: 0,
         };
         let wire = encode_gossip_message(&GossipMessage::Chat(chat.clone())).unwrap();
         assert_eq!(wire.kind, "chat");

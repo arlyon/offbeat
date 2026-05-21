@@ -152,8 +152,8 @@ impl Database {
     pub fn save_chat_message(&self, msg: &ChatMessage) -> Result<()> {
         self.conn.lock().unwrap().execute(
             "INSERT OR IGNORE INTO chat_messages
-             (id, topic, user_id, display_name, text, stage_id, timestamp, received_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now'))",
+             (id, topic, user_id, display_name, text, stage_id, timestamp, writer_seq, received_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, datetime('now'))",
             params![
                 msg.id,
                 msg.topic,
@@ -162,6 +162,7 @@ impl Database {
                 msg.text,
                 msg.stage_id,
                 msg.timestamp,
+                msg.writer_seq as i64,
             ],
         )?;
         Ok(())
@@ -173,8 +174,8 @@ impl Database {
         {
             let mut stmt = tx.prepare(
                 "INSERT OR IGNORE INTO chat_messages
-                 (id, topic, user_id, display_name, text, stage_id, timestamp, received_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now'))",
+                 (id, topic, user_id, display_name, text, stage_id, timestamp, writer_seq, received_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, datetime('now'))",
             )?;
             for msg in msgs {
                 stmt.execute(params![
@@ -185,6 +186,7 @@ impl Database {
                     msg.text,
                     msg.stage_id,
                     msg.timestamp,
+                    msg.writer_seq as i64,
                 ])?;
             }
         }
@@ -200,7 +202,7 @@ impl Database {
     ) -> Result<Vec<ChatMessage>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, user_id, display_name, text, topic, stage_id, timestamp
+            "SELECT id, user_id, display_name, text, topic, stage_id, timestamp, writer_seq
              FROM chat_messages
              WHERE topic = ?1
              ORDER BY timestamp ASC
@@ -216,10 +218,82 @@ impl Database {
                     topic: row.get(4)?,
                     stage_id: row.get(5)?,
                     timestamp: row.get(6)?,
+                    writer_seq: row.get::<_, i64>(7)? as u64,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(msgs)
+    }
+
+    /// Get the next writer_seq for a user on a topic (max + 1, or 1 if none).
+    pub fn get_next_writer_seq(&self, topic: &str, user_id: &str) -> Result<u64> {
+        let conn = self.conn.lock().unwrap();
+        let max: i64 = conn.query_row(
+            "SELECT COALESCE(MAX(writer_seq), 0) FROM chat_messages WHERE topic = ?1 AND user_id = ?2",
+            params![topic, user_id],
+            |row| row.get(0),
+        )?;
+        Ok((max + 1) as u64)
+    }
+
+    /// Compute the chat state vector for a topic: {user_id: max_writer_seq} for each writer.
+    pub fn compute_chat_sv(&self, topic: &str) -> Result<std::collections::HashMap<String, u64>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT user_id, MAX(writer_seq) FROM chat_messages WHERE topic = ?1 GROUP BY user_id",
+        )?;
+        let sv = stmt
+            .query_map(params![topic], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as u64))
+            })?
+            .collect::<rusqlite::Result<std::collections::HashMap<String, u64>>>()?;
+        Ok(sv)
+    }
+
+    /// Get messages that are newer than the given state vector.
+    /// Returns messages where user's writer_seq > sv[user] OR user not in sv.
+    pub fn get_messages_since_sv(
+        &self,
+        topic: &str,
+        sv: &std::collections::HashMap<String, u64>,
+        limit: u32,
+    ) -> Result<Vec<ChatMessage>> {
+        // Simple approach: get all messages for topic, filter in Rust
+        // (More efficient SQL is possible but this is clearer and the message count is bounded)
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, user_id, display_name, text, topic, stage_id, timestamp, writer_seq
+             FROM chat_messages
+             WHERE topic = ?1
+             ORDER BY writer_seq DESC, timestamp DESC
+             LIMIT ?2",
+        )?;
+        let all_msgs: Vec<ChatMessage> = stmt
+            .query_map(params![topic, limit * 10], |row| {
+                // over-fetch to filter
+                Ok(ChatMessage {
+                    id: row.get(0)?,
+                    user_id: row.get(1)?,
+                    display_name: row.get(2)?,
+                    text: row.get(3)?,
+                    topic: row.get(4)?,
+                    stage_id: row.get(5)?,
+                    timestamp: row.get(6)?,
+                    writer_seq: row.get::<_, i64>(7)? as u64,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        let filtered: Vec<ChatMessage> = all_msgs
+            .into_iter()
+            .filter(|m| match sv.get(&m.user_id) {
+                Some(&max_seq) => m.writer_seq > max_seq,
+                None => true, // unknown writer → include all
+            })
+            .take(limit as usize)
+            .collect();
+
+        Ok(filtered)
     }
 
     // --- credentials ---
@@ -261,35 +335,6 @@ impl Database {
         } else {
             Ok(None)
         }
-    }
-
-    // --- gossip log ---
-
-    /// Save a gossip entry and return the assigned sequence number.
-    pub fn save_gossip(&self, topic: &str, data: &[u8]) -> Result<i64> {
-        let conn = self.conn.lock().unwrap();
-        conn.execute(
-            "INSERT INTO gossip_log (topic, data, received_at)
-             VALUES (?1, ?2, datetime('now'))",
-            params![topic, data],
-        )?;
-        Ok(conn.last_insert_rowid())
-    }
-
-    /// Return all gossip entries for a topic with seq > since_seq.
-    pub fn get_gossip_since(&self, topic: &str, since_seq: i64) -> Result<Vec<(i64, Vec<u8>)>> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT seq, data FROM gossip_log
-             WHERE topic = ?1 AND seq > ?2
-             ORDER BY seq ASC",
-        )?;
-        let entries = stmt
-            .query_map(params![topic, since_seq], |row| {
-                Ok((row.get(0)?, row.get(1)?))
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(entries)
     }
 }
 
@@ -382,6 +427,7 @@ mod tests {
             topic: "festival/f1".to_string(),
             stage_id: None,
             timestamp: "2026-06-13T20:00:00Z".to_string(),
+            writer_seq: 0,
         };
         db.save_chat_message(&msg).unwrap();
         let msgs = db.get_chat_messages("festival/f1", 10, 0).unwrap();
@@ -402,6 +448,7 @@ mod tests {
                 topic: "topic/batch".to_string(),
                 stage_id: None,
                 timestamp: format!("2026-06-13T20:{:02}:00Z", i % 60),
+                writer_seq: i as u64,
             })
             .collect();
         db.save_chat_messages_batch(&msgs).unwrap();
@@ -421,6 +468,7 @@ mod tests {
                 topic: "topic/a".to_string(),
                 stage_id: None,
                 timestamp: format!("2026-06-13T2{i}:00:00Z"),
+                writer_seq: i as u64,
             })
             .unwrap();
         }
@@ -432,45 +480,11 @@ mod tests {
             topic: "topic/b".to_string(),
             stage_id: None,
             timestamp: "2026-06-13T20:00:00Z".to_string(),
+            writer_seq: 0,
         })
         .unwrap();
         let msgs = db.get_chat_messages("topic/a", 10, 0).unwrap();
         assert_eq!(msgs.len(), 3);
-    }
-
-    #[test]
-    fn test_save_and_get_gossip() {
-        let db = test_db();
-        let seq1 = db.save_gossip("topic/a", b"data1").unwrap();
-        let seq2 = db.save_gossip("topic/a", b"data2").unwrap();
-        assert!(seq2 > seq1);
-
-        let entries = db.get_gossip_since("topic/a", 0).unwrap();
-        assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].1, b"data1");
-        assert_eq!(entries[1].1, b"data2");
-    }
-
-    #[test]
-    fn test_gossip_since_seq() {
-        let db = test_db();
-        let seq1 = db.save_gossip("topic/a", b"data1").unwrap();
-        db.save_gossip("topic/a", b"data2").unwrap();
-
-        let entries = db.get_gossip_since("topic/a", seq1).unwrap();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].1, b"data2");
-    }
-
-    #[test]
-    fn test_gossip_filtered_by_topic() {
-        let db = test_db();
-        db.save_gossip("topic/a", b"data_a").unwrap();
-        db.save_gossip("topic/b", b"data_b").unwrap();
-
-        let entries = db.get_gossip_since("topic/a", 0).unwrap();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].1, b"data_a");
     }
 
     #[test]
@@ -484,6 +498,7 @@ mod tests {
             topic: "topic/a".to_string(),
             stage_id: None,
             timestamp: "2026-06-13T20:00:00Z".to_string(),
+            writer_seq: 0,
         };
         db.save_chat_message(&msg).unwrap();
 
@@ -507,6 +522,7 @@ mod tests {
             topic: "topic/a".to_string(),
             stage_id: None,
             timestamp: "2026-06-13T21:00:00Z".to_string(),
+            writer_seq: 1,
         };
         db.save_chat_message(&msg2).unwrap();
 
@@ -537,6 +553,7 @@ mod tests {
             topic: "topic/b".to_string(),
             stage_id: None,
             timestamp: "2026-06-13T20:00:00Z".to_string(),
+            writer_seq: 0,
         };
         db.save_chat_message(&msg).unwrap();
 
@@ -550,6 +567,7 @@ mod tests {
                 topic: "topic/b".to_string(),
                 stage_id: None,
                 timestamp: "2026-06-13T21:00:00Z".to_string(),
+                writer_seq: 1,
             },
             ChatMessage {
                 id: "batch_new".to_string(),
@@ -559,6 +577,7 @@ mod tests {
                 topic: "topic/b".to_string(),
                 stage_id: None,
                 timestamp: "2026-06-13T22:00:00Z".to_string(),
+                writer_seq: 2,
             },
         ];
         db.save_chat_messages_batch(&msgs).unwrap();
@@ -567,6 +586,131 @@ mod tests {
         assert_eq!(stored.len(), 2);
         let original = stored.iter().find(|m| m.id == "batch_dedup").unwrap();
         assert_eq!(original.text, "original", "batch INSERT OR IGNORE should preserve original");
+    }
+
+    #[test]
+    fn test_get_next_writer_seq() {
+        let db = test_db();
+        let topic = "festival/f1/chat/general";
+        let user_id = "u1";
+
+        // No messages yet → seq should be 1
+        let seq = db.get_next_writer_seq(topic, user_id).unwrap();
+        assert_eq!(seq, 1);
+
+        // Insert a message with writer_seq=1
+        db.save_chat_message(&ChatMessage {
+            id: "m1".to_string(),
+            user_id: user_id.to_string(),
+            display_name: "Alice".to_string(),
+            text: "hello".to_string(),
+            topic: topic.to_string(),
+            stage_id: None,
+            timestamp: "2026-06-13T20:00:00Z".to_string(),
+            writer_seq: 1,
+        })
+        .unwrap();
+
+        // Next should be 2
+        let seq2 = db.get_next_writer_seq(topic, user_id).unwrap();
+        assert_eq!(seq2, 2);
+    }
+
+    #[test]
+    fn test_compute_chat_sv() {
+        let db = test_db();
+        let topic = "festival/f1/chat/general";
+
+        db.save_chat_message(&ChatMessage {
+            id: "m1".to_string(),
+            user_id: "alice".to_string(),
+            display_name: "Alice".to_string(),
+            text: "hi".to_string(),
+            topic: topic.to_string(),
+            stage_id: None,
+            timestamp: "2026-06-13T20:00:00Z".to_string(),
+            writer_seq: 3,
+        })
+        .unwrap();
+        db.save_chat_message(&ChatMessage {
+            id: "m2".to_string(),
+            user_id: "bob".to_string(),
+            display_name: "Bob".to_string(),
+            text: "hey".to_string(),
+            topic: topic.to_string(),
+            stage_id: None,
+            timestamp: "2026-06-13T20:01:00Z".to_string(),
+            writer_seq: 7,
+        })
+        .unwrap();
+        db.save_chat_message(&ChatMessage {
+            id: "m3".to_string(),
+            user_id: "alice".to_string(),
+            display_name: "Alice".to_string(),
+            text: "world".to_string(),
+            topic: topic.to_string(),
+            stage_id: None,
+            timestamp: "2026-06-13T20:02:00Z".to_string(),
+            writer_seq: 5,
+        })
+        .unwrap();
+
+        let sv = db.compute_chat_sv(topic).unwrap();
+        assert_eq!(sv.get("alice").copied(), Some(5));
+        assert_eq!(sv.get("bob").copied(), Some(7));
+    }
+
+    #[test]
+    fn test_get_messages_since_sv() {
+        let db = test_db();
+        let topic = "festival/f1/chat/general";
+
+        // Alice has seqs 1, 2, 3; Bob has seqs 1, 2
+        for seq in 1u64..=3 {
+            db.save_chat_message(&ChatMessage {
+                id: format!("alice-{seq}"),
+                user_id: "alice".to_string(),
+                display_name: "Alice".to_string(),
+                text: format!("alice msg {seq}"),
+                topic: topic.to_string(),
+                stage_id: None,
+                timestamp: format!("2026-06-13T20:0{seq}:00Z"),
+                writer_seq: seq,
+            })
+            .unwrap();
+        }
+        for seq in 1u64..=2 {
+            db.save_chat_message(&ChatMessage {
+                id: format!("bob-{seq}"),
+                user_id: "bob".to_string(),
+                display_name: "Bob".to_string(),
+                text: format!("bob msg {seq}"),
+                topic: topic.to_string(),
+                stage_id: None,
+                timestamp: format!("2026-06-13T21:0{seq}:00Z"),
+                writer_seq: seq,
+            })
+            .unwrap();
+        }
+
+        // sv: alice=2, bob=1 → should return alice-3 and bob-2
+        let sv = std::collections::HashMap::from([
+            ("alice".to_string(), 2u64),
+            ("bob".to_string(), 1u64),
+        ]);
+        let msgs = db.get_messages_since_sv(topic, &sv, 50).unwrap();
+        let ids: Vec<&str> = msgs.iter().map(|m| m.id.as_str()).collect();
+        assert!(ids.contains(&"alice-3"), "expected alice-3 in {ids:?}");
+        assert!(ids.contains(&"bob-2"), "expected bob-2 in {ids:?}");
+        assert!(!ids.contains(&"alice-1"), "alice-1 should be filtered");
+        assert!(!ids.contains(&"alice-2"), "alice-2 should be filtered");
+        assert!(!ids.contains(&"bob-1"), "bob-1 should be filtered");
+
+        // sv empty → all messages returned
+        let all = db
+            .get_messages_since_sv(topic, &std::collections::HashMap::new(), 50)
+            .unwrap();
+        assert_eq!(all.len(), 5);
     }
 
     #[test]

@@ -118,6 +118,8 @@ pub struct ChatMessage {
     pub topic: String,
     pub stage_id: Option<String>,
     pub timestamp: String,
+    #[serde(default)]
+    pub writer_seq: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

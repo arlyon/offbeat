@@ -21,9 +21,11 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     text TEXT NOT NULL,
     stage_id TEXT,
     timestamp TEXT NOT NULL,
+    writer_seq INTEGER NOT NULL DEFAULT 0,
     received_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_chat_topic_ts ON chat_messages(topic, timestamp);
+CREATE INDEX IF NOT EXISTS idx_chat_writer_seq ON chat_messages(topic, user_id, writer_seq);
 
 CREATE TABLE IF NOT EXISTS credentials (
     key TEXT PRIMARY KEY,
@@ -36,11 +38,3 @@ CREATE TABLE IF NOT EXISTS starred_sets (
     starred_at TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (festival_id, set_id)
 );
-
-CREATE TABLE IF NOT EXISTS gossip_log (
-    seq INTEGER PRIMARY KEY AUTOINCREMENT,
-    topic TEXT NOT NULL,
-    data BLOB NOT NULL,
-    received_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-CREATE INDEX IF NOT EXISTS idx_gossip_topic_seq ON gossip_log(topic, seq);

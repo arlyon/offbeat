@@ -46,6 +46,8 @@ impl ChatManager {
         let stage_or_general = stage_id.unwrap_or("general");
         let topic = format!("festival/{festival_id}/chat/{stage_or_general}");
 
+        let writer_seq = self.db.get_next_writer_seq(&topic, user_id)?;
+
         let msg = ChatMessage {
             id: uuid::Uuid::new_v4().to_string(),
             user_id: user_id.to_string(),
@@ -54,6 +56,7 @@ impl ChatManager {
             topic: topic.clone(),
             stage_id: stage_id.map(ToOwned::to_owned),
             timestamp: now_rfc3339(),
+            writer_seq,
         };
 
         self.db.save_chat_message(&msg)?;
@@ -76,6 +79,8 @@ impl ChatManager {
     ) -> anyhow::Result<(Vec<u8>, TopicId)> {
         let topic = format!("group/{group_id}/chat");
 
+        let writer_seq = self.db.get_next_writer_seq(&topic, user_id)?;
+
         let msg = ChatMessage {
             id: uuid::Uuid::new_v4().to_string(),
             user_id: user_id.to_string(),
@@ -84,6 +89,7 @@ impl ChatManager {
             topic: topic.clone(),
             stage_id: None,
             timestamp: now_rfc3339(),
+            writer_seq,
         };
 
         self.db.save_chat_message(&msg)?;
@@ -310,6 +316,7 @@ mod tests {
             topic: "festival/fieldday/chat/general".to_string(),
             stage_id: None,
             timestamp: "2026-06-14T20:00:00Z".to_string(),
+            writer_seq: 0,
         };
         mgr.receive_festival_chat(msg).unwrap();
 
@@ -332,6 +339,7 @@ mod tests {
             topic: "festival/fieldday/chat/general".to_string(),
             stage_id: None,
             timestamp: "2026-06-14T20:00:00Z".to_string(),
+            writer_seq: 0,
         };
         mgr.receive_festival_chat(msg.clone()).unwrap();
         mgr.receive_festival_chat(msg).unwrap(); // second insert — should replace, not duplicate
@@ -359,6 +367,7 @@ mod tests {
             topic: format!("group/{group_id}/chat"),
             stage_id: None,
             timestamp: "2026-06-14T21:00:00Z".to_string(),
+            writer_seq: 0,
         };
 
         let plaintext = serde_json::to_vec(&original).unwrap();
@@ -398,6 +407,7 @@ mod tests {
                 stage_id: None,
                 // Use ascending timestamps so ordering is deterministic.
                 timestamp: format!("2026-06-14T20:0{i}:00Z"),
+                writer_seq: i as u64,
             })
             .unwrap();
         }

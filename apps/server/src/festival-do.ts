@@ -588,6 +588,74 @@ export class FestivalDO extends DurableObject {
 				break;
 			}
 
+			case "chat_catchup": {
+				const {
+					topic: chatTopic,
+					sv: chatSv,
+					limit: chatLimit,
+				} = parsed as {
+					type: string;
+					topic: string;
+					sv: Record<string, number>;
+					limit?: number;
+				};
+				if (!chatTopic) {
+					ws.send(JSON.stringify({ type: "error", error: "chat_catchup requires topic" }));
+					break;
+				}
+
+				const maxLimit = chatLimit ?? 50;
+				const svMap = chatSv ?? {};
+
+				// Get chat messages from gossip_log for this topic
+				const chatRows = this.sql
+					.exec(
+						"SELECT message FROM gossip_log WHERE topic = ? ORDER BY seq DESC LIMIT ?",
+						chatTopic,
+						maxLimit * 10,
+					)
+					.toArray() as { message: string }[];
+
+				// Filter: parse each message, extract user_id and writer_seq (if present)
+				// Only include messages from writers not in sv, or with writer_seq > sv[writer]
+				const chatMessages: GossipWireMessage[] = [];
+				for (const row of chatRows) {
+					const wireMsg = JSON.parse(row.message) as GossipWireMessage;
+					if (wireMsg.kind === "chat") {
+						try {
+							const chatPayload = JSON.parse(wireMsg.payload) as {
+								userId?: string;
+								writerSeq?: number;
+							};
+							const userId = chatPayload.userId;
+							const writerSeq = chatPayload.writerSeq ?? 0;
+							if (userId && userId in svMap) {
+								if (writerSeq > svMap[userId]) {
+									chatMessages.push(wireMsg);
+								}
+							} else {
+								chatMessages.push(wireMsg);
+							}
+						} catch {
+							chatMessages.push(wireMsg); // include if can't parse
+						}
+					} else if (wireMsg.kind === "encrypted_chat") {
+						// Can't filter encrypted chat by writer — include all
+						chatMessages.push(wireMsg);
+					}
+					if (chatMessages.length >= maxLimit) break;
+				}
+
+				ws.send(
+					JSON.stringify({
+						type: "chat_diff",
+						topic: chatTopic,
+						messages: chatMessages,
+					}),
+				);
+				break;
+			}
+
 			default:
 				ws.send(JSON.stringify({ type: "error", error: `Unknown type: ${parsed.type}` }));
 		}

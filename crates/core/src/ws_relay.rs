@@ -112,6 +112,10 @@ pub enum WsServerMessage {
         doc_id: String,
         diff: String, // base64
     },
+    ChatDiff {
+        topic: String,
+        messages: Vec<GossipWireMessage>,
+    },
     Error {
         error: String,
     },
@@ -553,6 +557,23 @@ async fn handle_server_message(
                 "ws_relay: applied sv_diff for {doc_id} ({} bytes)",
                 diff_bytes.len()
             );
+            Ok(())
+        }
+        WsServerMessage::ChatDiff { topic, messages } => {
+            for wire_msg in messages {
+                let wire_bytes = serde_json::to_vec(&wire_msg)?;
+                if let Err(e) = crate::gossip_manager::handle_wire_bytes_pub(
+                    &wire_bytes,
+                    doc_manager,
+                    db,
+                    festival_public_key,
+                )
+                .await
+                {
+                    tracing::warn!("ws_relay chat_diff dispatch error: {e}");
+                }
+            }
+            tracing::info!("ws_relay: applied chat_diff for topic {topic}");
             Ok(())
         }
         WsServerMessage::Subscribed { topics } => {

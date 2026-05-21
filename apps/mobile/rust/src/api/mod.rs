@@ -331,12 +331,12 @@ impl AppNode {
         )
         .await?;
 
-        if let Ok(Some(attestation)) = auth::load_attestation(&self.inner.db) {
-            if let Ok(signing_key) = auth::generate_or_load_identity(&self.inner.db) {
-                let pubkey_hex = auth::get_public_key_hex(&signing_key);
-                if let Err(e) = sink.authenticate(&pubkey_hex, &attestation, &signing_key).await {
-                    tracing::warn!("ws relay auth failed: {e}");
-                }
+        if let Ok(Some(attestation)) = auth::load_attestation(&self.inner.db)
+            && let Ok(signing_key) = auth::generate_or_load_identity(&self.inner.db)
+        {
+            let pubkey_hex = auth::get_public_key_hex(&signing_key);
+            if let Err(e) = sink.authenticate(&pubkey_hex, &attestation, &signing_key).await {
+                tracing::warn!("ws relay auth failed: {e}");
             }
         }
 
@@ -412,6 +412,7 @@ impl AppNode {
             topic: topic.clone(),
             stage_id: message.stage_id,
             timestamp: message.timestamp,
+            writer_seq: 0,
         };
 
         let parts: Vec<&str> = topic.splitn(3, '/').collect();

@@ -924,6 +924,7 @@ async fn test_encrypted_group_chat_via_relay() {
         topic: topic.clone(),
         stage_id: None,
         timestamp: chrono::Utc::now().to_rfc3339(),
+        writer_seq: 0,
     };
     let plaintext = serde_json::to_vec(&original).unwrap();
     let encrypted = crypto::encrypt(&group_key, &plaintext).unwrap();
@@ -1681,6 +1682,7 @@ async fn test_encrypted_group_chat_catchup() {
             topic: topic.clone(),
             stage_id: None,
             timestamp: chrono::Utc::now().to_rfc3339(),
+            writer_seq: 0,
         };
         let plaintext = serde_json::to_vec(&msg).unwrap();
         let encrypted = crypto::encrypt(&group_key, &plaintext).unwrap();
