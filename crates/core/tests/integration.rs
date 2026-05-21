@@ -203,19 +203,23 @@ async fn register_and_get_attestation(
     pubkey_hex: &str,
 ) -> Result<Value, anyhow::Error> {
     let client = reqwest::Client::new();
-    // Register — auth stubs accept everything
+    // Register — get challenge from begin step
     let resp = client
         .post(format!("{http_url}/auth/register/begin"))
         .json(&json!({ "userId": pubkey_hex }))
         .send()
         .await?;
-    let _options: Value = resp.json().await?;
+    let options: Value = resp.json().await?;
+    let challenge = options["challenge"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing challenge in register/begin response"))?;
 
-    // Complete registration with Ed25519 public key
+    // Complete registration with Ed25519 public key and challenge
     let resp = client
         .post(format!("{http_url}/auth/register/complete"))
         .json(&json!({
             "webauthnResponse": {},
+            "challenge": challenge,
             "ed25519PublicKey": pubkey_hex
         }))
         .send()

@@ -635,17 +635,26 @@ export class MainDO extends DurableObject {
 			}
 			await this.ctx.storage.delete(`challenge:${body.challenge}`);
 
+			// Dev bypass: skip WebAuthn verification when DEV_BYPASS_WEBAUTHN is set
+			// This allows integration tests to run without real WebAuthn credentials
+			const devBypass = env.DEV_BYPASS_WEBAUTHN === "true";
+
 			let result: Awaited<ReturnType<typeof verifyRegistration>>;
-			try {
-				result = await verifyRegistration(body.webauthnResponse, body.challenge, env);
-			} catch (err) {
-				console.error("Registration verification threw:", err);
-				console.error("RP_ID:", env.RP_ID, "Expected origins:", getExpectedOrigins(env));
-				return new Response(`Registration verification failed: ${err}`, { status: 400 });
-			}
-			if (!result.verified) {
-				console.error("Registration verification returned verified=false");
-				return new Response("Registration verification failed: not verified", { status: 400 });
+			if (devBypass) {
+				// In dev mode, accept any Ed25519 key without WebAuthn verification
+				result = { verified: true, credentialId: crypto.randomUUID() };
+			} else {
+				try {
+					result = await verifyRegistration(body.webauthnResponse, body.challenge, env);
+				} catch (err) {
+					console.error("Registration verification threw:", err);
+					console.error("RP_ID:", env.RP_ID, "Expected origins:", getExpectedOrigins(env));
+					return new Response(`Registration verification failed: ${err}`, { status: 400 });
+				}
+				if (!result.verified) {
+					console.error("Registration verification returned verified=false");
+					return new Response("Registration verification failed: not verified", { status: 400 });
+				}
 			}
 
 			// Store WebAuthn credential with the Ed25519 public key

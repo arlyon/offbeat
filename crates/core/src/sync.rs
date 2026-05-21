@@ -15,6 +15,7 @@ use crate::chat::ChatManager;
 use crate::db::Database;
 use crate::doc_manager::DocManager;
 use crate::gossip_manager::{dispatch_message, GossipMessage, GossipWireMessage};
+use crate::notifier::ResourceNotifier;
 use crate::resource::{Priority, ResourceKind, ResourceRegistry};
 use crate::types::ChatMessage;
 
@@ -113,6 +114,7 @@ pub struct SyncOrchestrator {
     #[allow(dead_code)]
     chat_manager: Arc<ChatManager>,
     db: Arc<Database>,
+    notifier: Arc<ResourceNotifier>,
     /// Cached festival public keys for signature verification.
     festival_public_keys: Arc<RwLock<HashMap<String, [u8; 32]>>>,
 }
@@ -124,12 +126,14 @@ impl SyncOrchestrator {
         doc_manager: Arc<Mutex<DocManager>>,
         chat_manager: Arc<ChatManager>,
         db: Arc<Database>,
+        notifier: Arc<ResourceNotifier>,
     ) -> Self {
         Self {
             registry,
             doc_manager,
             chat_manager,
             db,
+            notifier,
             festival_public_keys: Arc::new(RwLock::new(HashMap::new())),
         }
     }
@@ -255,14 +259,38 @@ impl SyncOrchestrator {
 
         // Decode wire message to GossipMessage
         let gossip_msg = self.decode_wire_message(wire).await?;
-        let Some(msg) = gossip_msg else {
+        let Some(ref msg) = gossip_msg else {
             return Ok(()); // Message type not handled or missing key
         };
 
         // Dispatch to handlers
         let mut dm = self.doc_manager.lock().await;
         let pk = festival_pk.unwrap_or([0u8; 32]);
-        dispatch_message(&mut dm, &self.db, msg, &pk)
+        dispatch_message(&mut dm, &self.db, msg.clone(), &pk)?;
+
+        // Notify watchers after successful dispatch
+        match msg {
+            GossipMessage::FestivalUpdate { doc_id, .. } => {
+                self.notifier.notify_doc(doc_id);
+            }
+            GossipMessage::GroupUpdate { doc_id, .. }
+            | GossipMessage::SyncResponse { doc_id, .. }
+            | GossipMessage::SyncUpdate { doc_id, .. } => {
+                self.notifier.notify_doc(doc_id);
+            }
+            GossipMessage::Chat(chat_msg) => {
+                self.notifier.notify_chat(&chat_msg.topic);
+            }
+            GossipMessage::EncryptedChat { .. } => {
+                // Encrypted chat doesn't have direct topic info after decryption
+                // TODO: track group chat topics
+            }
+            GossipMessage::SyncRequest { .. } => {
+                // SyncRequest is handled at a higher level, no notification needed
+            }
+        }
+
+        Ok(())
     }
 
     /// Extract festival public key from topic string if applicable.
@@ -486,7 +514,8 @@ mod tests {
         let doc_manager = Arc::new(Mutex::new(crate::doc_manager::DocManager::new(db.clone())));
         let chat_manager = Arc::new(crate::chat::ChatManager::new(db.clone(), doc_manager.clone()));
         let registry = Arc::new(RwLock::new(ResourceRegistry::new()));
-        SyncOrchestrator::new(registry, doc_manager, chat_manager, db)
+        let notifier = Arc::new(ResourceNotifier::new());
+        SyncOrchestrator::new(registry, doc_manager, chat_manager, db, notifier)
     }
 
     #[test]
@@ -743,7 +772,8 @@ mod tests {
             reg.register(Box::new(StageChat::new("fest1", "main-stage", dummy_key)));
         }
 
-        let orch = SyncOrchestrator::new(registry.clone(), doc_manager, chat_manager, db);
+        let notifier = Arc::new(ResourceNotifier::new());
+        let orch = SyncOrchestrator::new(registry.clone(), doc_manager, chat_manager, db, notifier);
         let peer = MockPeer::new();
 
         let report = orch.sync_with_peer(&peer).await.unwrap();
@@ -778,7 +808,8 @@ mod tests {
         let doc_manager = Arc::new(Mutex::new(crate::doc_manager::DocManager::new(db.clone())));
         let chat_manager = Arc::new(crate::chat::ChatManager::new(db.clone(), doc_manager.clone()));
         let registry = Arc::new(RwLock::new(ResourceRegistry::new()));
-        SyncOrchestrator::new(registry, doc_manager, chat_manager, db)
+        let notifier = Arc::new(ResourceNotifier::new());
+        SyncOrchestrator::new(registry, doc_manager, chat_manager, db, notifier)
     }
 
     #[tokio::test]

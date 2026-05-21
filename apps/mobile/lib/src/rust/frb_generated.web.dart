@@ -52,6 +52,24 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  RustStreamSink<GroupStateDto> dco_decode_StreamSink_group_state_dto_Sse(
+    dynamic raw,
+  );
+
+  @protected
+  RustStreamSink<List<ChatMessageDto>>
+  dco_decode_StreamSink_list_chat_message_dto_Sse(dynamic raw);
+
+  @protected
+  RustStreamSink<LineupDto?>
+  dco_decode_StreamSink_opt_box_autoadd_lineup_dto_Sse(dynamic raw);
+
+  @protected
+  RustStreamSink<SyncStatusDto> dco_decode_StreamSink_sync_status_dto_Sse(
+    dynamic raw,
+  );
+
+  @protected
   String dco_decode_String(dynamic raw);
 
   @protected
@@ -142,6 +160,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
 
   @protected
+  List<ResourceSyncStatusDto> dco_decode_list_resource_sync_status_dto(
+    dynamic raw,
+  );
+
+  @protected
   String? dco_decode_opt_String(dynamic raw);
 
   @protected
@@ -149,6 +172,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   LineupDto? dco_decode_opt_box_autoadd_lineup_dto(dynamic raw);
+
+  @protected
+  ResourceSyncStatusDto dco_decode_resource_sync_status_dto(dynamic raw);
+
+  @protected
+  SyncStatusDto dco_decode_sync_status_dto(dynamic raw);
 
   @protected
   int dco_decode_u_32(dynamic raw);
@@ -186,6 +215,26 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   AppNode
   sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerAppNode(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  RustStreamSink<GroupStateDto> sse_decode_StreamSink_group_state_dto_Sse(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  RustStreamSink<List<ChatMessageDto>>
+  sse_decode_StreamSink_list_chat_message_dto_Sse(SseDeserializer deserializer);
+
+  @protected
+  RustStreamSink<LineupDto?>
+  sse_decode_StreamSink_opt_box_autoadd_lineup_dto_Sse(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  RustStreamSink<SyncStatusDto> sse_decode_StreamSink_sync_status_dto_Sse(
     SseDeserializer deserializer,
   );
 
@@ -298,6 +347,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
 
   @protected
+  List<ResourceSyncStatusDto> sse_decode_list_resource_sync_status_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   String? sse_decode_opt_String(SseDeserializer deserializer);
 
   @protected
@@ -309,6 +363,14 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   LineupDto? sse_decode_opt_box_autoadd_lineup_dto(
     SseDeserializer deserializer,
   );
+
+  @protected
+  ResourceSyncStatusDto sse_decode_resource_sync_status_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  SyncStatusDto sse_decode_sync_status_dto(SseDeserializer deserializer);
 
   @protected
   int sse_decode_u_32(SseDeserializer deserializer);
@@ -353,6 +415,30 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void
   sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerAppNode(
     AppNode self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_StreamSink_group_state_dto_Sse(
+    RustStreamSink<GroupStateDto> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_StreamSink_list_chat_message_dto_Sse(
+    RustStreamSink<List<ChatMessageDto>> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_StreamSink_opt_box_autoadd_lineup_dto_Sse(
+    RustStreamSink<LineupDto?> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_StreamSink_sync_status_dto_Sse(
+    RustStreamSink<SyncStatusDto> self,
     SseSerializer serializer,
   );
 
@@ -498,6 +584,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_resource_sync_status_dto(
+    List<ResourceSyncStatusDto> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer);
 
   @protected
@@ -511,6 +603,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
     LineupDto? self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_resource_sync_status_dto(
+    ResourceSyncStatusDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_sync_status_dto(SyncStatusDto self, SseSerializer serializer);
 
   @protected
   void sse_encode_u_32(int self, SseSerializer serializer);

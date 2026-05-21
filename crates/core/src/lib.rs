@@ -67,13 +67,14 @@ impl OffbeatNode {
         let group_manager = Arc::new(GroupManager::new(db.clone(), doc_manager.clone()));
         let chat_manager = Arc::new(ChatManager::new(db.clone(), doc_manager.clone()));
         let resource_registry = Arc::new(RwLock::new(ResourceRegistry::new()));
+        let notifier = ResourceNotifier::new_arc();
         let sync_orchestrator = Arc::new(SyncOrchestrator::new(
             resource_registry.clone(),
             doc_manager.clone(),
             chat_manager.clone(),
             db.clone(),
+            notifier.clone(),
         ));
-        let notifier = ResourceNotifier::new_arc();
         Ok(Self {
             doc_manager,
             db,
@@ -97,13 +98,14 @@ impl OffbeatNode {
         let group_manager = Arc::new(GroupManager::new(db.clone(), doc_manager.clone()));
         let chat_manager = Arc::new(ChatManager::new(db.clone(), doc_manager.clone()));
         let resource_registry = Arc::new(RwLock::new(ResourceRegistry::new()));
+        let notifier = ResourceNotifier::new_arc();
         let sync_orchestrator = Arc::new(SyncOrchestrator::new(
             resource_registry.clone(),
             doc_manager.clone(),
             chat_manager.clone(),
             db.clone(),
+            notifier.clone(),
         ));
-        let notifier = ResourceNotifier::new_arc();
         Ok(Self {
             doc_manager,
             db,
@@ -130,11 +132,13 @@ impl OffbeatNode {
         let group_manager = Arc::new(GroupManager::new(db.clone(), doc_manager.clone()));
         let chat_manager = Arc::new(ChatManager::new(db.clone(), doc_manager.clone()));
         let resource_registry = Arc::new(RwLock::new(ResourceRegistry::new()));
+        let notifier = ResourceNotifier::new_arc();
         let sync_orchestrator = Arc::new(SyncOrchestrator::new(
             resource_registry.clone(),
             doc_manager.clone(),
             chat_manager.clone(),
             db.clone(),
+            notifier.clone(),
         ));
 
         // Bind an iroh endpoint, accepting gossip connections.
@@ -154,8 +158,6 @@ impl OffbeatNode {
 
         // Also register with sync orchestrator
         sync_orchestrator.set_festival_public_key("default", festival_public_key);
-
-        let notifier = ResourceNotifier::new_arc();
 
         Ok(Self {
             doc_manager,

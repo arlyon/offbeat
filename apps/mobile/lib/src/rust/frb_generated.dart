@@ -66,7 +66,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => -960371775;
+  int get rustContentHash => -2131129893;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -245,6 +245,26 @@ abstract class RustLibApi extends BaseApi {
     required AppNode that,
     required String groupId,
     required List<String> setIds,
+  });
+
+  Future<Stream<List<ChatMessageDto>>> crateApiAppNodeWatchChat({
+    required AppNode that,
+    required String topic,
+    required int lastN,
+  });
+
+  Future<Stream<GroupStateDto>> crateApiAppNodeWatchGroupState({
+    required AppNode that,
+    required String groupId,
+  });
+
+  Future<Stream<LineupDto?>> crateApiAppNodeWatchLineup({
+    required AppNode that,
+    required String festivalId,
+  });
+
+  Future<Stream<SyncStatusDto>> crateApiAppNodeWatchSyncStatus({
+    required AppNode that,
   });
 
   Future<Uint8List> crateApiGenerateGroupKey();
@@ -1488,6 +1508,171 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<Stream<List<ChatMessageDto>>> crateApiAppNodeWatchChat({
+    required AppNode that,
+    required String topic,
+    required int lastN,
+  }) async {
+    final sink = RustStreamSink<List<ChatMessageDto>>();
+    await handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerAppNode(
+            that,
+            serializer,
+          );
+          sse_encode_String(topic, serializer);
+          sse_encode_u_32(lastN, serializer);
+          sse_encode_StreamSink_list_chat_message_dto_Sse(sink, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 33,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiAppNodeWatchChatConstMeta,
+        argValues: [that, topic, lastN, sink],
+        apiImpl: this,
+      ),
+    );
+    return sink.stream;
+  }
+
+  TaskConstMeta get kCrateApiAppNodeWatchChatConstMeta => const TaskConstMeta(
+    debugName: "AppNode_watch_chat",
+    argNames: ["that", "topic", "lastN", "sink"],
+  );
+
+  @override
+  Future<Stream<GroupStateDto>> crateApiAppNodeWatchGroupState({
+    required AppNode that,
+    required String groupId,
+  }) async {
+    final sink = RustStreamSink<GroupStateDto>();
+    await handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerAppNode(
+            that,
+            serializer,
+          );
+          sse_encode_String(groupId, serializer);
+          sse_encode_StreamSink_group_state_dto_Sse(sink, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 34,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiAppNodeWatchGroupStateConstMeta,
+        argValues: [that, groupId, sink],
+        apiImpl: this,
+      ),
+    );
+    return sink.stream;
+  }
+
+  TaskConstMeta get kCrateApiAppNodeWatchGroupStateConstMeta =>
+      const TaskConstMeta(
+        debugName: "AppNode_watch_group_state",
+        argNames: ["that", "groupId", "sink"],
+      );
+
+  @override
+  Future<Stream<LineupDto?>> crateApiAppNodeWatchLineup({
+    required AppNode that,
+    required String festivalId,
+  }) async {
+    final sink = RustStreamSink<LineupDto?>();
+    await handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerAppNode(
+            that,
+            serializer,
+          );
+          sse_encode_String(festivalId, serializer);
+          sse_encode_StreamSink_opt_box_autoadd_lineup_dto_Sse(
+            sink,
+            serializer,
+          );
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 35,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiAppNodeWatchLineupConstMeta,
+        argValues: [that, festivalId, sink],
+        apiImpl: this,
+      ),
+    );
+    return sink.stream;
+  }
+
+  TaskConstMeta get kCrateApiAppNodeWatchLineupConstMeta => const TaskConstMeta(
+    debugName: "AppNode_watch_lineup",
+    argNames: ["that", "festivalId", "sink"],
+  );
+
+  @override
+  Future<Stream<SyncStatusDto>> crateApiAppNodeWatchSyncStatus({
+    required AppNode that,
+  }) async {
+    final sink = RustStreamSink<SyncStatusDto>();
+    await handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerAppNode(
+            that,
+            serializer,
+          );
+          sse_encode_StreamSink_sync_status_dto_Sse(sink, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 36,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiAppNodeWatchSyncStatusConstMeta,
+        argValues: [that, sink],
+        apiImpl: this,
+      ),
+    );
+    return sink.stream;
+  }
+
+  TaskConstMeta get kCrateApiAppNodeWatchSyncStatusConstMeta =>
+      const TaskConstMeta(
+        debugName: "AppNode_watch_sync_status",
+        argNames: ["that", "sink"],
+      );
+
+  @override
   Future<Uint8List> crateApiGenerateGroupKey() {
     return handler.executeNormal(
       NormalTask(
@@ -1496,7 +1681,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 33,
+            funcId: 37,
             port: port_,
           );
         },
@@ -1524,7 +1709,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 34,
+            funcId: 38,
             port: port_,
           );
         },
@@ -1551,7 +1736,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 35,
+            funcId: 39,
             port: port_,
           );
         },
@@ -1617,6 +1802,36 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return AppNodeImpl.frbInternalDcoDecode(raw as List<dynamic>);
+  }
+
+  @protected
+  RustStreamSink<GroupStateDto> dco_decode_StreamSink_group_state_dto_Sse(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    throw UnimplementedError();
+  }
+
+  @protected
+  RustStreamSink<List<ChatMessageDto>>
+  dco_decode_StreamSink_list_chat_message_dto_Sse(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    throw UnimplementedError();
+  }
+
+  @protected
+  RustStreamSink<LineupDto?>
+  dco_decode_StreamSink_opt_box_autoadd_lineup_dto_Sse(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    throw UnimplementedError();
+  }
+
+  @protected
+  RustStreamSink<SyncStatusDto> dco_decode_StreamSink_sync_status_dto_Sse(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    throw UnimplementedError();
   }
 
   @protected
@@ -1905,6 +2120,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<ResourceSyncStatusDto> dco_decode_list_resource_sync_status_dto(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>)
+        .map(dco_decode_resource_sync_status_dto)
+        .toList();
+  }
+
+  @protected
   String? dco_decode_opt_String(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_String(raw);
@@ -1920,6 +2145,33 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   LineupDto? dco_decode_opt_box_autoadd_lineup_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_box_autoadd_lineup_dto(raw);
+  }
+
+  @protected
+  ResourceSyncStatusDto dco_decode_resource_sync_status_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 4)
+      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    return ResourceSyncStatusDto(
+      id: dco_decode_String(arr[0]),
+      syncing: dco_decode_bool(arr[1]),
+      lastSynced: dco_decode_opt_String(arr[2]),
+      error: dco_decode_opt_String(arr[3]),
+    );
+  }
+
+  @protected
+  SyncStatusDto dco_decode_sync_status_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 3)
+      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    return SyncStatusDto(
+      syncing: dco_decode_bool(arr[0]),
+      resources: dco_decode_list_resource_sync_status_dto(arr[1]),
+      pendingOps: dco_decode_u_32(arr[2]),
+    );
   }
 
   @protected
@@ -1999,6 +2251,40 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       sse_decode_usize(deserializer),
       sse_decode_i_32(deserializer),
     );
+  }
+
+  @protected
+  RustStreamSink<GroupStateDto> sse_decode_StreamSink_group_state_dto_Sse(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    throw UnimplementedError('Unreachable ()');
+  }
+
+  @protected
+  RustStreamSink<List<ChatMessageDto>>
+  sse_decode_StreamSink_list_chat_message_dto_Sse(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    throw UnimplementedError('Unreachable ()');
+  }
+
+  @protected
+  RustStreamSink<LineupDto?>
+  sse_decode_StreamSink_opt_box_autoadd_lineup_dto_Sse(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    throw UnimplementedError('Unreachable ()');
+  }
+
+  @protected
+  RustStreamSink<SyncStatusDto> sse_decode_StreamSink_sync_status_dto_Sse(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    throw UnimplementedError('Unreachable ()');
   }
 
   @protected
@@ -2350,6 +2636,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<ResourceSyncStatusDto> sse_decode_list_resource_sync_status_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <ResourceSyncStatusDto>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_resource_sync_status_dto(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
   String? sse_decode_opt_String(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
@@ -2384,6 +2684,36 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     } else {
       return null;
     }
+  }
+
+  @protected
+  ResourceSyncStatusDto sse_decode_resource_sync_status_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_id = sse_decode_String(deserializer);
+    var var_syncing = sse_decode_bool(deserializer);
+    var var_lastSynced = sse_decode_opt_String(deserializer);
+    var var_error = sse_decode_opt_String(deserializer);
+    return ResourceSyncStatusDto(
+      id: var_id,
+      syncing: var_syncing,
+      lastSynced: var_lastSynced,
+      error: var_error,
+    );
+  }
+
+  @protected
+  SyncStatusDto sse_decode_sync_status_dto(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_syncing = sse_decode_bool(deserializer);
+    var var_resources = sse_decode_list_resource_sync_status_dto(deserializer);
+    var var_pendingOps = sse_decode_u_32(deserializer);
+    return SyncStatusDto(
+      syncing: var_syncing,
+      resources: var_resources,
+      pendingOps: var_pendingOps,
+    );
   }
 
   @protected
@@ -2466,6 +2796,74 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_usize(
       (self as AppNodeImpl).frbInternalSseEncode(move: null),
+      serializer,
+    );
+  }
+
+  @protected
+  void sse_encode_StreamSink_group_state_dto_Sse(
+    RustStreamSink<GroupStateDto> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(
+      self.setupAndSerialize(
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_group_state_dto,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+      ),
+      serializer,
+    );
+  }
+
+  @protected
+  void sse_encode_StreamSink_list_chat_message_dto_Sse(
+    RustStreamSink<List<ChatMessageDto>> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(
+      self.setupAndSerialize(
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_chat_message_dto,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+      ),
+      serializer,
+    );
+  }
+
+  @protected
+  void sse_encode_StreamSink_opt_box_autoadd_lineup_dto_Sse(
+    RustStreamSink<LineupDto?> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(
+      self.setupAndSerialize(
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_opt_box_autoadd_lineup_dto,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+      ),
+      serializer,
+    );
+  }
+
+  @protected
+  void sse_encode_StreamSink_sync_status_dto_Sse(
+    RustStreamSink<SyncStatusDto> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(
+      self.setupAndSerialize(
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_sync_status_dto,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+      ),
       serializer,
     );
   }
@@ -2773,6 +3171,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_list_resource_sync_status_dto(
+    List<ResourceSyncStatusDto> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_resource_sync_status_dto(item, serializer);
+    }
+  }
+
+  @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
@@ -2806,6 +3216,29 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     if (self != null) {
       sse_encode_box_autoadd_lineup_dto(self, serializer);
     }
+  }
+
+  @protected
+  void sse_encode_resource_sync_status_dto(
+    ResourceSyncStatusDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.id, serializer);
+    sse_encode_bool(self.syncing, serializer);
+    sse_encode_opt_String(self.lastSynced, serializer);
+    sse_encode_opt_String(self.error, serializer);
+  }
+
+  @protected
+  void sse_encode_sync_status_dto(
+    SyncStatusDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_bool(self.syncing, serializer);
+    sse_encode_list_resource_sync_status_dto(self.resources, serializer);
+    sse_encode_u_32(self.pendingOps, serializer);
   }
 
   @protected
@@ -3083,8 +3516,8 @@ class AppNodeImpl extends RustOpaque implements AppNode {
     stageIds: stageIds,
   );
 
-  /// Subscribe to the festival state topic and request catchup from the
-  /// relay to receive the genesis lineup and any subsequent updates.
+  /// Subscribe to the gossip topic for a festival and perform a state vector
+  /// exchange with the DO so we only receive updates we don't already have.
   Future<void> subscribeFestival({required String festivalId}) => RustLib
       .instance
       .api
@@ -3109,4 +3542,35 @@ class AppNodeImpl extends RustOpaque implements AppNode {
     groupId: groupId,
     setIds: setIds,
   );
+
+  /// Watch chat messages for a topic — emits current messages, then updates.
+  Future<Stream<List<ChatMessageDto>>> watchChat({
+    required String topic,
+    required int lastN,
+  }) => RustLib.instance.api.crateApiAppNodeWatchChat(
+    that: this,
+    topic: topic,
+    lastN: lastN,
+  );
+
+  /// Watch group state — emits current state, then updates on changes.
+  Future<Stream<GroupStateDto>> watchGroupState({required String groupId}) =>
+      RustLib.instance.api.crateApiAppNodeWatchGroupState(
+        that: this,
+        groupId: groupId,
+      );
+
+  /// Watch festival lineup — emits current state, then updates on changes.
+  ///
+  /// The stream emits the current lineup immediately, then re-emits whenever
+  /// the lineup document is updated (via sync or local changes).
+  Future<Stream<LineupDto?>> watchLineup({required String festivalId}) =>
+      RustLib.instance.api.crateApiAppNodeWatchLineup(
+        that: this,
+        festivalId: festivalId,
+      );
+
+  /// Watch sync status — emits current status, then updates on changes.
+  Future<Stream<SyncStatusDto>> watchSyncStatus() =>
+      RustLib.instance.api.crateApiAppNodeWatchSyncStatus(that: this);
 }

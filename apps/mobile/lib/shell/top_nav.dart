@@ -15,6 +15,7 @@ class TopNav extends StatelessWidget {
   final bool showBack;
   final VoidCallback? onBack;
   final Animation<double>? animation;
+  final bool syncing;
 
   const TopNav({
     super.key,
@@ -23,6 +24,7 @@ class TopNav extends StatelessWidget {
     this.showBack = false,
     this.onBack,
     this.animation,
+    this.syncing = false,
   });
 
   static const _curve = Cubic(0.2, 0.7, 0.2, 1.0);
@@ -152,6 +154,15 @@ class TopNav extends StatelessWidget {
                             ),
                           ),
                         ),
+                        // Sync indicator
+                        if (syncing)
+                          Opacity(
+                            opacity: curvedT,
+                            child: const Padding(
+                              padding: EdgeInsets.only(left: 6),
+                              child: _SyncIndicator(),
+                            ),
+                          ),
                       ],
                     ],
                   ),
@@ -217,6 +228,52 @@ class NavIconButton extends StatelessWidget {
               ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Animated sync indicator — small rotating sync icon
+class _SyncIndicator extends StatefulWidget {
+  const _SyncIndicator();
+
+  @override
+  State<_SyncIndicator> createState() => _SyncIndicatorState();
+}
+
+class _SyncIndicatorState extends State<_SyncIndicator>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1200),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        return Transform.rotate(
+          angle: _controller.value * 2 * 3.14159,
+          child: child,
+        );
+      },
+      child: const Icon(
+        Icons.sync,
+        size: 12,
+        color: colorAccent,
       ),
     );
   }

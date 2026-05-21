@@ -2,40 +2,4 @@
 > @offbeat/server@ check /home/arlyon/Programming/offbeat/apps/server
 > tsc --noEmit && biome check src/
 
-src/api.ts format ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  × Formatter would have printed the following content:
-  
-    279 279 │     if (lineupResp.ok) {
-    280 280 │       const lineup = await lineupResp.json();
-    281     │ - → → await·(stub·as·unknown·as·{·seedLineup(festivalId:·string,·lineup:·unknown):·Promise<void>·})
-    282     │ - → → → .seedLineup(festivalId,·lineup);
-        281 │ + → → await·(
-        282 │ + → → → stub·as·unknown·as·{·seedLineup(festivalId:·string,·lineup:·unknown):·Promise<void>·}
-        283 │ + → → ).seedLineup(festivalId,·lineup);
-    283 284 │     }
-    284 285 │   }
-  
-
-src/festival-do.ts format ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  × Formatter would have printed the following content:
-  
-    526 526 │           }));
-    527 527 │   
-    528     │ - → → → → console.log(`[ws]·catchup:·topic=${parsed.topic}·sinceSeq=${sinceSeq}·sending·${messages.length}·messages`);
-        528 │ + → → → → console.log(
-        529 │ + → → → → → `[ws]·catchup:·topic=${parsed.topic}·sinceSeq=${sinceSeq}·sending·${messages.length}·messages`,
-        530 │ + → → → → );
-    529 531 │           ws.send(
-    530 532 │             JSON.stringify({
-  
-
-Checked 7 files in 18ms. No fixes applied.
-Found 2 errors.
-check ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  × Some errors were emitted while running checks.
-  
-
- ELIFECYCLE  Command failed with exit code 1.
+Checked 7 files in 22ms. No fixes applied.

@@ -1,10 +1,27 @@
 use crate::frb_generated::StreamSink;
 use offbeat_core::OffbeatNode;
+use once_cell::sync::Lazy;
+use std::sync::Arc;
+use tokio::runtime::Runtime;
+
+/// Global tokio runtime for spawning watch tasks.
+/// FRB's async executor isn't a full tokio runtime, so we need our own.
+static RUNTIME: Lazy<Arc<Runtime>> = Lazy::new(|| {
+    Arc::new(
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("failed to create tokio runtime"),
+    )
+});
 
 /// Initialize the Flutter Rust Bridge utilities. Must be called before any other bridge function.
 #[flutter_rust_bridge::frb(init)]
 pub fn init_app() {
     flutter_rust_bridge::setup_default_user_utils();
+    // Force lazy initialization of the runtime
+    let _ = &*RUNTIME;
 }
 
 // ---------------------------------------------------------------------------
@@ -448,7 +465,7 @@ impl AppNode {
 
         self.inner.ws_relay = Some(Arc::new(sink));
 
-        tokio::spawn(async move {
+        RUNTIME.spawn(async move {
             if let Err(e) = receive_loop.await {
                 tracing::warn!("ws relay receive loop exited: {e}");
             }
@@ -858,7 +875,7 @@ impl AppNode {
         let doc_manager_clone = Arc::clone(&doc_manager);
         let doc_id_clone = doc_id.clone();
 
-        tokio::spawn(async move {
+        RUNTIME.spawn(async move {
             // Emit initial state
             {
                 let mut dm = doc_manager_clone.lock().await;
@@ -903,7 +920,7 @@ impl AppNode {
         let sink_clone = Arc::clone(&sink);
         let group_id_clone = group_id.clone();
 
-        tokio::spawn(async move {
+        RUNTIME.spawn(async move {
             // Emit initial state
             if let Ok(state) = group_manager.get_group_state(&group_id_clone).await {
                 let dto = GroupStateDto {
@@ -994,7 +1011,7 @@ impl AppNode {
         let sink_clone = Arc::clone(&sink);
         let topic_clone = topic.clone();
 
-        tokio::spawn(async move {
+        RUNTIME.spawn(async move {
             // Emit initial messages
             if let Ok(msgs) = db.get_chat_messages(&topic_clone, last_n, 0) {
                 let dtos: Vec<ChatMessageDto> = msgs
@@ -1042,50 +1059,46 @@ impl AppNode {
         Ok(())
     }
 
-    // TODO(Phase 5): watch_sync_status requires FRB codegen to generate
-    // SseEncode implementations for SyncStatusDto and ResourceSyncStatusDto.
-    // Run `flutter_rust_bridge_codegen generate` then uncomment:
-    //
-    // /// Watch sync status — emits current status, then updates on changes.
-    // #[flutter_rust_bridge::frb(stream_dart_await)]
-    // pub fn watch_sync_status(
-    //     &self,
-    //     sink: StreamSink<SyncStatusDto>,
-    // ) -> anyhow::Result<()> {
-    //     use std::sync::Arc;
-    //     use tokio::sync::Mutex;
-    //
-    //     let notifier = Arc::clone(&self.inner.notifier);
-    //
-    //     let mut rx = notifier.watch_sync_status();
-    //     let sink = Arc::new(Mutex::new(sink));
-    //     let sink_clone = Arc::clone(&sink);
-    //
-    //     tokio::spawn(async move {
-    //         // Emit initial status
-    //         {
-    //             let status = rx.borrow().clone();
-    //             let dto = convert_sync_status(&status);
-    //             let sink = sink_clone.lock().await;
-    //             let _ = sink.add(dto);
-    //         }
-    //
-    //         // Watch for changes
-    //         loop {
-    //             if rx.changed().await.is_err() {
-    //                 break;
-    //             }
-    //             let status = rx.borrow().clone();
-    //             let dto = convert_sync_status(&status);
-    //             let sink = sink_clone.lock().await;
-    //             if sink.add(dto).is_err() {
-    //                 break;
-    //             }
-    //         }
-    //     });
-    //
-    //     Ok(())
-    // }
+    /// Watch sync status — emits current status, then updates on changes.
+    #[flutter_rust_bridge::frb(stream_dart_await)]
+    pub fn watch_sync_status(
+        &self,
+        sink: StreamSink<SyncStatusDto>,
+    ) -> anyhow::Result<()> {
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        let notifier = Arc::clone(&self.inner.notifier);
+
+        let mut rx = notifier.watch_sync_status();
+        let sink = Arc::new(Mutex::new(sink));
+        let sink_clone = Arc::clone(&sink);
+
+        RUNTIME.spawn(async move {
+            // Emit initial status
+            {
+                let status = rx.borrow().clone();
+                let dto = convert_sync_status(&status);
+                let sink = sink_clone.lock().await;
+                let _ = sink.add(dto);
+            }
+
+            // Watch for changes
+            loop {
+                if rx.changed().await.is_err() {
+                    break;
+                }
+                let status = rx.borrow().clone();
+                let dto = convert_sync_status(&status);
+                let sink = sink_clone.lock().await;
+                if sink.add(dto).is_err() {
+                    break;
+                }
+            }
+        });
+
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1148,24 +1161,23 @@ fn read_lineup_from_doc(
     Some(LineupDto { stages, days, sets })
 }
 
-// TODO(Phase 5): Uncomment after FRB codegen
-// /// Convert SyncStatus from notifier to DTO.
-// fn convert_sync_status(status: &offbeat_core::notifier::SyncStatus) -> SyncStatusDto {
-//     SyncStatusDto {
-//         syncing: status.syncing,
-//         resources: status
-//             .resources
-//             .iter()
-//             .map(|r| ResourceSyncStatusDto {
-//                 id: r.id.clone(),
-//                 syncing: r.syncing,
-//                 last_synced: r.last_synced.clone(),
-//                 error: r.error.clone(),
-//             })
-//             .collect(),
-//         pending_ops: status.pending_ops,
-//     }
-// }
+/// Convert SyncStatus from notifier to DTO.
+fn convert_sync_status(status: &offbeat_core::notifier::SyncStatus) -> SyncStatusDto {
+    SyncStatusDto {
+        syncing: status.syncing,
+        resources: status
+            .resources
+            .iter()
+            .map(|r| ResourceSyncStatusDto {
+                id: r.id.clone(),
+                syncing: r.syncing,
+                last_synced: r.last_synced.clone(),
+                error: r.error.clone(),
+            })
+            .collect(),
+        pending_ops: status.pending_ops,
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Crypto utilities

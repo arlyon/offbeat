@@ -6,7 +6,7 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `parse_json_array`
+// These functions are ignored because they are not marked as `pub`: `convert_sync_status`, `parse_json_array`, `read_lineup_from_doc`
 
 /// Generate a fresh random 32-byte group key.
 Future<Uint8List> generateGroupKey() =>
@@ -166,8 +166,8 @@ abstract class AppNode implements RustOpaqueInterface {
     required List<String> stageIds,
   });
 
-  /// Subscribe to the festival state topic and request catchup from the
-  /// relay to receive the genesis lineup and any subsequent updates.
+  /// Subscribe to the gossip topic for a festival and perform a state vector
+  /// exchange with the DO so we only receive updates we don't already have.
   Future<void> subscribeFestival({required String festivalId});
 
   /// Toggle a star on a set. Returns the new starred state (`true` = now starred).
@@ -178,6 +178,24 @@ abstract class AppNode implements RustOpaqueInterface {
     required String groupId,
     required List<String> setIds,
   });
+
+  /// Watch chat messages for a topic — emits current messages, then updates.
+  Future<Stream<List<ChatMessageDto>>> watchChat({
+    required String topic,
+    required int lastN,
+  });
+
+  /// Watch group state — emits current state, then updates on changes.
+  Future<Stream<GroupStateDto>> watchGroupState({required String groupId});
+
+  /// Watch festival lineup — emits current state, then updates on changes.
+  ///
+  /// The stream emits the current lineup immediately, then re-emits whenever
+  /// the lineup document is updated (via sync or local changes).
+  Future<Stream<LineupDto?>> watchLineup({required String festivalId});
+
+  /// Watch sync status — emits current status, then updates on changes.
+  Future<Stream<SyncStatusDto>> watchSyncStatus();
 }
 
 class AttestationDto {
@@ -557,4 +575,59 @@ class LineupStageDto {
           short == other.short &&
           color == other.color &&
           order == other.order;
+}
+
+/// Per-resource sync status.
+class ResourceSyncStatusDto {
+  final String id;
+  final bool syncing;
+  final String? lastSynced;
+  final String? error;
+
+  const ResourceSyncStatusDto({
+    required this.id,
+    required this.syncing,
+    this.lastSynced,
+    this.error,
+  });
+
+  @override
+  int get hashCode =>
+      id.hashCode ^ syncing.hashCode ^ lastSynced.hashCode ^ error.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ResourceSyncStatusDto &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          syncing == other.syncing &&
+          lastSynced == other.lastSynced &&
+          error == other.error;
+}
+
+/// Overall sync status for the node.
+class SyncStatusDto {
+  final bool syncing;
+  final List<ResourceSyncStatusDto> resources;
+  final int pendingOps;
+
+  const SyncStatusDto({
+    required this.syncing,
+    required this.resources,
+    required this.pendingOps,
+  });
+
+  @override
+  int get hashCode =>
+      syncing.hashCode ^ resources.hashCode ^ pendingOps.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SyncStatusDto &&
+          runtimeType == other.runtimeType &&
+          syncing == other.syncing &&
+          resources == other.resources &&
+          pendingOps == other.pendingOps;
 }
