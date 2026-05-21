@@ -12,7 +12,9 @@ aes-gcm = "0.10.3"
 anyhow = "1.0.102"
 base64 = "0.22.1"
 blake3 = "1.8.5"
+bytes = "1"
 ed25519-dalek = { version = "2.2.0", features = ["rand_core"] }
+futures-util = "0.3"
 getrandom = "0.2"
 iroh = { version = "1.0.0-rc.0", features = ["unstable-custom-transports"] }
 iroh-gossip = "0.99.0"
@@ -21,11 +23,10 @@ rusqlite = { version = "0.39.0", features = ["bundled"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 tokio = { version = "1.52.3", features = ["full"] }
+tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
 tracing = "0.1.44"
 tracing-subscriber = "0.3.23"
 uuid = { version = "1.23.1", features = ["v4"] }
 yrs = "0.26.0"
 
 [dev-dependencies]
-tokio-tungstenite = "0.26"
-futures-util = "0.3"

@@ -105,6 +105,95 @@ impl AppNode {
             })
             .collect())
     }
+
+    // -----------------------------------------------------------------------
+    // Networking methods
+    // -----------------------------------------------------------------------
+
+    /// Connect this node to the Festival Durable Object relay at `url`.
+    ///
+    /// Spawns a background task that subscribes to topics and feeds incoming
+    /// messages into the dispatch pipeline.  The connection runs until the
+    /// node is dropped or the WebSocket is closed by the server.
+    pub async fn connect_relay(&self, url: String) -> anyhow::Result<()> {
+        use offbeat_core::ws_relay::WsRelay;
+        use std::sync::Arc;
+
+        let mut relay = WsRelay::connect(&url).await?;
+
+        // Immediately subscribe to no topics — callers use `subscribe_festival`
+        // afterwards to add topics.  This just establishes the connection.
+        let doc_manager = Arc::clone(&self.inner.doc_manager);
+        let db = Arc::clone(&self.inner.db);
+
+        tokio::spawn(async move {
+            if let Err(e) = relay.run_receive_loop(doc_manager, db, None).await {
+                tracing::warn!("ws relay receive loop exited: {e}");
+            }
+        });
+
+        Ok(())
+    }
+
+    /// Subscribe to the gossip topic for a festival, using the iroh-gossip
+    /// layer (if networking was started).
+    pub async fn subscribe_festival(
+        &self,
+        festival_id: String,
+    ) -> anyhow::Result<()> {
+        let topic_id = offbeat_core::topics::festival_topic(&festival_id, "state");
+
+        let gm = self
+            .inner
+            .gossip_manager
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("networking not started — call start_networking first"))?;
+
+        gm.lock()
+            .await
+            .subscribe(topic_id, vec![])
+            .await
+    }
+
+    /// Broadcast a chat message on the given gossip topic.
+    pub async fn publish_chat(
+        &self,
+        topic: String,
+        message: ChatMessageDto,
+    ) -> anyhow::Result<()> {
+        use offbeat_core::gossip_manager::{GossipMessage, encode_gossip_message_pub};
+        use offbeat_core::types::ChatMessage;
+
+        let chat = ChatMessage {
+            id: message.id,
+            user_id: message.user_id,
+            display_name: message.display_name,
+            text: message.text,
+            topic: topic.clone(),
+            stage_id: message.stage_id,
+            timestamp: message.timestamp,
+        };
+
+        // Derive the topic id from the topic string.
+        // Expected format: "festival/{id}/{channel}"
+        let parts: Vec<&str> = topic.splitn(3, '/').collect();
+        let topic_id = if parts.len() == 3 && parts[0] == "festival" {
+            offbeat_core::topics::festival_topic(parts[1], parts[2])
+        } else {
+            anyhow::bail!("unsupported topic format: {topic}");
+        };
+
+        let wire = encode_gossip_message_pub(&GossipMessage::Chat(chat))?;
+        let bytes = serde_json::to_vec(&wire)?;
+
+        let gm = self
+            .inner
+            .gossip_manager
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("networking not started"))?;
+
+        gm.lock().await.publish(topic_id, bytes).await
+    }
 }
 
 // ---------------------------------------------------------------------------
