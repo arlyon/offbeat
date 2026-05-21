@@ -1,0 +1,387 @@
+// OFFBEAT FestivalListScreen — Variant A "Index"
+// Page header: "Festivals." + subtitle meta row
+// Search bar: dotted border, surface1 bg, search icon, placeholder, ⌘K badge
+// "// SAVED" section with star count pill (accent bg)
+// "// DISCOVER" section with festival count
+// Empty state: "NO RESULTS // {query}"
+
+import 'package:flutter/material.dart';
+import '../../data/mock_data.dart';
+import '../../theme/tokens.dart';
+import '../../shell/top_nav.dart';
+import '../../widgets/dotted_border.dart';
+import 'festival_row.dart';
+
+class FestivalListScreen extends StatefulWidget {
+  final void Function(Festival) onFestivalTap;
+
+  const FestivalListScreen({super.key, required this.onFestivalTap});
+
+  @override
+  State<FestivalListScreen> createState() => _FestivalListScreenState();
+}
+
+class _FestivalListScreenState extends State<FestivalListScreen> {
+  String _query = '';
+  final _searchController = TextEditingController();
+  // Initial saved state: fieldday26 and ade25
+  final Set<String> _saved = {'fieldday26', 'ade25'};
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  List<Festival> get _filtered {
+    if (_query.isEmpty) return kFests;
+    final q = _query.toLowerCase();
+    return kFests.where((f) {
+      return f.name.toLowerCase().contains(q) ||
+          f.city.toLowerCase().contains(q) ||
+          f.genres.any((g) => g.toLowerCase().contains(q));
+    }).toList();
+  }
+
+  int get _activeCount => kFests.where((f) => f.status != FestStatus.past).length;
+
+  @override
+  Widget build(BuildContext context) {
+    final filtered = _filtered;
+    final savedFests = filtered.where((f) => _saved.contains(f.id)).toList();
+    final discoverFests = filtered.where((f) => !_saved.contains(f.id)).toList();
+
+    return Column(
+      children: [
+        // Top nav
+        TopNav(
+          rightWidgets: [
+            NavIconButton(icon: Icons.wifi_off),
+            NavIconButton(icon: Icons.settings),
+          ],
+        ),
+        // Scrollable body
+        Expanded(
+          child: ListView(
+            padding: EdgeInsets.zero,
+            children: [
+              // Page header
+              _PageHeader(
+                activeCount: _activeCount,
+                savedCount: _saved.length,
+              ),
+              // Search bar
+              _SearchBar(
+                controller: _searchController,
+                query: _query,
+                onChanged: (q) => setState(() => _query = q),
+                onClear: () {
+                  _searchController.clear();
+                  setState(() => _query = '');
+                },
+              ),
+              // Saved section
+              if (savedFests.isNotEmpty) ...[
+                _EyebrowRow(
+                  label: '// SAVED',
+                  pill: '★ ${savedFests.length}',
+                  right: 'EDIT',
+                  onRightTap: () {},
+                ),
+                ...savedFests.map((f) => FestivalRow(
+                  fest: f,
+                  saved: _saved.contains(f.id),
+                  onToggleSave: () => setState(() {
+                    if (_saved.contains(f.id)) {
+                      _saved.remove(f.id);
+                    } else {
+                      _saved.add(f.id);
+                    }
+                  }),
+                  onTap: () => widget.onFestivalTap(f),
+                )),
+              ],
+              // Discover section
+              _EyebrowRow(
+                label: '// DISCOVER',
+                right: '${discoverFests.length} FESTIVALS',
+              ),
+              ...discoverFests.map((f) => FestivalRow(
+                fest: f,
+                saved: _saved.contains(f.id),
+                onToggleSave: () => setState(() {
+                  if (_saved.contains(f.id)) {
+                    _saved.remove(f.id);
+                  } else {
+                    _saved.add(f.id);
+                  }
+                }),
+                onTap: () => widget.onFestivalTap(f),
+              )),
+              // Empty state
+              if (filtered.isEmpty)
+                _EmptyState(query: _query),
+              const SizedBox(height: 24),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _PageHeader extends StatelessWidget {
+  final int activeCount;
+  final int savedCount;
+
+  const _PageHeader({required this.activeCount, required this.savedCount});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(18, 16, 18, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Festivals.',
+            style: TextStyle(
+              fontFamily: 'Helvetica',
+              fontWeight: FontWeight.w700,
+              fontSize: 34,
+              letterSpacing: -0.02 * 34,
+              height: 1,
+              color: colorFg,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 6,
+            children: [
+              Text(
+                '$activeCount ACTIVE',
+                style: _metaStyle,
+              ),
+              const Text('·', style: _dimDotStyle),
+              Text(
+                '$savedCount SAVED',
+                style: _metaStyle,
+              ),
+              const Text('·', style: _dimDotStyle),
+              const Text(
+                'SYNC 14:02',
+                style: _metaStyle,
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  static const _metaStyle = TextStyle(
+    fontFamily: 'JetBrainsMono',
+    fontSize: 11,
+    color: colorFg3,
+    letterSpacing: 0.08 * 11,
+    height: 1.3,
+  );
+  static const _dimDotStyle = TextStyle(
+    fontFamily: 'JetBrainsMono',
+    fontSize: 11,
+    color: colorFg4,
+    height: 1.3,
+  );
+}
+
+class _SearchBar extends StatelessWidget {
+  final TextEditingController controller;
+  final String query;
+  final ValueChanged<String> onChanged;
+  final VoidCallback onClear;
+
+  const _SearchBar({
+    required this.controller,
+    required this.query,
+    required this.onChanged,
+    required this.onClear,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(18, 8, 18, 14),
+      child: DottedBorder(
+        color: query.isNotEmpty ? colorAccent : colorDotted,
+        child: Container(
+          color: colorSurface1,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(
+            children: [
+              const Icon(Icons.search, size: 16, color: colorFg3),
+              const SizedBox(width: 8),
+              Expanded(
+                child: TextField(
+                  controller: controller,
+                  onChanged: onChanged,
+                  style: const TextStyle(
+                    fontFamily: 'Helvetica',
+                    fontSize: 14,
+                    color: colorFg,
+                    letterSpacing: -0.01 * 14,
+                  ),
+                  decoration: const InputDecoration(
+                    isDense: true,
+                    contentPadding: EdgeInsets.zero,
+                    border: InputBorder.none,
+                    hintText: 'search festivals, cities, genres',
+                    hintStyle: TextStyle(
+                      color: colorFg4,
+                      fontFamily: 'Helvetica',
+                      fontSize: 14,
+                    ),
+                  ),
+                  cursorColor: colorAccent,
+                ),
+              ),
+              if (query.isNotEmpty)
+                GestureDetector(
+                  onTap: onClear,
+                  child: const Padding(
+                    padding: EdgeInsets.all(2),
+                    child: Icon(Icons.close, size: 14, color: colorFg3),
+                  ),
+                )
+              else
+                // ⌘K badge
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: colorSurface2,
+                    border: Border.all(color: colorHairline),
+                  ),
+                  child: const Text(
+                    '⌘K',
+                    style: TextStyle(
+                      fontFamily: 'JetBrainsMono',
+                      fontSize: 10,
+                      color: colorFg3,
+                      letterSpacing: 0.04 * 10,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _EyebrowRow extends StatelessWidget {
+  final String label;
+  final String? pill;
+  final String? right;
+  final VoidCallback? onRightTap;
+
+  const _EyebrowRow({
+    required this.label,
+    this.pill,
+    this.right,
+    this.onRightTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(18, 14, 18, 8),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        crossAxisAlignment: CrossAxisAlignment.baseline,
+        textBaseline: TextBaseline.alphabetic,
+        children: [
+          Row(
+            children: [
+              Text(
+                label,
+                style: const TextStyle(
+                  fontFamily: 'JetBrainsMono',
+                  fontSize: 11,
+                  fontWeight: FontWeight.w500,
+                  color: colorFg2,
+                  letterSpacing: 0.08 * 11,
+                  height: 1,
+                ),
+              ),
+              if (pill != null) ...[
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  color: colorAccent,
+                  child: Text(
+                    pill!,
+                    style: const TextStyle(
+                      fontFamily: 'JetBrainsMono',
+                      fontSize: 9,
+                      fontWeight: FontWeight.w700,
+                      color: colorAccentInk,
+                      letterSpacing: 0.06 * 9,
+                      height: 1,
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+          if (right != null)
+            GestureDetector(
+              onTap: onRightTap,
+              child: Text(
+                right!,
+                style: const TextStyle(
+                  fontFamily: 'JetBrainsMono',
+                  fontSize: 10,
+                  color: colorFg4,
+                  letterSpacing: 0.08 * 10,
+                  height: 1,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _EmptyState extends StatelessWidget {
+  final String query;
+  const _EmptyState({required this.query});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(32),
+      child: Center(
+        child: RichText(
+          textAlign: TextAlign.center,
+          text: TextSpan(
+            style: const TextStyle(
+              fontFamily: 'JetBrainsMono',
+              fontSize: 11,
+              color: colorFg3,
+              letterSpacing: 0.08 * 11,
+              height: 1.4,
+            ),
+            children: [
+              const TextSpan(text: 'NO RESULTS // '),
+              TextSpan(
+                text: '"$query"',
+                style: const TextStyle(color: colorAccent),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
