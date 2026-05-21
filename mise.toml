@@ -4,6 +4,7 @@ java = "21"
 rust = "latest"
 wrangler = "latest"
 android-sdk = "latest"
+"cargo:flutter_rust_bridge_codegen" = "latest"
 
 [tasks.sdkmanager]
 run = [

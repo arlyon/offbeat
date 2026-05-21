@@ -1,9 +1,8 @@
 // OFFBEAT Mobile App — Entry point
-// MaterialApp with custom theme, AppShell wrapping FestivalListScreen
-// Route to FestivalDetailScreen on festival tap
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
 import 'theme/app_theme.dart';
 import 'theme/tokens.dart';
 import 'shell/status_bar.dart';
@@ -12,12 +11,17 @@ import 'shell/top_nav.dart';
 import 'data/mock_data.dart';
 import 'screens/festival_list/festival_list_screen.dart';
 import 'screens/festival_detail/festival_detail_screen.dart';
+import 'screens/festival_detail/admin_panel.dart';
 import 'screens/you/registration_screen.dart';
 import 'screens/you/you_screen.dart';
 import 'services/auth_service.dart';
+import 'services/admin_service.dart';
+import 'src/rust/api.dart';
+import 'src/rust/frb_generated.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await RustLib.init();
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
     statusBarColor: Colors.transparent,
     statusBarBrightness: Brightness.dark,
@@ -52,31 +56,133 @@ class _OffbeatShellState extends State<_OffbeatShell> {
   AppTab _activeTab = AppTab.festivals;
   Festival? _selectedFestival;
 
-  // Auth state — in a real app this would come from the Rust bridge.
-  // For now, we track it in Dart state until FRB codegen is wired up.
-  String _authState = 'unregistered'; // unregistered, valid, expiring, expired
+  // Rust bridge node
+  AppNode? _node;
+  bool _nodeReady = false;
+
+  // Auth state
+  String _authState = 'unregistered';
   String? _authExpiresAt;
   String _userId = '';
   String _publicKeyHex = '';
   String? _displayName;
 
+  // Admin state
+  bool _isAdmin = false;
+  List<String> _adminKeys = [];
+
   final _authService = AuthService();
+  final _adminService = AdminService();
 
-  Future<void> _handleRegister() async {
-    // TODO: PRF derivation via Rust bridge once FRB is wired
-    // For now, generate a random identity and register it
-    _publicKeyHex = 'a' * 64; // placeholder until bridge is connected
+  @override
+  void initState() {
+    super.initState();
+    _initNode();
+  }
 
-    final attestation = await _authService.register(
-      ed25519PublicKeyHex: _publicKeyHex,
-    );
+  Future<void> _initNode() async {
+    final dir = await getApplicationDocumentsDirectory();
+    final dbPath = '${dir.path}/offbeat.db';
+    final node = await AppNode.create(dbPath: dbPath);
 
-    // TODO: Store attestation via Rust bridge
-    // AppNode.storeAttestation(attestation['message'], attestation['signature'], attestation['issuer']);
+    // Load existing auth state
+    final authState = await node.getAuthState();
+    final identity = await node.getIdentity();
+    String pubKeyHex = '';
+    if (authState.state != 'unregistered') {
+      pubKeyHex = await node.getPublicKeyHex();
+    }
 
     setState(() {
-      _authState = 'valid';
-      _userId = _publicKeyHex.substring(0, 16);
+      _node = node;
+      _nodeReady = true;
+      _authState = authState.state;
+      _authExpiresAt = authState.expiresAt;
+      _userId = identity.userId;
+      _displayName = identity.displayName;
+      _publicKeyHex = pubKeyHex;
+    });
+  }
+
+  Future<void> _handleRegister() async {
+    final node = _node;
+    if (node == null) return;
+
+    final result = await _authService.register(
+      onPrfOutput: (prfBytes) async {
+        return await node.deriveIdentityFromPrf(prfOutput: prfBytes.toList());
+      },
+    );
+
+    // Store attestation in Rust DB
+    final att = result.attestation;
+    await node.storeAttestation(
+      message: att['message'] as String,
+      signature: att['signature'] as String,
+      issuer: att['issuer'] as String,
+    );
+
+    // Reload state
+    final authState = await node.getAuthState();
+    final identity = await node.getIdentity();
+
+    setState(() {
+      _authState = authState.state;
+      _authExpiresAt = authState.expiresAt;
+      _publicKeyHex = result.ed25519PublicKeyHex;
+      _userId = identity.userId;
+    });
+  }
+
+  Future<void> _onFestivalTap(Festival fest) async {
+    setState(() => _selectedFestival = fest);
+
+    // Check admin status if authenticated
+    if (_authState != 'unregistered' && _publicKeyHex.isNotEmpty) {
+      try {
+        final admins = await _adminService.listAdmins();
+        final isAdmin = admins.contains(_publicKeyHex);
+        setState(() {
+          _adminKeys = admins;
+          _isAdmin = isAdmin;
+        });
+
+        // Show bootstrap dialog if no admins exist
+        if (admins.isEmpty && mounted) {
+          showDialog(
+            context: context,
+            builder: (_) => AdminBootstrapDialog(
+              festivalName: fest.name,
+              onAccept: () {
+                Navigator.pop(context);
+                _handleBecomeAdmin(fest.id);
+              },
+              onDecline: () => Navigator.pop(context),
+            ),
+          );
+        }
+      } catch (_) {
+        // Server unreachable — continue without admin state
+      }
+    }
+  }
+
+  Future<void> _handleBecomeAdmin(String festivalId) async {
+    if (_publicKeyHex.isEmpty) return;
+
+    await _adminService.registerFestivalAdmin(
+      festivalId: festivalId,
+      publicKeyHex: _publicKeyHex,
+    );
+
+    // Also register as global admin
+    await _adminService.registerAdmin(publicKeyHex: _publicKeyHex);
+
+    // Refresh admin list
+    final admins = await _adminService.listAdmins();
+    setState(() {
+      _isAdmin = admins.contains(_publicKeyHex);
+      _adminKeys = admins;
     });
   }
 
@@ -93,19 +199,13 @@ class _OffbeatShellState extends State<_OffbeatShell> {
         backgroundColor: colorBg,
         body: Column(
           children: [
-            // Custom status bar (sits above SafeArea)
             const OffbeatStatusBar(),
-            // Body with SafeArea for notch/bottom insets
-            Expanded(
-              child: _buildBody(),
-            ),
-            // Bottom tab bar
+            Expanded(child: _buildBody()),
             OffbeatTabBar(
               activeTab: _activeTab,
               onTabChanged: (tab) {
                 setState(() {
                   _activeTab = tab;
-                  // Reset detail when navigating to other tabs
                   if (tab != AppTab.festivals) _selectedFestival = null;
                 });
               },
@@ -117,16 +217,25 @@ class _OffbeatShellState extends State<_OffbeatShell> {
   }
 
   Widget _buildBody() {
+    if (!_nodeReady) {
+      return const Center(
+        child: CircularProgressIndicator(color: colorAccent, strokeWidth: 1.5),
+      );
+    }
+
     switch (_activeTab) {
       case AppTab.festivals:
         if (_selectedFestival != null) {
           return FestivalDetailScreen(
             festival: _selectedFestival!,
             onBack: () => setState(() => _selectedFestival = null),
+            isAdmin: _isAdmin,
+            adminKeys: _adminKeys,
+            userPublicKeyHex: _publicKeyHex,
           );
         }
         return FestivalListScreen(
-          onFestivalTap: (fest) => setState(() => _selectedFestival = fest),
+          onFestivalTap: (fest) => _onFestivalTap(fest),
         );
       case AppTab.schedule:
         return _PlaceholderTab(
@@ -145,9 +254,9 @@ class _OffbeatShellState extends State<_OffbeatShell> {
           displayName: _displayName,
           authState: _authState,
           expiresAt: _authExpiresAt,
-          onDisplayNameChanged: (name) {
+          onDisplayNameChanged: (name) async {
+            await _node?.setDisplayName(name: name);
             setState(() => _displayName = name);
-            // TODO: AppNode.setDisplayName(name) via bridge
           },
         );
     }
@@ -205,7 +314,6 @@ class _PlaceholderTab extends StatelessWidget {
 class NowTabPlaceholder extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
-    // Pre-wire the NowStrip view for the NOW tab
     return Column(
       children: [
         TopNav(
