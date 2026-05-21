@@ -15,6 +15,8 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+use std::collections::HashMap;
+
 use chat::ChatManager;
 use db::Database;
 use doc_manager::DocManager;
@@ -22,6 +24,7 @@ use gossip_manager::GossipManager;
 use groups::GroupManager;
 use iroh::endpoint::presets;
 use iroh_gossip::net::{Gossip, GOSSIP_ALPN};
+use ws_relay::WsRelaySink;
 
 /// Top-level node that ties together the database, document manager, and
 /// (optionally) the iroh gossip networking layer.
@@ -36,6 +39,10 @@ pub struct OffbeatNode {
     pub gossip: Option<Gossip>,
     /// Present when the node was created via `new_with_networking`.
     pub endpoint: Option<iroh::Endpoint>,
+    /// WS relay sink — present after `connect_relay`.
+    pub ws_relay: Option<Arc<WsRelaySink>>,
+    /// Cached festival public keys (festival_id → 32-byte Ed25519 key).
+    pub festival_public_keys: HashMap<String, [u8; 32]>,
 }
 
 impl OffbeatNode {
@@ -55,6 +62,8 @@ impl OffbeatNode {
             gossip_manager: None,
             gossip: None,
             endpoint: None,
+            ws_relay: None,
+            festival_public_keys: HashMap::new(),
         })
     }
 
@@ -72,6 +81,8 @@ impl OffbeatNode {
             gossip_manager: None,
             gossip: None,
             endpoint: None,
+            ws_relay: None,
+            festival_public_keys: HashMap::new(),
         })
     }
 
@@ -108,6 +119,8 @@ impl OffbeatNode {
             gossip_manager: Some(gossip_manager),
             gossip: Some(gossip),
             endpoint: Some(endpoint),
+            ws_relay: None,
+            festival_public_keys: HashMap::new(),
         })
     }
 }

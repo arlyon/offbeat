@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use base64::Engine as _;
@@ -15,6 +15,7 @@ use crate::types::SignedUpdate;
 pub struct DocManager {
     docs: HashMap<String, Doc>,
     db: Arc<Database>,
+    dirty: HashSet<String>,
 }
 
 impl DocManager {
@@ -22,6 +23,7 @@ impl DocManager {
         Self {
             docs: HashMap::new(),
             db,
+            dirty: HashSet::new(),
         }
     }
 
@@ -48,6 +50,7 @@ impl DocManager {
             let mut txn = doc.transact_mut();
             txn.apply_update(update)?;
         }
+        self.dirty.insert(doc_id.to_string());
         self.persist(doc_id)
     }
 
@@ -84,7 +87,11 @@ impl DocManager {
     }
 
     /// Persist the full doc state to the database.
-    pub fn persist(&self, doc_id: &str) -> anyhow::Result<()> {
+    /// No-op if the doc has not been modified since the last persist.
+    pub fn persist(&mut self, doc_id: &str) -> anyhow::Result<()> {
+        if !self.dirty.contains(doc_id) {
+            return Ok(());
+        }
         let doc = self
             .docs
             .get(doc_id)
@@ -93,7 +100,13 @@ impl DocManager {
         let empty_sv = StateVector::default();
         let full_update = txn.encode_state_as_update_v1(&empty_sv);
         self.db.save_doc(doc_id, "yrs", &full_update)?;
+        self.dirty.remove(doc_id);
         Ok(())
+    }
+
+    /// Persist the doc only if it has been modified since the last persist.
+    pub fn persist_if_dirty(&mut self, doc_id: &str) -> anyhow::Result<()> {
+        self.persist(doc_id)
     }
 
     // --- Festival doc helpers ---
@@ -177,6 +190,34 @@ impl DocManager {
         crypto::encrypt(group_key, update)
     }
 
+    /// Remove a key from the root map of a doc. Returns the encoded update bytes.
+    pub fn remove_map_value(
+        &mut self,
+        doc_id: &str,
+        key: &str,
+    ) -> anyhow::Result<Vec<u8>> {
+        let doc = self.get_or_create(doc_id);
+
+        let sv_before = {
+            let txn = doc.transact();
+            txn.state_vector()
+        };
+
+        {
+            let map = doc.get_or_insert_map("root");
+            let mut txn = doc.transact_mut();
+            map.remove(&mut txn, key);
+        }
+
+        let txn = doc.transact();
+        let update = txn.encode_state_as_update_v1(&sv_before);
+        drop(txn);
+
+        self.dirty.insert(doc_id.to_string());
+        self.persist(doc_id)?;
+        Ok(update)
+    }
+
     /// Set a value in the root map of a doc. Returns the encoded update bytes.
     pub fn set_map_value(
         &mut self,
@@ -203,6 +244,7 @@ impl DocManager {
         let update = txn.encode_state_as_update_v1(&sv_before);
         drop(txn);
 
+        self.dirty.insert(doc_id.to_string());
         self.persist(doc_id)?;
         Ok(update)
     }
@@ -322,6 +364,42 @@ mod tests {
 
         let val = mgr_b.read_map_value("shared-doc", "campsite");
         assert_eq!(val, Some("field-B".to_string()));
+    }
+
+    #[test]
+    fn test_remove_map_value_deletes_key() {
+        let db = test_db();
+        let mut mgr = DocManager::new(db);
+
+        mgr.set_map_value("doc1", "temp", "data").unwrap();
+        assert_eq!(mgr.read_map_value("doc1", "temp"), Some("data".to_string()));
+
+        mgr.remove_map_value("doc1", "temp").unwrap();
+        assert_eq!(mgr.read_map_value("doc1", "temp"), None);
+    }
+
+    #[test]
+    fn test_persist_noop_when_not_dirty() {
+        let db = test_db();
+        let mut mgr = DocManager::new(db.clone());
+
+        // Set a value — this persists and clears dirty
+        mgr.set_map_value("doc1", "key", "val").unwrap();
+
+        // Count writes: save_doc for "doc1" should have 1 entry
+        let data_before = db.load_doc("doc1").unwrap();
+        assert!(data_before.is_some());
+
+        // Calling persist again should be a no-op (not dirty)
+        mgr.persist("doc1").unwrap();
+
+        // Verify doc is not dirty
+        assert!(!mgr.dirty.contains("doc1"));
+
+        // If we mutate again, it should be dirty
+        mgr.set_map_value("doc1", "key2", "val2").unwrap();
+        // After set_map_value, persist was called internally and cleared dirty
+        assert!(!mgr.dirty.contains("doc1"));
     }
 
     #[test]

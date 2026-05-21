@@ -166,12 +166,24 @@ impl AppNode {
         )?;
 
         // Broadcast via gossip if available.
-        if let Some(gm) = &self.inner.gossip_manager {
+        {
             use offbeat_core::gossip_manager::{GossipMessage, encode_gossip_message_pub};
             let wire = encode_gossip_message_pub(&GossipMessage::Chat(msg.clone()))?;
-            let bytes = serde_json::to_vec(&wire)?;
-            // Best-effort broadcast — ignore errors (e.g. not subscribed yet).
-            let _ = gm.lock().await.publish(topic_id, bytes).await;
+
+            if let Some(gm) = &self.inner.gossip_manager {
+                let bytes = serde_json::to_vec(&wire)?;
+                let _ = gm.lock().await.publish(topic_id, bytes).await;
+            }
+
+            // Also send via WS relay
+            if let Some(ws) = &self.inner.ws_relay {
+                let topic_str = format!(
+                    "festival/{}/chat/{}",
+                    festival_id,
+                    stage_id.as_deref().unwrap_or("general")
+                );
+                let _ = ws.send_gossip(&topic_str, &wire).await;
+            }
         }
 
         Ok(ChatMessageDto {
@@ -214,9 +226,30 @@ impl AppNode {
             .next()
             .ok_or_else(|| anyhow::anyhow!("send_group_chat: message not found after save"))?;
 
-        // Broadcast raw encrypted bytes via gossip if available.
-        if let Some(gm) = &self.inner.gossip_manager {
-            let _ = gm.lock().await.publish(topic_id, encrypted).await;
+        // Broadcast via gossip + WS relay
+        {
+            use offbeat_core::gossip_manager::{GossipMessage, encode_gossip_message_pub};
+
+            let group_key = self
+                .inner
+                .db
+                .load_group_key(&group_id)?
+                .ok_or_else(|| anyhow::anyhow!("group not found after send"))?;
+
+            let wire = encode_gossip_message_pub(&GossipMessage::EncryptedChat {
+                group_key,
+                encrypted: encrypted.clone(),
+            })?;
+
+            if let Some(gm) = &self.inner.gossip_manager {
+                let bytes = serde_json::to_vec(&wire)?;
+                let _ = gm.lock().await.publish(topic_id, bytes).await;
+            }
+
+            if let Some(ws) = &self.inner.ws_relay {
+                let topic_str = format!("group/{group_id}/chat");
+                let _ = ws.send_gossip(&topic_str, &wire).await;
+            }
         }
 
         Ok(ChatMessageDto {
@@ -280,22 +313,28 @@ impl AppNode {
 
     /// Connect this node to the Festival Durable Object relay at `url`.
     ///
-    /// Spawns a background task that subscribes to topics and feeds incoming
-    /// messages into the dispatch pipeline.  The connection runs until the
-    /// node is dropped or the WebSocket is closed by the server.
-    pub async fn connect_relay(&self, url: String) -> anyhow::Result<()> {
-        use offbeat_core::ws_relay::WsRelay;
+    /// Spawns a background task that receives messages and feeds them into
+    /// the dispatch pipeline. The WS sink is stored on the node for sending.
+    /// Auto-reconnects on disconnect with exponential backoff.
+    pub async fn connect_relay(&mut self, url: String) -> anyhow::Result<()> {
+        use offbeat_core::ws_relay;
         use std::sync::Arc;
 
-        let mut relay = WsRelay::connect(&url).await?;
-
-        // Immediately subscribe to no topics — callers use `subscribe_festival`
-        // afterwards to add topics.  This just establishes the connection.
         let doc_manager = Arc::clone(&self.inner.doc_manager);
         let db = Arc::clone(&self.inner.db);
 
+        let (sink, receive_loop) = ws_relay::connect(
+            &url,
+            doc_manager,
+            db,
+            None, // festival public key set later via subscribe_festival
+        )
+        .await?;
+
+        self.inner.ws_relay = Some(Arc::new(sink));
+
         tokio::spawn(async move {
-            if let Err(e) = relay.run_receive_loop(doc_manager, db, None).await {
+            if let Err(e) = receive_loop.await {
                 tracing::warn!("ws relay receive loop exited: {e}");
             }
         });
@@ -306,21 +345,36 @@ impl AppNode {
     /// Subscribe to the gossip topic for a festival, using the iroh-gossip
     /// layer (if networking was started).
     pub async fn subscribe_festival(
-        &self,
+        &mut self,
         festival_id: String,
     ) -> anyhow::Result<()> {
         let topic_id = offbeat_core::topics::festival_topic(&festival_id, "state");
 
-        let gm = self
-            .inner
-            .gossip_manager
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("networking not started — call start_networking first"))?;
+        if let Some(gm) = &self.inner.gossip_manager {
+            gm.lock().await.subscribe(topic_id, vec![]).await?;
+        }
 
-        gm.lock()
-            .await
-            .subscribe(topic_id, vec![])
-            .await
+        Ok(())
+    }
+
+    /// Cache a festival's Ed25519 public key (hex-encoded, 64 chars).
+    /// Call this after fetching from `GET /festivals/:id/public-key` on the
+    /// Dart/Flutter side.
+    pub fn set_festival_public_key(
+        &mut self,
+        festival_id: String,
+        hex_key: String,
+    ) -> anyhow::Result<()> {
+        let bytes: Vec<u8> = (0..hex_key.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex_key[i..i + 2], 16))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| anyhow::anyhow!("invalid hex key: {e}"))?;
+        let key: [u8; 32] = bytes
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("public key must be 32 bytes"))?;
+        self.inner.festival_public_keys.insert(festival_id, key);
+        Ok(())
     }
 
     /// Broadcast a chat message on the given gossip topic.
@@ -354,13 +408,15 @@ impl AppNode {
         let wire = encode_gossip_message_pub(&GossipMessage::Chat(chat))?;
         let bytes = serde_json::to_vec(&wire)?;
 
-        let gm = self
-            .inner
-            .gossip_manager
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("networking not started"))?;
+        if let Some(gm) = &self.inner.gossip_manager {
+            let _ = gm.lock().await.publish(topic_id, bytes).await;
+        }
 
-        gm.lock().await.publish(topic_id, bytes).await
+        if let Some(ws) = &self.inner.ws_relay {
+            let _ = ws.send_gossip(&topic, &wire).await;
+        }
+
+        Ok(())
     }
 
     // -----------------------------------------------------------------------
@@ -464,11 +520,22 @@ impl AppNode {
             )
             .await?;
 
-        if let Some(gm) = &self.inner.gossip_manager {
-            use offbeat_core::topics;
-            if let Some(group_key) = self.inner.db.load_group_key(&group_id)? {
-                let topic = topics::group_topic(&group_key, "state");
-                gm.lock().await.publish(topic, encrypted).await?;
+        if let Some(group_key) = self.inner.db.load_group_key(&group_id)? {
+            use offbeat_core::gossip_manager::{GossipMessage, encode_gossip_message_pub};
+            let wire = encode_gossip_message_pub(&GossipMessage::GroupUpdate {
+                doc_id: format!("group/{group_id}"),
+                encrypted: encrypted.clone(),
+                group_key,
+            })?;
+
+            if let Some(gm) = &self.inner.gossip_manager {
+                let topic = offbeat_core::topics::group_topic(&group_key, "state");
+                let bytes = serde_json::to_vec(&wire)?;
+                let _ = gm.lock().await.publish(topic, bytes).await;
+            }
+            if let Some(ws) = &self.inner.ws_relay {
+                let topic_str = format!("group/{group_id}/state");
+                let _ = ws.send_gossip(&topic_str, &wire).await;
             }
         }
         Ok(())
@@ -490,11 +557,22 @@ impl AppNode {
             .update_stars(&group_id, &user_id, set_ids)
             .await?;
 
-        if let Some(gm) = &self.inner.gossip_manager {
-            use offbeat_core::topics;
-            if let Some(group_key) = self.inner.db.load_group_key(&group_id)? {
-                let topic = topics::group_topic(&group_key, "state");
-                gm.lock().await.publish(topic, encrypted).await?;
+        if let Some(group_key) = self.inner.db.load_group_key(&group_id)? {
+            use offbeat_core::gossip_manager::{GossipMessage, encode_gossip_message_pub};
+            let wire = encode_gossip_message_pub(&GossipMessage::GroupUpdate {
+                doc_id: format!("group/{group_id}"),
+                encrypted: encrypted.clone(),
+                group_key,
+            })?;
+
+            if let Some(gm) = &self.inner.gossip_manager {
+                let topic = offbeat_core::topics::group_topic(&group_key, "state");
+                let bytes = serde_json::to_vec(&wire)?;
+                let _ = gm.lock().await.publish(topic, bytes).await;
+            }
+            if let Some(ws) = &self.inner.ws_relay {
+                let topic_str = format!("group/{group_id}/state");
+                let _ = ws.send_gossip(&topic_str, &wire).await;
             }
         }
         Ok(())
@@ -518,11 +596,22 @@ impl AppNode {
             .add_pin(&group_id, &pin_id, &label, &location, &user_id)
             .await?;
 
-        if let Some(gm) = &self.inner.gossip_manager {
-            use offbeat_core::topics;
-            if let Some(group_key) = self.inner.db.load_group_key(&group_id)? {
-                let topic = topics::group_topic(&group_key, "state");
-                gm.lock().await.publish(topic, encrypted).await?;
+        if let Some(group_key) = self.inner.db.load_group_key(&group_id)? {
+            use offbeat_core::gossip_manager::{GossipMessage, encode_gossip_message_pub};
+            let wire = encode_gossip_message_pub(&GossipMessage::GroupUpdate {
+                doc_id: format!("group/{group_id}"),
+                encrypted: encrypted.clone(),
+                group_key,
+            })?;
+
+            if let Some(gm) = &self.inner.gossip_manager {
+                let topic = offbeat_core::topics::group_topic(&group_key, "state");
+                let bytes = serde_json::to_vec(&wire)?;
+                let _ = gm.lock().await.publish(topic, bytes).await;
+            }
+            if let Some(ws) = &self.inner.ws_relay {
+                let topic_str = format!("group/{group_id}/state");
+                let _ = ws.send_gossip(&topic_str, &wire).await;
             }
         }
         Ok(())

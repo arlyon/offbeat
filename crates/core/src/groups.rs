@@ -182,8 +182,7 @@ impl GroupManager {
         let doc_id = format!("group/{group_id}");
         let mut dm = self.doc_manager.lock().await;
 
-        // Tombstone: empty JSON object signals removal.
-        let update = dm.set_map_value(&doc_id, &format!("member/{user_id}"), "{}")?;
+        let update = dm.remove_map_value(&doc_id, &format!("member/{user_id}"))?;
 
         drop(dm);
         self.db.delete_group(group_id)?;
@@ -310,10 +309,6 @@ impl GroupManager {
 
         for (key, value) in &prefixed {
             if let Some(uid) = key.strip_prefix("member/") {
-                if value == "{}" {
-                    // Tombstone — skip
-                    continue;
-                }
                 let v: serde_json::Value = serde_json::from_str(value).unwrap_or_default();
                 members.push(GroupMember {
                     user_id: uid.to_string(),
@@ -517,6 +512,34 @@ mod tests {
         // DB entry removed
         let groups = gm.db.load_groups("fest-1").unwrap();
         assert!(groups.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_leave_group_removes_member_key() {
+        let gm = make_manager();
+        let create = gm
+            .create_group("fest-1", "Crew", "user1", "Alice")
+            .await
+            .unwrap();
+
+        // user1 is in the doc
+        let doc_id = format!("group/{}", create.group_id);
+        let val = gm
+            .doc_manager
+            .lock()
+            .await
+            .read_map_value(&doc_id, "member/user1");
+        assert!(val.is_some(), "member should exist before leave");
+
+        gm.leave_group(&create.group_id, "user1").await.unwrap();
+
+        // After leaving, the key should be gone (not a tombstone)
+        let val = gm
+            .doc_manager
+            .lock()
+            .await
+            .read_map_value(&doc_id, "member/user1");
+        assert_eq!(val, None, "member key should be removed, not tombstoned");
     }
 
     #[tokio::test]

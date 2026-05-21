@@ -360,9 +360,23 @@ fn encode_gossip_message(msg: &GossipMessage) -> anyhow::Result<GossipWireMessag
     }
 }
 
+/// Public entry point for `ws_relay` and other callers that receive raw
+/// wire bytes and need to dispatch them.
+pub async fn handle_wire_bytes_pub(
+    raw: &[u8],
+    doc_manager: &Arc<Mutex<DocManager>>,
+    db: &Arc<Database>,
+    festival_public_key: Option<[u8; 32]>,
+) -> anyhow::Result<()> {
+    handle_wire_bytes(raw, doc_manager, db, festival_public_key).await
+}
+
 /// Decode a `GossipWireMessage` from raw bytes and dispatch it.
 ///
 /// `festival_public_key` is needed only for `festival_update` messages.
+///
+/// DB calls are wrapped in `spawn_blocking` to avoid blocking the tokio
+/// runtime on synchronous SQLite I/O.
 async fn handle_wire_bytes(
     raw: &[u8],
     doc_manager: &Arc<Mutex<DocManager>>,
@@ -372,19 +386,35 @@ async fn handle_wire_bytes(
     let wire: GossipWireMessage = serde_json::from_slice(raw)
         .map_err(|e| anyhow::anyhow!("deserialise wire message: {e}"))?;
 
-    let gossip_msg = match wire.kind.as_str() {
+    let gossip_msg = decode_wire_message(wire, db).await?;
+    let gossip_msg = match gossip_msg {
+        Some(m) => m,
+        None => return Ok(()),
+    };
+
+    let mut dm = doc_manager.lock().await;
+    dispatch_message(&mut dm, db, gossip_msg, festival_public_key.as_ref())
+}
+
+/// Decode a wire message into a GossipMessage, performing DB key lookups
+/// via spawn_blocking. Returns None for messages that should be skipped.
+async fn decode_wire_message(
+    wire: GossipWireMessage,
+    db: &Arc<Database>,
+) -> anyhow::Result<Option<GossipMessage>> {
+    match wire.kind.as_str() {
         "festival_update" => {
             let signed_update: SignedUpdate = serde_json::from_str(&wire.payload)?;
-            GossipMessage::FestivalUpdate {
+            Ok(Some(GossipMessage::FestivalUpdate {
                 doc_id: wire
                     .doc_id
                     .ok_or_else(|| anyhow::anyhow!("festival_update missing doc_id"))?,
                 signed_update,
-            }
+            }))
         }
         "chat" => {
             let chat: ChatMessage = serde_json::from_str(&wire.payload)?;
-            GossipMessage::Chat(chat)
+            Ok(Some(GossipMessage::Chat(chat)))
         }
         "group_update" => {
             use base64::Engine as _;
@@ -393,23 +423,28 @@ async fn handle_wire_bytes(
             let key_id = wire
                 .group_key_id
                 .as_deref()
-                .ok_or_else(|| anyhow::anyhow!("group_update missing group_key_id"))?;
+                .ok_or_else(|| anyhow::anyhow!("group_update missing group_key_id"))?
+                .to_string();
 
-            let group_key = db
-                .load_group_key(key_id)?
-                .ok_or_else(|| anyhow::anyhow!("group_update: unknown group key {key_id}"))?;
+            let db_clone = Arc::clone(db);
+            let key_id_clone = key_id.clone();
+            let group_key = tokio::task::spawn_blocking(move || {
+                db_clone.load_group_key(&key_id_clone)
+            })
+            .await??
+            .ok_or_else(|| anyhow::anyhow!("group_update: unknown group key {key_id}"))?;
 
             let encrypted = b64
                 .decode(&wire.payload)
                 .map_err(|e| anyhow::anyhow!("group_update: base64 decode: {e}"))?;
 
-            GossipMessage::GroupUpdate {
+            Ok(Some(GossipMessage::GroupUpdate {
                 doc_id: wire
                     .doc_id
                     .ok_or_else(|| anyhow::anyhow!("group_update missing doc_id"))?,
                 encrypted,
                 group_key,
-            }
+            }))
         }
 
         "encrypted_chat" => {
@@ -419,37 +454,37 @@ async fn handle_wire_bytes(
             let key_id = wire
                 .group_key_id
                 .as_deref()
-                .ok_or_else(|| anyhow::anyhow!("encrypted_chat missing group_key_id"))?;
+                .ok_or_else(|| anyhow::anyhow!("encrypted_chat missing group_key_id"))?
+                .to_string();
 
-            let group_key = db
-                .load_group_key(key_id)?
-                .ok_or_else(|| anyhow::anyhow!("encrypted_chat: unknown group key {key_id}"))?;
+            let db_clone = Arc::clone(db);
+            let key_id_clone = key_id.clone();
+            let group_key = tokio::task::spawn_blocking(move || {
+                db_clone.load_group_key(&key_id_clone)
+            })
+            .await??
+            .ok_or_else(|| anyhow::anyhow!("encrypted_chat: unknown group key {key_id}"))?;
 
             let encrypted = b64
                 .decode(&wire.payload)
                 .map_err(|e| anyhow::anyhow!("encrypted_chat: base64 decode: {e}"))?;
 
-            GossipMessage::EncryptedChat { group_key, encrypted }
+            Ok(Some(GossipMessage::EncryptedChat { group_key, encrypted }))
         }
 
         "sync_request" | "sync_response" | "sync_update" => {
-            // Sync messages require a key lookup and, for sync_request, the
-            // ability to send a response. Log and skip in the generic path.
             tracing::warn!(
                 "gossip: {} requires group key lookup (key_id={:?}); skipping in generic wire path",
                 wire.kind,
                 wire.group_key_id
             );
-            return Ok(());
+            Ok(None)
         }
         other => {
             tracing::warn!("gossip: unknown message kind: {other}; skipping");
-            return Ok(());
+            Ok(None)
         }
-    };
-
-    let mut dm = doc_manager.lock().await;
-    dispatch_message(&mut dm, db, gossip_msg, festival_public_key.as_ref())
+    }
 }
 
 // ---------------------------------------------------------------------------

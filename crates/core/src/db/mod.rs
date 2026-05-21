@@ -20,6 +20,7 @@ impl Database {
     /// Open (or create) a database at the given path and run the schema.
     pub fn new(path: &Path) -> Result<Self> {
         let conn = Connection::open(path)?;
+        Self::apply_pragmas(&conn)?;
         conn.execute_batch(SCHEMA)?;
         Ok(Self {
             conn: Mutex::new(conn),
@@ -29,10 +30,18 @@ impl Database {
     /// Create an in-memory database (for tests).
     pub fn new_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
+        Self::apply_pragmas(&conn)?;
         conn.execute_batch(SCHEMA)?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
+    }
+
+    fn apply_pragmas(conn: &Connection) -> Result<()> {
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
+        conn.pragma_update(None, "busy_timeout", "5000")?;
+        Ok(())
     }
 
     // --- docs ---
@@ -142,7 +151,7 @@ impl Database {
 
     pub fn save_chat_message(&self, msg: &ChatMessage) -> Result<()> {
         self.conn.lock().unwrap().execute(
-            "INSERT OR REPLACE INTO chat_messages
+            "INSERT OR IGNORE INTO chat_messages
              (id, topic, user_id, display_name, text, stage_id, timestamp, received_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now'))",
             params![
@@ -155,6 +164,31 @@ impl Database {
                 msg.timestamp,
             ],
         )?;
+        Ok(())
+    }
+
+    pub fn save_chat_messages_batch(&self, msgs: &[ChatMessage]) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT OR IGNORE INTO chat_messages
+                 (id, topic, user_id, display_name, text, stage_id, timestamp, received_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now'))",
+            )?;
+            for msg in msgs {
+                stmt.execute(params![
+                    msg.id,
+                    msg.topic,
+                    msg.user_id,
+                    msg.display_name,
+                    msg.text,
+                    msg.stage_id,
+                    msg.timestamp,
+                ])?;
+            }
+        }
+        tx.commit()?;
         Ok(())
     }
 
@@ -357,6 +391,25 @@ mod tests {
     }
 
     #[test]
+    fn test_save_chat_messages_batch() {
+        let db = test_db();
+        let msgs: Vec<ChatMessage> = (0..100)
+            .map(|i| ChatMessage {
+                id: format!("m{i}"),
+                user_id: "u1".to_string(),
+                display_name: "Alice".to_string(),
+                text: format!("msg {i}"),
+                topic: "topic/batch".to_string(),
+                stage_id: None,
+                timestamp: format!("2026-06-13T20:{:02}:00Z", i % 60),
+            })
+            .collect();
+        db.save_chat_messages_batch(&msgs).unwrap();
+        let loaded = db.get_chat_messages("topic/batch", 200, 0).unwrap();
+        assert_eq!(loaded.len(), 100);
+    }
+
+    #[test]
     fn test_chat_messages_filtered_by_topic() {
         let db = test_db();
         for i in 0..3 {
@@ -418,5 +471,136 @@ mod tests {
         let entries = db.get_gossip_since("topic/a", 0).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].1, b"data_a");
+    }
+
+    #[test]
+    fn test_chat_message_insert_or_ignore_preserves_received_at() {
+        let db = test_db();
+        let msg = ChatMessage {
+            id: "dedup1".to_string(),
+            user_id: "u1".to_string(),
+            display_name: "Alice".to_string(),
+            text: "first".to_string(),
+            topic: "topic/a".to_string(),
+            stage_id: None,
+            timestamp: "2026-06-13T20:00:00Z".to_string(),
+        };
+        db.save_chat_message(&msg).unwrap();
+
+        // Read original received_at
+        let conn = db.conn.lock().unwrap();
+        let original_received_at: String = conn
+            .query_row(
+                "SELECT received_at FROM chat_messages WHERE id = ?1",
+                params!["dedup1"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        drop(conn);
+
+        // Insert same ID again with different text — should be ignored
+        let msg2 = ChatMessage {
+            id: "dedup1".to_string(),
+            user_id: "u1".to_string(),
+            display_name: "Alice".to_string(),
+            text: "second".to_string(),
+            topic: "topic/a".to_string(),
+            stage_id: None,
+            timestamp: "2026-06-13T21:00:00Z".to_string(),
+        };
+        db.save_chat_message(&msg2).unwrap();
+
+        // received_at and text should be unchanged (original preserved)
+        let conn = db.conn.lock().unwrap();
+        let (stored_text, stored_received_at): (String, String) = conn
+            .query_row(
+                "SELECT text, received_at FROM chat_messages WHERE id = ?1",
+                params!["dedup1"],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(stored_text, "first", "INSERT OR IGNORE should preserve original text");
+        assert_eq!(
+            stored_received_at, original_received_at,
+            "INSERT OR IGNORE should preserve original received_at"
+        );
+    }
+
+    #[test]
+    fn test_chat_message_batch_insert_or_ignore() {
+        let db = test_db();
+        let msg = ChatMessage {
+            id: "batch_dedup".to_string(),
+            user_id: "u1".to_string(),
+            display_name: "Alice".to_string(),
+            text: "original".to_string(),
+            topic: "topic/b".to_string(),
+            stage_id: None,
+            timestamp: "2026-06-13T20:00:00Z".to_string(),
+        };
+        db.save_chat_message(&msg).unwrap();
+
+        // Batch insert includes the same ID
+        let msgs = vec![
+            ChatMessage {
+                id: "batch_dedup".to_string(),
+                user_id: "u1".to_string(),
+                display_name: "Alice".to_string(),
+                text: "replaced".to_string(),
+                topic: "topic/b".to_string(),
+                stage_id: None,
+                timestamp: "2026-06-13T21:00:00Z".to_string(),
+            },
+            ChatMessage {
+                id: "batch_new".to_string(),
+                user_id: "u1".to_string(),
+                display_name: "Alice".to_string(),
+                text: "new msg".to_string(),
+                topic: "topic/b".to_string(),
+                stage_id: None,
+                timestamp: "2026-06-13T22:00:00Z".to_string(),
+            },
+        ];
+        db.save_chat_messages_batch(&msgs).unwrap();
+
+        let stored = db.get_chat_messages("topic/b", 10, 0).unwrap();
+        assert_eq!(stored.len(), 2);
+        let original = stored.iter().find(|m| m.id == "batch_dedup").unwrap();
+        assert_eq!(original.text, "original", "batch INSERT OR IGNORE should preserve original");
+    }
+
+    #[test]
+    fn test_wal_mode_enabled() {
+        let db = test_db();
+        let conn = db.conn.lock().unwrap();
+        let mode: String =
+            conn.pragma_query_value(None, "journal_mode", |row| row.get(0)).unwrap();
+        // In-memory databases use "memory" journal mode, but the pragmas should
+        // still be set without error. For on-disk databases this would be "wal".
+        // The key assertion is that we can open the DB and the pragma calls succeed.
+        assert!(
+            mode == "memory" || mode == "wal",
+            "expected 'memory' or 'wal', got '{mode}'"
+        );
+    }
+
+    #[test]
+    fn test_wal_mode_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.db");
+        let db = Database::new(&path).unwrap();
+        let conn = db.conn.lock().unwrap();
+        let mode: String =
+            conn.pragma_query_value(None, "journal_mode", |row| row.get(0)).unwrap();
+        assert_eq!(mode, "wal", "on-disk database should use WAL journal mode");
+    }
+
+    #[test]
+    fn test_busy_timeout_set() {
+        let db = test_db();
+        let conn = db.conn.lock().unwrap();
+        let timeout: i64 =
+            conn.pragma_query_value(None, "busy_timeout", |row| row.get(0)).unwrap();
+        assert!(timeout >= 5000, "busy_timeout should be at least 5000ms, got {timeout}");
     }
 }

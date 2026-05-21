@@ -1,27 +1,27 @@
 //! WebSocket relay client for communicating with the Festival Durable Object.
 //!
-//! The Festival DO speaks a JSON-over-WebSocket protocol. This module
-//! implements a client that can connect, subscribe to topics, send chat and
-//! relay messages, and feed received messages into the local dispatch
-//! pipeline.
+//! The Festival DO speaks a GossipWireMessage-native JSON protocol over
+//! WebSocket. This module implements a client that can connect, subscribe
+//! to topics, send gossip messages, request catchup, and feed received
+//! messages into the local dispatch pipeline.
 //!
-//! ## DO protocol (from festival-do.ts)
+//! ## DO protocol
 //!
-//! **Send:**
+//! **Client→DO:**
 //! - `{ type: "subscribe", topics: ["..."] }`
-//! - `{ type: "chat", topic: "...", message: { id, userId, displayName, text, topic, timestamp } }`
-//! - `{ type: "relay", topic: "...", data: "base64..." }`
+//! - `{ type: "unsubscribe", topics: ["..."] }`
+//! - `{ type: "gossip", topic: "...", message: GossipWireMessage }`
 //! - `{ type: "catchup", topic: "...", sinceSeq: 0 }`
 //!
-//! **Receive:**
+//! **DO→Client:**
 //! - `{ type: "subscribed", topics: [...] }`
-//! - `{ type: "chat", topic: "...", seq: N, message: {...} }`
-//! - `{ type: "relay", topic: "...", seq: N, data: "base64..." }`
-//! - `{ type: "catchup", topic: "...", chat: [...], relay: [...] }`
+//! - `{ type: "gossip", topic: "...", seq: N, message: GossipWireMessage }`
+//! - `{ type: "catchup", topic: "...", messages: [...] }`
+//! - `{ type: "error", error: "..." }`
 
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use base64::Engine as _;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -29,8 +29,7 @@ use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, Web
 
 use crate::db::Database;
 use crate::doc_manager::DocManager;
-use crate::gossip_manager::dispatch_message;
-use crate::types::ChatMessage;
+use crate::gossip_manager::GossipWireMessage;
 
 // ---------------------------------------------------------------------------
 // Protocol types
@@ -39,20 +38,16 @@ use crate::types::ChatMessage;
 /// Messages sent by the client to the DO.
 #[derive(Serialize, Debug)]
 #[serde(tag = "type", rename_all = "camelCase")]
-pub enum DoClientMessage {
+pub enum WsClientMessage {
     Subscribe {
         topics: Vec<String>,
     },
     Unsubscribe {
         topics: Vec<String>,
     },
-    Chat {
+    Gossip {
         topic: String,
-        message: ChatMessage,
-    },
-    Relay {
-        topic: String,
-        data: String, // base64
+        message: GossipWireMessage,
     },
     Catchup {
         topic: String,
@@ -64,24 +59,20 @@ pub enum DoClientMessage {
 /// Messages received from the DO.
 #[derive(Deserialize, Debug, Clone)]
 #[serde(tag = "type", rename_all = "camelCase")]
-pub enum DoServerMessage {
+pub enum WsServerMessage {
     Subscribed {
         topics: Vec<String>,
     },
-    Chat {
+    Gossip {
+        #[allow(dead_code)]
         topic: String,
         seq: u64,
-        message: ChatMessage,
-    },
-    Relay {
-        topic: String,
-        seq: u64,
-        data: String, // base64
+        message: GossipWireMessage,
     },
     Catchup {
+        #[allow(dead_code)]
         topic: String,
-        chat: Vec<CatchupChatEntry>,
-        relay: Vec<CatchupRelayEntry>,
+        messages: Vec<CatchupEntry>,
     },
     Error {
         error: String,
@@ -91,21 +82,15 @@ pub enum DoServerMessage {
 }
 
 #[derive(Deserialize, Debug, Clone)]
-pub struct CatchupChatEntry {
+pub struct CatchupEntry {
     pub seq: u64,
-    pub message: ChatMessage,
-    pub timestamp: String,
-}
-
-#[derive(Deserialize, Debug, Clone)]
-pub struct CatchupRelayEntry {
-    pub seq: u64,
-    pub data: String, // base64
+    pub message: GossipWireMessage,
+    #[allow(dead_code)]
     pub timestamp: String,
 }
 
 // ---------------------------------------------------------------------------
-// WsRelay struct
+// WsRelaySink — cloneable send handle
 // ---------------------------------------------------------------------------
 
 type WsSink = futures_util::stream::SplitSink<
@@ -116,435 +101,354 @@ type WsStream = futures_util::stream::SplitStream<
     WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
 >;
 
-/// A live WebSocket connection to a Festival Durable Object.
-pub struct WsRelay {
-    sink: WsSink,
-    stream: Option<WsStream>,
+/// Cloneable handle for sending messages to the Festival DO over WebSocket.
+#[derive(Clone)]
+pub struct WsRelaySink {
+    sink: Arc<Mutex<WsSink>>,
+    subscribed_topics: Arc<Mutex<HashSet<String>>>,
+    last_seen_seq: Arc<Mutex<HashMap<String, u64>>>,
 }
 
-impl WsRelay {
-    // -----------------------------------------------------------------------
-    // Construction
-    // -----------------------------------------------------------------------
-
-    /// Establish a WebSocket connection to `url`.
-    pub async fn connect(url: &str) -> anyhow::Result<Self> {
-        let (ws_stream, _response) = connect_async(url).await?;
-        let (sink, stream) = ws_stream.split();
-        Ok(Self {
-            sink,
-            stream: Some(stream),
-        })
-    }
-
-    // -----------------------------------------------------------------------
-    // Sending
-    // -----------------------------------------------------------------------
-
-    async fn send_msg(&mut self, msg: &DoClientMessage) -> anyhow::Result<()> {
-        let text = serde_json::to_string(msg)?;
-        self.sink
-            .send(Message::Text(text.into()))
-            .await
-            .map_err(|e| anyhow::anyhow!("ws send error: {e}"))
-    }
-
-    /// Send a `subscribe` message to the DO for the given topic names.
-    pub async fn subscribe(&mut self, topics: Vec<String>) -> anyhow::Result<()> {
-        self.send_msg(&DoClientMessage::Subscribe { topics }).await
-    }
-
-    /// Send an `unsubscribe` message.
-    pub async fn unsubscribe(&mut self, topics: Vec<String>) -> anyhow::Result<()> {
-        self.send_msg(&DoClientMessage::Unsubscribe { topics }).await
-    }
-
-    /// Send a chat message to the DO on the given topic.
-    pub async fn send_chat(&mut self, topic: &str, message: &ChatMessage) -> anyhow::Result<()> {
-        self.send_msg(&DoClientMessage::Chat {
+impl WsRelaySink {
+    /// Send a gossip message to the DO on the given topic.
+    pub async fn send_gossip(&self, topic: &str, msg: &GossipWireMessage) -> anyhow::Result<()> {
+        self.send_msg(&WsClientMessage::Gossip {
             topic: topic.to_string(),
-            message: message.clone(),
+            message: msg.clone(),
         })
         .await
     }
 
-    /// Send a relay (binary CRDT update) message. `data` is raw bytes; this
-    /// method base64-encodes them before sending.
-    pub async fn send_relay(&mut self, topic: &str, data: &[u8]) -> anyhow::Result<()> {
-        let encoded = base64::engine::general_purpose::STANDARD.encode(data);
-        self.send_msg(&DoClientMessage::Relay {
-            topic: topic.to_string(),
-            data: encoded,
-        })
-        .await
+    /// Subscribe to topics on the DO.
+    pub async fn subscribe(&self, topics: Vec<String>) -> anyhow::Result<()> {
+        {
+            let mut subs = self.subscribed_topics.lock().await;
+            for t in &topics {
+                subs.insert(t.clone());
+            }
+        }
+        self.send_msg(&WsClientMessage::Subscribe { topics }).await
     }
 
-    /// Request a catchup for the given topic since `since_seq`.
-    pub async fn request_catchup(&mut self, topic: &str, since_seq: u64) -> anyhow::Result<()> {
-        self.send_msg(&DoClientMessage::Catchup {
+    /// Unsubscribe from topics on the DO.
+    pub async fn unsubscribe(&self, topics: Vec<String>) -> anyhow::Result<()> {
+        {
+            let mut subs = self.subscribed_topics.lock().await;
+            for t in &topics {
+                subs.remove(t);
+            }
+        }
+        self.send_msg(&WsClientMessage::Unsubscribe { topics }).await
+    }
+
+    /// Request catchup for a topic since a given sequence number.
+    pub async fn request_catchup(&self, topic: &str, since_seq: u64) -> anyhow::Result<()> {
+        self.send_msg(&WsClientMessage::Catchup {
             topic: topic.to_string(),
             since_seq,
         })
         .await
     }
 
-    // -----------------------------------------------------------------------
-    // Receiving
-    // -----------------------------------------------------------------------
+    /// Get the set of topics currently subscribed to.
+    pub async fn subscribed_topics(&self) -> HashSet<String> {
+        self.subscribed_topics.lock().await.clone()
+    }
 
-    /// Take the receive half out of this handle and run an event loop that
-    /// feeds incoming messages into the dispatch pipeline.
-    ///
-    /// This method consumes `self.stream`; calling it twice will panic.
-    ///
-    /// `festival_public_key` is forwarded to `dispatch_message` for
-    /// verifying signed festival CRDT updates.
-    pub async fn run_receive_loop(
-        &mut self,
-        doc_manager: Arc<Mutex<DocManager>>,
-        db: Arc<Database>,
-        festival_public_key: Option<[u8; 32]>,
-    ) -> anyhow::Result<()> {
-        let mut stream = self
-            .stream
-            .take()
-            .ok_or_else(|| anyhow::anyhow!("receive loop already started"))?;
+    /// Get the last seen sequence number per topic.
+    pub async fn last_seen_seq(&self) -> HashMap<String, u64> {
+        self.last_seen_seq.lock().await.clone()
+    }
 
-        while let Some(msg) = stream.next().await {
-            match msg {
-                Ok(Message::Text(text)) => {
-                    match serde_json::from_str::<DoServerMessage>(&text) {
-                        Ok(server_msg) => {
-                            if let Err(e) = handle_server_message(
-                                server_msg,
-                                &doc_manager,
-                                &db,
-                                festival_public_key,
-                            )
-                            .await
-                            {
-                                tracing::warn!("ws_relay dispatch error: {e}");
-                            }
-                        }
-                        Err(e) => {
-                            tracing::warn!("ws_relay deserialise error: {e} — raw: {text}");
-                        }
-                    }
-                }
-                Ok(Message::Close(_)) => {
-                    tracing::info!("ws_relay: server closed connection");
-                    break;
-                }
-                Ok(_) => {} // binary / ping / pong — ignore
-                Err(e) => {
-                    tracing::warn!("ws_relay receive error: {e}");
-                    break;
-                }
-            }
-        }
+    /// Replace the inner sink (used during reconnect).
+    async fn swap_sink(&self, new_sink: WsSink) {
+        let mut sink = self.sink.lock().await;
+        *sink = new_sink;
+    }
 
-        Ok(())
+    async fn send_msg(&self, msg: &WsClientMessage) -> anyhow::Result<()> {
+        let text = serde_json::to_string(msg)?;
+        self.sink
+            .lock()
+            .await
+            .send(Message::Text(text.into()))
+            .await
+            .map_err(|e| anyhow::anyhow!("ws send error: {e}"))
     }
 }
 
 // ---------------------------------------------------------------------------
-// Dispatch helpers
+// Connection
+// ---------------------------------------------------------------------------
+
+/// Connect to the Festival DO WebSocket at `url`.
+///
+/// Returns a cloneable sink handle and a future that runs the receive loop.
+/// The caller should `tokio::spawn` the receive loop future.
+pub async fn connect(
+    url: &str,
+    doc_manager: Arc<Mutex<DocManager>>,
+    db: Arc<Database>,
+    festival_public_key: Option<[u8; 32]>,
+) -> anyhow::Result<(
+    WsRelaySink,
+    std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>>,
+)> {
+    let (ws_stream, _response) = connect_async(url).await?;
+    let (sink, stream) = ws_stream.split();
+
+    let relay_sink = WsRelaySink {
+        sink: Arc::new(Mutex::new(sink)),
+        subscribed_topics: Arc::new(Mutex::new(HashSet::new())),
+        last_seen_seq: Arc::new(Mutex::new(HashMap::new())),
+    };
+
+    let recv_sink = relay_sink.clone();
+    let recv_url = url.to_string();
+    let receive_loop = Box::pin(run_receive_loop_with_reconnect(
+        recv_sink,
+        stream,
+        recv_url,
+        doc_manager,
+        db,
+        festival_public_key,
+    ));
+
+    Ok((relay_sink, receive_loop))
+}
+
+/// Connect with exponential backoff + full jitter, capped at 30s.
+pub async fn connect_with_retry(
+    url: &str,
+    max_retries: u32,
+    doc_manager: Arc<Mutex<DocManager>>,
+    db: Arc<Database>,
+    festival_public_key: Option<[u8; 32]>,
+) -> anyhow::Result<(
+    WsRelaySink,
+    std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>>,
+)> {
+    use rand::RngExt;
+    const MAX_DELAY_MS: u64 = 30_000;
+
+    for attempt in 0..max_retries {
+        match connect(url, doc_manager.clone(), db.clone(), festival_public_key).await {
+            Ok(result) => return Ok(result),
+            Err(e) if attempt + 1 == max_retries => return Err(e),
+            Err(e) => {
+                tracing::warn!("ws_relay connect attempt {} failed: {e}", attempt + 1);
+                let base_ms = 1000u64.saturating_mul(1u64 << attempt);
+                let capped = base_ms.min(MAX_DELAY_MS);
+                let jitter = rand::rng().random_range(0..=capped);
+                tokio::time::sleep(std::time::Duration::from_millis(jitter)).await;
+            }
+        }
+    }
+    unreachable!()
+}
+
+// ---------------------------------------------------------------------------
+// Receive loop with auto-reconnect
+// ---------------------------------------------------------------------------
+
+async fn run_receive_loop_with_reconnect(
+    sink: WsRelaySink,
+    initial_stream: WsStream,
+    url: String,
+    doc_manager: Arc<Mutex<DocManager>>,
+    db: Arc<Database>,
+    festival_public_key: Option<[u8; 32]>,
+) -> anyhow::Result<()> {
+    use rand::RngExt;
+    const MAX_DELAY_MS: u64 = 30_000;
+
+    let mut stream = initial_stream;
+    let mut reconnect_attempt: u32 = 0;
+
+    loop {
+        let result = run_receive_loop(
+            &sink,
+            &mut stream,
+            &doc_manager,
+            &db,
+            festival_public_key,
+        )
+        .await;
+
+        match result {
+            Ok(()) => {
+                tracing::info!("ws_relay: server closed connection cleanly");
+            }
+            Err(e) => {
+                tracing::warn!("ws_relay receive error: {e}");
+            }
+        }
+
+        // Reconnect with backoff
+        loop {
+            let base_ms = 1000u64.saturating_mul(1u64 << reconnect_attempt.min(5));
+            let capped = base_ms.min(MAX_DELAY_MS);
+            let jitter = rand::rng().random_range(0..=capped);
+            tracing::info!(
+                "ws_relay: reconnecting in {jitter}ms (attempt {})",
+                reconnect_attempt + 1,
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(jitter)).await;
+
+            match connect_async(&url).await {
+                Ok((ws_stream, _)) => {
+                    let (new_sink, new_stream) = ws_stream.split();
+                    sink.swap_sink(new_sink).await;
+                    stream = new_stream;
+                    reconnect_attempt = 0;
+
+                    // Re-subscribe to all previously subscribed topics
+                    let topics: Vec<String> =
+                        sink.subscribed_topics.lock().await.iter().cloned().collect();
+                    if !topics.is_empty()
+                        && let Err(e) = sink
+                            .send_msg(&WsClientMessage::Subscribe {
+                                topics: topics.clone(),
+                            })
+                            .await
+                    {
+                        tracing::warn!("ws_relay: re-subscribe failed: {e}");
+                    }
+
+                    // Request catchup for each topic
+                    let seqs = sink.last_seen_seq.lock().await.clone();
+                    for (topic, seq) in seqs {
+                        if let Err(e) = sink.request_catchup(&topic, seq).await {
+                            tracing::warn!("ws_relay: catchup request failed for {topic}: {e}");
+                        }
+                    }
+
+                    tracing::info!("ws_relay: reconnected successfully");
+                    break;
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "ws_relay: reconnect attempt {} failed: {e}",
+                        reconnect_attempt + 1,
+                    );
+                    reconnect_attempt = reconnect_attempt.saturating_add(1);
+                }
+            }
+        }
+    }
+}
+
+async fn run_receive_loop(
+    sink: &WsRelaySink,
+    stream: &mut WsStream,
+    doc_manager: &Arc<Mutex<DocManager>>,
+    db: &Arc<Database>,
+    festival_public_key: Option<[u8; 32]>,
+) -> anyhow::Result<()> {
+    while let Some(msg) = stream.next().await {
+        match msg {
+            Ok(Message::Text(text)) => {
+                match serde_json::from_str::<WsServerMessage>(&text) {
+                    Ok(server_msg) => {
+                        if let Err(e) = handle_server_message(
+                            server_msg,
+                            sink,
+                            doc_manager,
+                            db,
+                            festival_public_key,
+                        )
+                        .await
+                        {
+                            tracing::warn!("ws_relay dispatch error: {e}");
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("ws_relay deserialise error: {e} — raw: {text}");
+                    }
+                }
+            }
+            Ok(Message::Close(_)) => {
+                tracing::info!("ws_relay: server closed connection");
+                break;
+            }
+            Ok(_) => {} // binary / ping / pong — ignore
+            Err(e) => {
+                return Err(anyhow::anyhow!("ws_relay receive error: {e}"));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Dispatch
 // ---------------------------------------------------------------------------
 
 async fn handle_server_message(
-    msg: DoServerMessage,
+    msg: WsServerMessage,
+    sink: &WsRelaySink,
     doc_manager: &Arc<Mutex<DocManager>>,
     db: &Arc<Database>,
     festival_public_key: Option<[u8; 32]>,
 ) -> anyhow::Result<()> {
     match msg {
-        DoServerMessage::Chat { message, .. } => {
-            let mut dm = doc_manager.lock().await;
-            dispatch_message(
-                &mut dm,
+        WsServerMessage::Gossip {
+            seq, message, topic,
+        } => {
+            // Track last seen seq for catchup on reconnect
+            {
+                let mut seqs = sink.last_seen_seq.lock().await;
+                let entry = seqs.entry(topic).or_insert(0);
+                if seq > *entry {
+                    *entry = seq;
+                }
+            }
+
+            // Dispatch through the standard gossip pipeline
+            let wire_bytes = serde_json::to_vec(&message)?;
+            crate::gossip_manager::handle_wire_bytes_pub(
+                &wire_bytes,
+                doc_manager,
                 db,
-                crate::gossip_manager::GossipMessage::Chat(message),
-                festival_public_key.as_ref(),
+                festival_public_key,
             )
+            .await
         }
-        DoServerMessage::Relay { data, .. } => {
-            // The relay data is a base64-encoded GossipWireMessage (or raw
-            // CRDT bytes depending on the sender). We attempt to decode it as
-            // a GossipWireMessage; if that fails we log and skip.
-            let raw = base64::engine::general_purpose::STANDARD
-                .decode(&data)
-                .map_err(|e| anyhow::anyhow!("base64 decode relay: {e}"))?;
-
-            // Try to interpret as a GossipWireMessage.
-            match serde_json::from_slice::<crate::gossip_manager::GossipWireMessage>(&raw) {
-                Ok(wire) => {
-                    tracing::debug!("ws_relay: relay kind={}", wire.kind);
-                    match wire.kind.as_str() {
-                        "sync_response" | "sync_update" => {
-                            use base64::Engine as _;
-                            let b64 = base64::engine::general_purpose::STANDARD;
-
-                            if let (Some(key_id), Some(doc_id)) =
-                                (&wire.group_key_id, &wire.doc_id)
-                            {
-                                match db.load_group_key(key_id) {
-                                    Ok(Some(group_key)) => {
-                                        match b64.decode(&wire.payload) {
-                                            Ok(encrypted) => {
-                                                let mut dm = doc_manager.lock().await;
-                                                if let Err(e) = dm.apply_encrypted_update(
-                                                    doc_id,
-                                                    &encrypted,
-                                                    &group_key,
-                                                ) {
-                                                    tracing::warn!(
-                                                        "ws_relay: {} apply error: {e}",
-                                                        wire.kind
-                                                    );
-                                                }
-                                            }
-                                            Err(e) => tracing::warn!(
-                                                "ws_relay: {} base64 decode: {e}",
-                                                wire.kind
-                                            ),
-                                        }
-                                    }
-                                    Ok(None) => tracing::debug!(
-                                        "ws_relay: {} unknown key_id={key_id}",
-                                        wire.kind
-                                    ),
-                                    Err(e) => tracing::warn!(
-                                        "ws_relay: {} key lookup error: {e}",
-                                        wire.kind
-                                    ),
-                                }
-                            } else {
-                                tracing::warn!(
-                                    "ws_relay: {} missing group_key_id or doc_id",
-                                    wire.kind
-                                );
-                            }
-                        }
-                        "sync_request" => {
-                            // A peer is requesting a sync.  Responding requires
-                            // the group key and a write-capable reference back to
-                            // the sink — not available in this read-only handler.
-                            // Higher-level integration code should intercept these.
-                            tracing::debug!(
-                                "ws_relay: received sync_request for doc {:?} — response not handled here",
-                                wire.doc_id
-                            );
-                        }
-                        "group_update" => {
-                            use base64::Engine as _;
-                            let b64 = base64::engine::general_purpose::STANDARD;
-
-                            if let Some(key_id) = &wire.group_key_id {
-                                match db.load_group_key(key_id) {
-                                    Ok(Some(group_key)) => {
-                                        match b64.decode(&wire.payload) {
-                                            Ok(encrypted) => {
-                                                if let Some(doc_id) = &wire.doc_id {
-                                                    let mut dm = doc_manager.lock().await;
-                                                    if let Err(e) = dm.apply_encrypted_update(
-                                                        doc_id,
-                                                        &encrypted,
-                                                        &group_key,
-                                                    ) {
-                                                        tracing::warn!(
-                                                            "ws_relay: group_update apply error: {e}"
-                                                        );
-                                                    }
-                                                }
-                                            }
-                                            Err(e) => tracing::warn!(
-                                                "ws_relay: group_update base64 decode: {e}"
-                                            ),
-                                        }
-                                    }
-                                    Ok(None) => tracing::debug!(
-                                        "ws_relay: group_update unknown key_id={key_id}"
-                                    ),
-                                    Err(e) => tracing::warn!(
-                                        "ws_relay: group_update key lookup error: {e}"
-                                    ),
-                                }
-                            } else {
-                                tracing::warn!("ws_relay: group_update missing group_key_id");
-                            }
-                        }
-
-                        "encrypted_chat" => {
-                            use base64::Engine as _;
-                            let b64 = base64::engine::general_purpose::STANDARD;
-
-                            if let Some(key_id) = &wire.group_key_id {
-                                match db.load_group_key(key_id) {
-                                    Ok(Some(group_key)) => {
-                                        match b64.decode(&wire.payload) {
-                                            Ok(encrypted) => {
-                                                match crate::crypto::decrypt(&group_key, &encrypted) {
-                                                    Ok(plaintext) => {
-                                                        match serde_json::from_slice::<ChatMessage>(
-                                                            &plaintext,
-                                                        ) {
-                                                            Ok(chat) => {
-                                                                if let Err(e) =
-                                                                    db.save_chat_message(&chat)
-                                                                {
-                                                                    tracing::warn!(
-                                                                        "ws_relay: encrypted_chat save error: {e}"
-                                                                    );
-                                                                }
-                                                            }
-                                                            Err(e) => tracing::warn!(
-                                                                "ws_relay: encrypted_chat deserialise: {e}"
-                                                            ),
-                                                        }
-                                                    }
-                                                    Err(e) => tracing::warn!(
-                                                        "ws_relay: encrypted_chat decrypt error: {e}"
-                                                    ),
-                                                }
-                                            }
-                                            Err(e) => tracing::warn!(
-                                                "ws_relay: encrypted_chat base64 decode: {e}"
-                                            ),
-                                        }
-                                    }
-                                    Ok(None) => tracing::debug!(
-                                        "ws_relay: encrypted_chat unknown key_id={key_id}"
-                                    ),
-                                    Err(e) => tracing::warn!(
-                                        "ws_relay: encrypted_chat key lookup error: {e}"
-                                    ),
-                                }
-                            } else {
-                                tracing::warn!("ws_relay: encrypted_chat missing group_key_id");
-                            }
-                        }
-                        other => {
-                            tracing::debug!("ws_relay: relay kind={other} — no special handling");
-                        }
+        WsServerMessage::Catchup { messages, topic } => {
+            for entry in messages {
+                // Track seq
+                {
+                    let mut seqs = sink.last_seen_seq.lock().await;
+                    let current = seqs.entry(topic.clone()).or_insert(0);
+                    if entry.seq > *current {
+                        *current = entry.seq;
                     }
                 }
-                Err(_) => {
-                    tracing::debug!("ws_relay: relay payload is not a GossipWireMessage — ignoring");
-                }
-            }
-            Ok(())
-        }
-        DoServerMessage::Catchup { chat, relay, .. } => {
-            let mut dm = doc_manager.lock().await;
-            for entry in chat {
-                dispatch_message(
-                    &mut dm,
+
+                let wire_bytes = serde_json::to_vec(&entry.message)?;
+                if let Err(e) = crate::gossip_manager::handle_wire_bytes_pub(
+                    &wire_bytes,
+                    doc_manager,
                     db,
-                    crate::gossip_manager::GossipMessage::Chat(entry.message),
-                    festival_public_key.as_ref(),
-                )?;
-            }
-            // Relay catchup entries: apply group-keyed updates if we have the key.
-            drop(dm);
-            for entry in relay {
-                let raw = base64::engine::general_purpose::STANDARD
-                    .decode(&entry.data)
-                    .map_err(|e| anyhow::anyhow!("base64 decode relay catchup: {e}"))?;
-                if let Ok(wire) =
-                    serde_json::from_slice::<crate::gossip_manager::GossipWireMessage>(&raw)
+                    festival_public_key,
+                )
+                .await
                 {
-                    tracing::debug!("ws_relay catchup: relay kind={}", wire.kind);
-                    apply_relay_wire_catchup(wire, doc_manager, db).await;
+                    tracing::warn!("ws_relay catchup dispatch error: {e}");
                 }
             }
             Ok(())
         }
-        DoServerMessage::Subscribed { topics } => {
+        WsServerMessage::Subscribed { topics } => {
             tracing::info!("ws_relay: subscribed to topics: {:?}", topics);
             Ok(())
         }
-        DoServerMessage::Error { error } => {
+        WsServerMessage::Error { error } => {
             tracing::warn!("ws_relay: server error: {error}");
             Ok(())
         }
-        DoServerMessage::Unknown => Ok(()),
-    }
-}
-
-/// Apply a single wire message received in a relay catchup, using DB key
-/// lookup for group-encrypted payloads.  Errors are logged and ignored so
-/// that one bad entry does not abort the whole catchup loop.
-async fn apply_relay_wire_catchup(
-    wire: crate::gossip_manager::GossipWireMessage,
-    doc_manager: &Arc<Mutex<DocManager>>,
-    db: &Arc<Database>,
-) {
-    use base64::Engine as _;
-    let b64 = base64::engine::general_purpose::STANDARD;
-
-    match wire.kind.as_str() {
-        "group_update" | "sync_response" | "sync_update" => {
-            let (Some(key_id), Some(doc_id)) = (&wire.group_key_id, &wire.doc_id) else {
-                return;
-            };
-            let group_key = match db.load_group_key(key_id) {
-                Ok(Some(k)) => k,
-                Ok(None) => return,
-                Err(e) => {
-                    tracing::warn!("ws_relay catchup: key lookup error: {e}");
-                    return;
-                }
-            };
-            let encrypted = match b64.decode(&wire.payload) {
-                Ok(b) => b,
-                Err(e) => {
-                    tracing::warn!("ws_relay catchup: base64 decode: {e}");
-                    return;
-                }
-            };
-            let mut dm = doc_manager.lock().await;
-            if let Err(e) = dm.apply_encrypted_update(doc_id, &encrypted, &group_key) {
-                tracing::warn!("ws_relay catchup: {} apply error: {e}", wire.kind);
-            }
-        }
-        "encrypted_chat" => {
-            let Some(key_id) = &wire.group_key_id else {
-                return;
-            };
-            let group_key = match db.load_group_key(key_id) {
-                Ok(Some(k)) => k,
-                Ok(None) => return,
-                Err(e) => {
-                    tracing::warn!("ws_relay catchup: key lookup error: {e}");
-                    return;
-                }
-            };
-            let encrypted = match b64.decode(&wire.payload) {
-                Ok(b) => b,
-                Err(e) => {
-                    tracing::warn!("ws_relay catchup: base64 decode: {e}");
-                    return;
-                }
-            };
-            let plaintext = match crate::crypto::decrypt(&group_key, &encrypted) {
-                Ok(p) => p,
-                Err(e) => {
-                    tracing::warn!("ws_relay catchup: encrypted_chat decrypt: {e}");
-                    return;
-                }
-            };
-            match serde_json::from_slice::<ChatMessage>(&plaintext) {
-                Ok(chat) => {
-                    if let Err(e) = db.save_chat_message(&chat) {
-                        tracing::warn!("ws_relay catchup: encrypted_chat save: {e}");
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!("ws_relay catchup: encrypted_chat deserialise: {e}");
-                }
-            }
-        }
-        _ => {}
+        WsServerMessage::Unknown => Ok(()),
     }
 }
 
@@ -556,9 +460,32 @@ async fn apply_relay_wire_catchup(
 mod tests {
     use super::*;
 
+    /// Verify that retry backoff delays increase exponentially and are capped.
+    #[test]
+    fn test_retry_backoff_timing() {
+        use rand::RngExt;
+        const MAX_DELAY_MS: u64 = 30_000;
+
+        let mut rng = rand::rng();
+        let mut prev_cap = 0u64;
+
+        for attempt in 0u32..8 {
+            let base_ms = 1000u64.saturating_mul(1u64 << attempt);
+            let capped = base_ms.min(MAX_DELAY_MS);
+            let jitter = rng.random_range(0..=capped);
+
+            assert!(capped >= prev_cap, "cap should not decrease");
+            assert!(jitter <= capped, "jitter {jitter} exceeded cap {capped}");
+            if attempt >= 5 {
+                assert_eq!(capped, MAX_DELAY_MS, "should be capped at 30s by attempt {attempt}");
+            }
+            prev_cap = capped;
+        }
+    }
+
     #[test]
     fn test_serialize_subscribe() {
-        let msg = DoClientMessage::Subscribe {
+        let msg = WsClientMessage::Subscribe {
             topics: vec!["festival/test/chat".to_string()],
         };
         let json = serde_json::to_string(&msg).unwrap();
@@ -567,72 +494,84 @@ mod tests {
     }
 
     #[test]
-    fn test_serialize_chat() {
-        let chat = ChatMessage {
-            id: "c1".to_string(),
-            user_id: "u1".to_string(),
-            display_name: "Alice".to_string(),
-            text: "hi".to_string(),
-            topic: "festival/test/chat".to_string(),
-            stage_id: None,
-            timestamp: "2026-01-01T00:00:00Z".to_string(),
+    fn test_serialize_gossip() {
+        let wire = GossipWireMessage {
+            kind: "chat".to_string(),
+            doc_id: None,
+            payload: r#"{"id":"c1","userId":"u1","displayName":"Alice","text":"hi","topic":"t","timestamp":"now"}"#.to_string(),
+            group_key_id: None,
         };
-        let msg = DoClientMessage::Chat {
+        let msg = WsClientMessage::Gossip {
             topic: "festival/test/chat".to_string(),
-            message: chat,
+            message: wire,
         };
         let json = serde_json::to_string(&msg).unwrap();
-        assert!(json.contains("\"type\":\"chat\""));
-        assert!(json.contains("\"text\":\"hi\""));
+        assert!(json.contains("\"type\":\"gossip\""));
+        assert!(json.contains("\"kind\":\"chat\""));
     }
 
     #[test]
-    fn test_deserialize_server_chat() {
+    fn test_serialize_catchup() {
+        let msg = WsClientMessage::Catchup {
+            topic: "festival/test/state".to_string(),
+            since_seq: 42,
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"type\":\"catchup\""));
+        assert!(json.contains("\"sinceSeq\":42"));
+    }
+
+    #[test]
+    fn test_deserialize_server_gossip() {
         let raw = r#"{
-            "type": "chat",
+            "type": "gossip",
             "topic": "festival/test/chat",
             "seq": 42,
             "message": {
-                "id": "m1",
-                "userId": "u1",
-                "displayName": "Alice",
-                "text": "hello",
-                "topic": "festival/test/chat",
-                "timestamp": "2026-01-01T00:00:00Z"
+                "kind": "chat",
+                "payload": "{\"id\":\"m1\"}",
+                "group_key_id": null
             }
         }"#;
-        let msg: DoServerMessage = serde_json::from_str(raw).unwrap();
+        let msg: WsServerMessage = serde_json::from_str(raw).unwrap();
         match msg {
-            DoServerMessage::Chat { seq, message, .. } => {
+            WsServerMessage::Gossip { seq, message, .. } => {
                 assert_eq!(seq, 42);
-                assert_eq!(message.text, "hello");
+                assert_eq!(message.kind, "chat");
             }
-            other => panic!("expected Chat, got {other:?}"),
+            other => panic!("expected Gossip, got {other:?}"),
         }
     }
 
     #[test]
-    fn test_deserialize_server_relay() {
-        let data = base64::engine::general_purpose::STANDARD.encode(b"crdt-bytes");
-        let raw = format!(
-            r#"{{"type":"relay","topic":"festival/test/state","seq":1,"data":"{data}"}}"#
-        );
-        let msg: DoServerMessage = serde_json::from_str(&raw).unwrap();
+    fn test_deserialize_server_catchup() {
+        let raw = r#"{
+            "type": "catchup",
+            "topic": "festival/test/state",
+            "messages": [
+                {
+                    "seq": 1,
+                    "message": { "kind": "chat", "payload": "{}", "group_key_id": null },
+                    "timestamp": "2026-01-01"
+                }
+            ]
+        }"#;
+        let msg: WsServerMessage = serde_json::from_str(raw).unwrap();
         match msg {
-            DoServerMessage::Relay { seq, data: d, .. } => {
-                assert_eq!(seq, 1);
-                assert_eq!(d, data);
+            WsServerMessage::Catchup { messages, .. } => {
+                assert_eq!(messages.len(), 1);
+                assert_eq!(messages[0].seq, 1);
             }
-            other => panic!("expected Relay, got {other:?}"),
+            other => panic!("expected Catchup, got {other:?}"),
         }
     }
 
     #[test]
     fn test_deserialize_server_subscribed() {
         let raw = r#"{"type":"subscribed","topics":["festival/test/chat"]}"#;
-        let msg: DoServerMessage = serde_json::from_str(raw).unwrap();
+        let msg: WsServerMessage = serde_json::from_str(raw).unwrap();
         match msg {
-            DoServerMessage::Subscribed { topics } => {
+            WsServerMessage::Subscribed { topics } => {
                 assert_eq!(topics, vec!["festival/test/chat"]);
             }
             other => panic!("expected Subscribed, got {other:?}"),
@@ -640,15 +579,21 @@ mod tests {
     }
 
     #[test]
-    fn test_serialize_relay() {
-        let data = b"hello crdt";
-        let encoded = base64::engine::general_purpose::STANDARD.encode(data);
-        let msg = DoClientMessage::Relay {
-            topic: "festival/test/state".to_string(),
-            data: encoded.clone(),
-        };
-        let json = serde_json::to_string(&msg).unwrap();
-        assert!(json.contains("\"type\":\"relay\""));
-        assert!(json.contains(&encoded));
+    fn test_deserialize_server_error() {
+        let raw = r#"{"type":"error","error":"bad request"}"#;
+        let msg: WsServerMessage = serde_json::from_str(raw).unwrap();
+        match msg {
+            WsServerMessage::Error { error } => {
+                assert_eq!(error, "bad request");
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_deserialize_unknown_type() {
+        let raw = r#"{"type":"future_type","data":"something"}"#;
+        let msg: WsServerMessage = serde_json::from_str(raw).unwrap();
+        assert!(matches!(msg, WsServerMessage::Unknown));
     }
 }
