@@ -1,34 +1,44 @@
 use anyhow::Result;
 use rusqlite::{Connection, params};
 use std::path::Path;
+use std::sync::Mutex;
 
 use crate::types::ChatMessage;
 
 const SCHEMA: &str = include_str!("schema.sql");
 
+/// Thread-safe SQLite database wrapper.
 pub struct Database {
-    conn: Connection,
+    conn: Mutex<Connection>,
 }
+
+// SAFETY: `Connection` is `Send` (rusqlite documents this), and we guard
+// all access with a `Mutex`, so `Database` can be shared across threads.
+unsafe impl Sync for Database {}
 
 impl Database {
     /// Open (or create) a database at the given path and run the schema.
     pub fn new(path: &Path) -> Result<Self> {
         let conn = Connection::open(path)?;
         conn.execute_batch(SCHEMA)?;
-        Ok(Self { conn })
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
     }
 
     /// Create an in-memory database (for tests).
     pub fn new_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
         conn.execute_batch(SCHEMA)?;
-        Ok(Self { conn })
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
     }
 
     // --- docs ---
 
     pub fn save_doc(&self, id: &str, doc_type: &str, data: &[u8]) -> Result<()> {
-        self.conn.execute(
+        self.conn.lock().unwrap().execute(
             "INSERT OR REPLACE INTO docs (id, doc_type, data, updated_at)
              VALUES (?1, ?2, ?3, datetime('now'))",
             params![id, doc_type, data],
@@ -37,9 +47,8 @@ impl Database {
     }
 
     pub fn load_doc(&self, id: &str) -> Result<Option<Vec<u8>>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT data FROM docs WHERE id = ?1")?;
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT data FROM docs WHERE id = ?1")?;
         let mut rows = stmt.query(params![id])?;
         if let Some(row) = rows.next()? {
             Ok(Some(row.get(0)?))
@@ -50,9 +59,9 @@ impl Database {
 
     /// Returns the IDs of all docs of the given type.
     pub fn list_docs(&self, doc_type: &str) -> Result<Vec<String>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id FROM docs WHERE doc_type = ?1 ORDER BY updated_at DESC")?;
+        let conn = self.conn.lock().unwrap();
+        let mut stmt =
+            conn.prepare("SELECT id FROM docs WHERE doc_type = ?1 ORDER BY updated_at DESC")?;
         let ids = stmt
             .query_map(params![doc_type], |row| row.get(0))?
             .collect::<rusqlite::Result<Vec<String>>>()?;
@@ -62,7 +71,7 @@ impl Database {
     // --- groups ---
 
     pub fn save_group(&self, id: &str, festival_id: &str, name: &str, key: &[u8]) -> Result<()> {
-        self.conn.execute(
+        self.conn.lock().unwrap().execute(
             "INSERT OR REPLACE INTO groups (id, festival_id, name, key, created_at)
              VALUES (?1, ?2, ?3, ?4, datetime('now'))",
             params![id, festival_id, name, key],
@@ -72,9 +81,9 @@ impl Database {
 
     /// Returns (id, name, key) tuples for all groups of the given festival.
     pub fn load_groups(&self, festival_id: &str) -> Result<Vec<(String, String, Vec<u8>)>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id, name, key FROM groups WHERE festival_id = ?1")?;
+        let conn = self.conn.lock().unwrap();
+        let mut stmt =
+            conn.prepare("SELECT id, name, key FROM groups WHERE festival_id = ?1")?;
         let groups = stmt
             .query_map(params![festival_id], |row| {
                 Ok((row.get(0)?, row.get(1)?, row.get(2)?))
@@ -85,6 +94,8 @@ impl Database {
 
     pub fn delete_group(&self, id: &str) -> Result<()> {
         self.conn
+            .lock()
+            .unwrap()
             .execute("DELETE FROM groups WHERE id = ?1", params![id])?;
         Ok(())
     }
@@ -93,20 +104,21 @@ impl Database {
 
     /// Toggle a star on a set. Returns the new starred state (true = now starred).
     pub fn toggle_star(&self, festival_id: &str, set_id: &str) -> Result<bool> {
-        let exists: bool = self.conn.query_row(
+        let conn = self.conn.lock().unwrap();
+        let exists: bool = conn.query_row(
             "SELECT COUNT(*) FROM starred_sets WHERE festival_id = ?1 AND set_id = ?2",
             params![festival_id, set_id],
             |row| row.get::<_, i64>(0),
         )? > 0;
 
         if exists {
-            self.conn.execute(
+            conn.execute(
                 "DELETE FROM starred_sets WHERE festival_id = ?1 AND set_id = ?2",
                 params![festival_id, set_id],
             )?;
             Ok(false)
         } else {
-            self.conn.execute(
+            conn.execute(
                 "INSERT INTO starred_sets (festival_id, set_id, starred_at)
                  VALUES (?1, ?2, datetime('now'))",
                 params![festival_id, set_id],
@@ -117,9 +129,9 @@ impl Database {
 
     /// Returns the set IDs that are starred for a festival.
     pub fn get_stars(&self, festival_id: &str) -> Result<Vec<String>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT set_id FROM starred_sets WHERE festival_id = ?1")?;
+        let conn = self.conn.lock().unwrap();
+        let mut stmt =
+            conn.prepare("SELECT set_id FROM starred_sets WHERE festival_id = ?1")?;
         let ids = stmt
             .query_map(params![festival_id], |row| row.get(0))?
             .collect::<rusqlite::Result<Vec<String>>>()?;
@@ -129,7 +141,7 @@ impl Database {
     // --- chat messages ---
 
     pub fn save_chat_message(&self, msg: &ChatMessage) -> Result<()> {
-        self.conn.execute(
+        self.conn.lock().unwrap().execute(
             "INSERT OR REPLACE INTO chat_messages
              (id, topic, user_id, display_name, text, stage_id, timestamp, received_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now'))",
@@ -152,7 +164,8 @@ impl Database {
         limit: u32,
         offset: u32,
     ) -> Result<Vec<ChatMessage>> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
             "SELECT id, user_id, display_name, text, topic, stage_id, timestamp
              FROM chat_messages
              WHERE topic = ?1
@@ -179,17 +192,19 @@ impl Database {
 
     /// Save a gossip entry and return the assigned sequence number.
     pub fn save_gossip(&self, topic: &str, data: &[u8]) -> Result<i64> {
-        self.conn.execute(
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
             "INSERT INTO gossip_log (topic, data, received_at)
              VALUES (?1, ?2, datetime('now'))",
             params![topic, data],
         )?;
-        Ok(self.conn.last_insert_rowid())
+        Ok(conn.last_insert_rowid())
     }
 
     /// Return all gossip entries for a topic with seq > since_seq.
     pub fn get_gossip_since(&self, topic: &str, since_seq: i64) -> Result<Vec<(i64, Vec<u8>)>> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
             "SELECT seq, data FROM gossip_log
              WHERE topic = ?1 AND seq > ?2
              ORDER BY seq ASC",
