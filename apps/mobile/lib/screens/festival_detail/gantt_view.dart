@@ -279,8 +279,7 @@ class _GanttViewState extends State<GanttView> {
 
   void _centerOnNow() {
     if (_viewportInnerW <= 0 || !_hScrollController.hasClients) return;
-    final nowX = (kNowT - _startMin) * ganttPxPerMin;
-    final target = (nowX - _viewportInnerW / 2).clamp(0.0, _maxTx);
+    final target = (_nowX - _viewportInnerW / 2).clamp(0.0, _maxTx);
     _hScrollController.jumpTo(target);
   }
 
@@ -342,6 +341,7 @@ class _GanttViewState extends State<GanttView> {
                             dayOffsets: _dayOffsets,
                             axisHours: _axisHours,
                             nowX: _nowX,
+                            nowInRange: _nowInRange,
                             centerTimeStr: _centerTimeStr,
                             startMin: _startMin,
                             vertOffset: _vScrollController.hasClients
@@ -560,6 +560,7 @@ class _GanttContent extends StatelessWidget {
   final Map<String, int> dayOffsets;
   final List<int> axisHours;
   final double nowX;
+  final bool nowInRange;
   final String centerTimeStr;
   final int startMin;
   final double vertOffset;
@@ -575,6 +576,7 @@ class _GanttContent extends StatelessWidget {
     required this.dayOffsets,
     required this.axisHours,
     required this.nowX,
+    required this.nowInRange,
     required this.centerTimeStr,
     required this.startMin,
     required this.vertOffset,
@@ -618,6 +620,7 @@ class _GanttContent extends StatelessWidget {
             setsByStage: setsByStage,
             stages: stages,
             nowX: nowX,
+            nowInRange: nowInRange,
             startMin: startMin,
             vertOffset: vertOffset,
             rowHeight: rowHeight,
@@ -755,6 +758,7 @@ class _StageRows extends StatelessWidget {
   final Map<String, List<FestSet>> setsByStage;
   final List<Stage> stages;
   final double nowX;
+  final bool nowInRange;
   final int startMin;
   final double vertOffset;
   final double rowHeight;
@@ -764,6 +768,7 @@ class _StageRows extends StatelessWidget {
     required this.setsByStage,
     required this.stages,
     required this.nowX,
+    required this.nowInRange,
     required this.startMin,
     required this.vertOffset,
     required this.rowHeight,
@@ -806,30 +811,31 @@ class _StageRows extends StatelessWidget {
             ),
           ),
         ),
-        // NOW line
-        Positioned(
-          left: ganttStageLabelW + nowX - tx,
-          top: 0,
-          bottom: 0,
-          child: Stack(
-            clipBehavior: Clip.none,
-            children: [
-              Container(width: 2, color: colorAccent),
-              Positioned(
-                top: -4,
-                left: -3,
-                child: Container(
-                  width: 8,
-                  height: 8,
-                  decoration: const BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: colorAccent,
+        // NOW line (only when current time is within the festival timeline)
+        if (nowInRange)
+          Positioned(
+            left: ganttStageLabelW + nowX - tx,
+            top: 0,
+            bottom: 0,
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Container(width: 2, color: colorAccent),
+                Positioned(
+                  top: -4,
+                  left: -3,
+                  child: Container(
+                    width: 8,
+                    height: 8,
+                    decoration: const BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: colorAccent,
+                    ),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
-        ),
       ],
     );
   }
