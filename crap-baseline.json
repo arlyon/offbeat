@@ -1,0 +1,339 @@
+{
+  "$schema": "https://raw.githubusercontent.com/minikin/cargo-crap/main/schemas/report-v1.json",
+  "version": "0.2.0",
+  "entries": [
+    {
+      "file": "/home/arlyon/Programming/offbeat/crates/core/src/gossip_manager.rs",
+      "function": "dispatch_message",
+      "line": 31,
+      "cyclomatic": 12.0,
+      "coverage": 76.92307692307693,
+      "crap": 13.769685935366406,
+      "crate": "offbeat-core"
+    },
+    {
+      "file": "/home/arlyon/Programming/offbeat/crates/core/src/db/mod.rs",
+      "function": "Database::new",
+      "line": 21,
+      "cyclomatic": 3.0,
+      "coverage": 0.0,
+      "crap": 12.0,
+      "crate": "offbeat-core"
+    },
+    {
+      "file": "/home/arlyon/Programming/offbeat/crates/core/src/db/mod.rs",
+      "function": "Database::load_doc",
+      "line": 49,
+      "cyclomatic": 6.0,
+      "coverage": 100.0,
+      "crap": 6.0,
+      "crate": "offbeat-core"
+    },
+    {
+      "file": "/home/arlyon/Programming/offbeat/crates/core/src/lib.rs",
+      "function": "OffbeatNode::new",
+      "line": 25,
+      "cyclomatic": 2.0,
+      "coverage": 0.0,
+      "crap": 6.0,
+      "crate": "offbeat-core"
+    },
+    {
+      "file": "/home/arlyon/Programming/offbeat/crates/core/src/lib.rs",
+      "function": "OffbeatNode::new_in_memory",
+      "line": 32,
+      "cyclomatic": 2.0,
+      "coverage": 0.0,
+      "crap": 6.0,
+      "crate": "offbeat-core"
+    },
+    {
+      "file": "/home/arlyon/Programming/offbeat/crates/core/src/db/mod.rs",
+      "function": "Database::toggle_star",
+      "line": 106,
+      "cyclomatic": 5.0,
+      "coverage": 95.0,
+      "crap": 5.003125,
+      "crate": "offbeat-core"
+    },
+    {
+      "file": "/home/arlyon/Programming/offbeat/crates/core/src/doc_manager.rs",
+      "function": "DocManager::read_map_value",
+      "line": 115,
+      "cyclomatic": 4.0,
+      "coverage": 88.88888888888889,
+      "crap": 4.021947873799726,
+      "crate": "offbeat-core"
+    },
+    {
+      "file": "/home/arlyon/Programming/offbeat/crates/core/src/db/mod.rs",
+      "function": "Database::list_docs",
+      "line": 61,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "offbeat-core"
+    },
+    {
+      "file": "/home/arlyon/Programming/offbeat/crates/core/src/db/mod.rs",
+      "function": "Database::load_groups",
+      "line": 83,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "offbeat-core"
+    },
+    {
+      "file": "/home/arlyon/Programming/offbeat/crates/core/src/db/mod.rs",
+      "function": "Database::get_stars",
+      "line": 131,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "offbeat-core"
+    },
+    {
+      "file": "/home/arlyon/Programming/offbeat/crates/core/src/db/mod.rs",
+      "function": "Database::get_chat_messages",
+      "line": 161,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "offbeat-core"
+    },
+    {
+      "file": "/home/arlyon/Programming/offbeat/crates/core/src/db/mod.rs",
+      "function": "Database::get_gossip_since",
+      "line": 205,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "offbeat-core"
+    },
+    {
+      "file": "/home/arlyon/Programming/offbeat/crates/core/src/crypto.rs",
+      "function": "encrypt",
+      "line": 15,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "offbeat-core"
+    },
+    {
+      "file": "/home/arlyon/Programming/offbeat/crates/core/src/doc_manager.rs",
+      "function": "DocManager::get_or_create",
+      "line": 29,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "offbeat-core"
+    },
+    {
+      "file": "/home/arlyon/Programming/offbeat/crates/core/src/doc_manager.rs",
+      "function": "DocManager::apply_signed_update",
+      "line": 92,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "offbeat-core"
+    },
+    {
+      "file": "/home/arlyon/Programming/offbeat/crates/core/src/crypto.rs",
+      "function": "decrypt",
+      "line": 31,
+      "cyclomatic": 3.0,
+      "coverage": 91.66666666666666,
+      "crap": 3.0052083333333335,
+      "crate": "offbeat-core"
+    },
+    {
+      "file": "/home/arlyon/Programming/offbeat/crates/core/src/db/mod.rs",
+      "function": "Database::new_in_memory",
+      "line": 30,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "offbeat-core"
+    },
+    {
+      "file": "/home/arlyon/Programming/offbeat/crates/core/src/doc_manager.rs",
+      "function": "DocManager::apply_update",
+      "line": 44,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "offbeat-core"
+    },
+    {
+      "file": "/home/arlyon/Programming/offbeat/crates/core/src/doc_manager.rs",
+      "function": "DocManager::encode_diff",
+      "line": 65,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "offbeat-core"
+    },
+    {
+      "file": "/home/arlyon/Programming/offbeat/crates/core/src/doc_manager.rs",
+      "function": "DocManager::persist",
+      "line": 76,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "offbeat-core"
+    },
+    {
+      "file": "/home/arlyon/Programming/offbeat/crates/core/src/db/mod.rs",
+      "function": "Database::save_doc",
+      "line": 40,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "offbeat-core"
+    },
+    {
+      "file": "/home/arlyon/Programming/offbeat/crates/core/src/db/mod.rs",
+      "function": "Database::save_group",
+      "line": 73,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "offbeat-core"
+    },
+    {
+      "file": "/home/arlyon/Programming/offbeat/crates/core/src/db/mod.rs",
+      "function": "Database::delete_group",
+      "line": 95,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "offbeat-core"
+    },
+    {
+      "file": "/home/arlyon/Programming/offbeat/crates/core/src/db/mod.rs",
+      "function": "Database::save_chat_message",
+      "line": 143,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "offbeat-core"
+    },
+    {
+      "file": "/home/arlyon/Programming/offbeat/crates/core/src/db/mod.rs",
+      "function": "Database::save_gossip",
+      "line": 194,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "offbeat-core"
+    },
+    {
+      "file": "/home/arlyon/Programming/offbeat/crates/core/src/doc_manager.rs",
+      "function": "DocManager::get_state_vector",
+      "line": 55,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "offbeat-core"
+    },
+    {
+      "file": "/home/arlyon/Programming/offbeat/crates/core/src/doc_manager.rs",
+      "function": "DocManager::apply_encrypted_update",
+      "line": 129,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "offbeat-core"
+    },
+    {
+      "file": "/home/arlyon/Programming/offbeat/crates/core/src/doc_manager.rs",
+      "function": "DocManager::set_map_value",
+      "line": 149,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "offbeat-core"
+    },
+    {
+      "file": "/home/arlyon/Programming/offbeat/crates/core/src/signing.rs",
+      "function": "verify",
+      "line": 17,
+      "cyclomatic": 1.0,
+      "coverage": 75.0,
+      "crap": 1.015625,
+      "crate": "offbeat-core"
+    },
+    {
+      "file": "/home/arlyon/Programming/offbeat/crates/core/src/topics.rs",
+      "function": "festival_topic",
+      "line": 6,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "offbeat-core"
+    },
+    {
+      "file": "/home/arlyon/Programming/offbeat/crates/core/src/topics.rs",
+      "function": "group_topic",
+      "line": 15,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "offbeat-core"
+    },
+    {
+      "file": "/home/arlyon/Programming/offbeat/crates/core/src/crypto.rs",
+      "function": "generate_group_key",
+      "line": 7,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "offbeat-core"
+    },
+    {
+      "file": "/home/arlyon/Programming/offbeat/crates/core/src/crypto.rs",
+      "function": "group_id_from_key",
+      "line": 46,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "offbeat-core"
+    },
+    {
+      "file": "/home/arlyon/Programming/offbeat/crates/core/src/signing.rs",
+      "function": "generate_signing_key",
+      "line": 4,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "offbeat-core"
+    },
+    {
+      "file": "/home/arlyon/Programming/offbeat/crates/core/src/signing.rs",
+      "function": "sign",
+      "line": 11,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "offbeat-core"
+    },
+    {
+      "file": "/home/arlyon/Programming/offbeat/crates/core/src/doc_manager.rs",
+      "function": "DocManager::new",
+      "line": 21,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "offbeat-core"
+    },
+    {
+      "file": "/home/arlyon/Programming/offbeat/crates/core/src/doc_manager.rs",
+      "function": "DocManager::encrypt_update",
+      "line": 140,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "offbeat-core"
+    }
+  ]
+}

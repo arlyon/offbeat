@@ -2,7 +2,9 @@
 	"name": "@offbeat/server",
 	"private": true,
 	"scripts": {
-		"check": "tsc --noEmit && biome check src/"
+		"check": "tsc --noEmit && biome check src/",
+		"test:e2e": "vitest run",
+		"test:e2e:watch": "vitest"
 	},
 	"dependencies": {
 		"@noble/curves": "^2.2.0",
@@ -12,6 +14,7 @@
 	},
 	"devDependencies": {
 		"@cloudflare/workers-types": "^4.20260520.1",
+		"vitest": "^3.2.0",
 		"wrangler": "^4.93.0"
 	}
 }

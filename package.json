@@ -4,7 +4,11 @@
 	"packageManager": "pnpm@10.33.0",
 	"scripts": {
 		"check": "turbo check",
-		"check:rust": "cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace"
+		"check:rust": "cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace",
+		"crap": "cargo llvm-cov --workspace --lcov --output-path lcov.info && cargo crap --workspace --lcov lcov.info",
+		"crap:ci": "cargo llvm-cov --workspace --lcov --output-path lcov.info && cargo crap --workspace --lcov lcov.info --fail-above --threshold 30",
+		"crap:baseline": "cargo llvm-cov --workspace --lcov --output-path lcov.info && cargo crap --workspace --lcov lcov.info --format json --output crap-baseline.json",
+		"crap:regression": "cargo llvm-cov --workspace --lcov --output-path lcov.info && cargo crap --workspace --lcov lcov.info --baseline crap-baseline.json --fail-regression"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "latest",

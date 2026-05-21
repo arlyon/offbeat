@@ -2,3 +2,13 @@
 flutter = "latest"
 rust = "latest"
 wrangler = "latest"
+android-sdk = "latest"
+
+[tasks.sdkmanager]
+run = [
+    "sdkmanager 'ndk;28.2.13676358'",
+    "sdkmanager 'platforms;android-36'",
+    "sdkmanager 'cmdline-tools;latest'",
+    "sdkmanager 'platform-tools'",
+    "sdkmanager 'build-tools;36.0.0'",
+]
