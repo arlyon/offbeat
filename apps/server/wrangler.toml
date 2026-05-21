@@ -1,3 +1,15 @@
 name = "offbeat-server"
 compatibility_date = "2025-05-01"
 main = "src/index.ts"
+
+[[durable_objects.bindings]]
+name = "MAIN_DO"
+class_name = "MainDO"
+
+[[durable_objects.bindings]]
+name = "FESTIVAL_DO"
+class_name = "FestivalDO"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["MainDO", "FestivalDO"]

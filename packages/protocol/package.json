@@ -1,6 +1,9 @@
 {
 	"name": "@offbeat/protocol",
 	"private": true,
+	"exports": {
+		".": "./src/index.ts"
+	},
 	"scripts": {
 		"check": "tsc --noEmit && biome check src/",
 		"test": "vitest run"
