@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <title>OFFBEAT — Festival View Variants</title>
+
+  <!-- React + Babel -->
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+  <!-- Lucide icons -->
+  <script src="https://unpkg.com/lucide@0.451.0/dist/umd/lucide.min.js"></script>
+
+  <link rel="stylesheet" href="app.css" />
+
+  <style>
+    /* Canvas-only background — let DC's grid show through */
+    body { color: var(--fg); }
+
+    /* Tighten the artboard inner phone — the artboard fills its given box,
+       and the phone fills the artboard. */
+    .dc-artboard-inner > * { width: 100%; height: 100%; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script src="data.jsx"></script>
+  <script type="text/babel" data-presets="env,react" src="common.jsx"></script>
+  <script type="text/babel" data-presets="env,react" src="variants-1.jsx"></script>
+  <script type="text/babel" data-presets="env,react" src="variants-2.jsx"></script>
+  <script type="text/babel" data-presets="env,react" src="design-canvas.jsx"></script>
+  <script type="text/babel" data-presets="env,react">
+    const W = 390;
+    const H = 920;
+
+    function App() {
+      return (
+        <DesignCanvas
+          title="Festival Views"
+          subtitle="6 takes on the single-festival schedule screen. Built on the OFFBEAT design system. Each phone is interactive — try the day pills, stage tabs, filter chips, and (in V1) scroll inside the gantt."
+          storageKey="festival-views"
+        >
+          <DCSection
+            id="signature"
+            title="Signature"
+            subtitle="The brief's headline ask: scroll vertically, pan time horizontally."
+          >
+            <DCArtboard id="v1-gantt" label="V1 · Gantt-scroll" width={W} height={H}>
+              <V1GanttScroll />
+            </DCArtboard>
+          </DCSection>
+
+          <DCSection
+            id="navigation"
+            title="Navigation primitives"
+            subtitle="Day tabs (multi-day) and stage tabs (multi-stage). Two ways to slice the same schedule."
+          >
+            <DCArtboard id="v2-day" label="V2 · Day tabs" width={W} height={H}>
+              <V2DayTabs />
+            </DCArtboard>
+            <DCArtboard id="v3-stage" label="V3 · Stage tabs" width={W} height={H}>
+              <V3StageTabs />
+            </DCArtboard>
+          </DCSection>
+
+          <DCSection
+            id="filters"
+            title="Filters"
+            subtitle="A focused filter UI — chips, colored stage swatches, twin-handle time range, smart toggles."
+          >
+            <DCArtboard id="v4-filters" label="V4 · Filter panel" width={W} height={H}>
+              <V4Filters />
+            </DCArtboard>
+          </DCSection>
+
+          <DCSection
+            id="other"
+            title="At my discretion"
+            subtitle="Two extras: a clash-resolver radar and a departures-board view of what's playing now and next."
+          >
+            <DCArtboard id="v5-clash" label="V5 · Clash radar" width={W} height={H}>
+              <V5ClashRadar />
+            </DCArtboard>
+            <DCArtboard id="v6-now" label="V6 · Now strip" width={W} height={H}>
+              <V6NowStrip />
+            </DCArtboard>
+          </DCSection>
+        </DesignCanvas>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>

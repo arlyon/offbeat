@@ -1,0 +1,6 @@
+# Clashfinder API credentials
+# Copy this file to .dev.vars and fill in your credentials
+# Get your private key from your Clashfinder account settings
+
+CLASHFINDER_USERNAME=your_username
+CLASHFINDER_PRIVATE_KEY=your_private_key

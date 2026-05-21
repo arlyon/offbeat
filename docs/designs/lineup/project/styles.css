@@ -1,0 +1,187 @@
+/* Shared styles across all variants
+   Design tokens come from the OFFBEAT design system. */
+@import url("ds/colors_and_type.css");
+
+* { box-sizing: border-box; }
+
+/* ── Phone frame ──────────────────────────────────────────── */
+.phone {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+}
+.phone .main {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: none;
+}
+.phone .main::-webkit-scrollbar { display: none; }
+
+/* iOS-style status strip */
+.statusbar {
+  height: 28px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 18px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--fg);
+  letter-spacing: -0.01em;
+}
+.statusbar .right {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+
+/* OFFBEAT mark — 3-bar equalizer */
+.mark-svg {
+  display: inline-flex;
+  gap: 2px;
+  align-items: flex-end;
+  height: 16px;
+}
+.mark-svg span { display: block; width: 3px; background: var(--fg); }
+.mark-svg span:nth-child(1) { height: 9px; }
+.mark-svg span:nth-child(2) { height: 14px; }
+.mark-svg span:nth-child(3) { height: 6px; background: var(--accent); }
+
+.wordmark {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.wordmark .slash { color: var(--accent); }
+
+/* Pretty unified scrollbar override per phone */
+.main { -webkit-overflow-scrolling: touch; }
+
+/* Common meta label */
+.meta-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg-3);
+}
+.meta-small {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg-4);
+}
+
+/* Dotted rule helper */
+.dot-rule {
+  height: 1.5px;
+  background-image: linear-gradient(to right, var(--dotted) 50%, transparent 50%);
+  background-size: 6px 1.5px;
+}
+
+/* Live dot mini */
+.live-mini {
+  display: inline-block;
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 0 rgba(255, 45, 143, 0.55);
+  animation: pulse 1.6s var(--ease) infinite;
+}
+@keyframes pulse {
+  0%   { box-shadow: 0 0 0 0   rgba(255, 45, 143, 0.55); }
+  70%  { box-shadow: 0 0 0 10px rgba(255, 45, 143, 0.00); }
+  100% { box-shadow: 0 0 0 0   rgba(255, 45, 143, 0.00); }
+}
+
+/* Star helper */
+.star-btn {
+  background: transparent;
+  border: 0;
+  color: var(--fg-4);
+  cursor: pointer;
+  font-size: 18px;
+  padding: 6px;
+  line-height: 1;
+  transition: color var(--dur-2) var(--ease), transform var(--dur-1) var(--ease);
+}
+.star-btn.on { color: var(--accent); }
+.star-btn:hover { color: var(--accent); }
+.star-btn:active { transform: scale(0.92); }
+
+/* Duotone tile generator — used for festival art across variants */
+.fest-art {
+  position: relative;
+  overflow: hidden;
+  background: var(--void);
+}
+.fest-art .grain {
+  position: absolute; inset: 0;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.4 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+  mix-blend-mode: overlay;
+  opacity: 0.4;
+  pointer-events: none;
+}
+/* duotone palettes by hue index */
+.fest-art[data-hue="1"] { background: linear-gradient(135deg, #14040a 0%, #FF2D8F 100%); }
+.fest-art[data-hue="2"] { background: linear-gradient(135deg, #001818 0%, #3DDBD9 100%); }
+.fest-art[data-hue="3"] { background: linear-gradient(135deg, #1a1408 0%, #FFB347 100%); }
+.fest-art[data-hue="4"] { background: linear-gradient(135deg, #0a1a08 0%, #9BE15D 100%); }
+.fest-art[data-hue="5"] { background: linear-gradient(135deg, #1a0a1f 0%, #C77DFF 100%); }
+
+/* Tear-off edge — applied as ::before to a positioned container */
+.tear-top, .tear-bottom {
+  position: relative;
+}
+.tear-top::before, .tear-bottom::after {
+  content: "";
+  position: absolute;
+  left: 0; right: 0;
+  height: 10px;
+  background:
+    radial-gradient(circle at 6px 0px, var(--bg) 0 5px, transparent 5.5px) 0 0/14px 10px,
+    linear-gradient(to right, var(--dotted) 50%, transparent 50%) center bottom/6px 1.5px no-repeat;
+  pointer-events: none;
+}
+.tear-top::before { top: -1px; }
+.tear-bottom::after {
+  bottom: -1px;
+  transform: scaleY(-1);
+}
+
+/* General buttons */
+.btn-mono {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 8px 12px;
+  background: transparent;
+  border: 1.5px dotted var(--dotted);
+  color: var(--fg-2);
+  cursor: pointer;
+  transition: all var(--dur-2) var(--ease);
+  border-radius: 0;
+}
+.btn-mono:hover { color: var(--fg); border-color: var(--fg-3); }
+.btn-mono.active {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: var(--accent);
+  border-style: solid;
+}

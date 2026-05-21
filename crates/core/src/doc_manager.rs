@@ -72,6 +72,17 @@ impl DocManager {
         Ok(txn.encode_state_as_update_v1(&remote_sv))
     }
 
+    /// Encode the full doc state as a single update (from empty state vector).
+    /// Useful for sending to peers who may not have any prior state.
+    pub fn encode_full_state(&self, doc_id: &str) -> anyhow::Result<Vec<u8>> {
+        let doc = self
+            .docs
+            .get(doc_id)
+            .ok_or_else(|| anyhow::anyhow!("doc not found: {doc_id}"))?;
+        let txn = doc.transact();
+        Ok(txn.encode_state_as_update_v1(&StateVector::default()))
+    }
+
     /// Persist the full doc state to the database.
     pub fn persist(&self, doc_id: &str) -> anyhow::Result<()> {
         let doc = self

@@ -1,0 +1,454 @@
+/* Variant C — Console */
+
+.vc.phone {
+  background: var(--bg);
+}
+
+/* ── Brand strip ──────────────────────────────────────────── */
+.vc-brandstrip {
+  flex-shrink: 0;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 14px;
+  border-bottom: 1.5px dotted var(--dotted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+.vc-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--fg);
+  font-weight: 700;
+}
+.vc-brand .vc-slash { color: var(--accent); margin: 0 2px; }
+.vc-brand .vc-mod { color: var(--fg-3); font-weight: 500; }
+.vc-conn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--fg-3);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+/* ── Command prompt ───────────────────────────────────────── */
+.vc-prompt-row {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 14px 10px;
+  border-bottom: 1.5px dotted var(--dotted);
+  background: var(--bg);
+}
+.vc-prompt {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+}
+.vc-prompt-host { color: var(--fg); }
+.vc-prompt-sep  { color: var(--fg-3); margin: 0 1px; }
+.vc-prompt-scope { color: var(--accent); }
+.vc-prompt-arrow { color: var(--fg-3); margin: 0 2px 0 4px; }
+.vc-input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: 0;
+  outline: none;
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  letter-spacing: 0.01em;
+  caret-color: var(--accent);
+}
+.vc-input::placeholder { color: var(--fg-4); }
+.vc-caret {
+  display: inline-block;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 700;
+  animation: vc-blink 1s steps(2) infinite;
+  margin-left: -8px;
+}
+@keyframes vc-blink {
+  0%, 50%   { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}
+
+/* ── Scopes ──────────────────────────────────────────────── */
+.vc-scopes {
+  flex-shrink: 0;
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1.5px dotted var(--dotted);
+  background: var(--surface-1);
+  padding: 0 6px;
+  gap: 0;
+  overflow: hidden;
+}
+.vc-scope {
+  background: transparent;
+  border: 0;
+  padding: 8px 10px;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: var(--fg-3);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border-right: 1.5px dotted var(--dotted);
+  transition: color var(--dur-2) var(--ease);
+}
+.vc-scope:hover { color: var(--fg); }
+.vc-scope.active { color: var(--accent-ink); background: var(--accent); }
+.vc-scope.active .vc-scope-slash { color: var(--accent-ink); opacity: 0.7; }
+.vc-scope-slash { color: var(--fg-4); }
+.vc-scope-badge {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 4px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  margin-left: 2px;
+}
+.vc-scope.active .vc-scope-badge { background: var(--accent-ink); color: var(--accent); }
+.vc-scope-meta {
+  margin-left: auto;
+  align-self: center;
+  padding: 0 10px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--fg-4);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  white-space: nowrap;
+}
+
+/* ── Live ticker ──────────────────────────────────────────── */
+.vc-ticker {
+  position: relative;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  height: 26px;
+  border-bottom: 1.5px dotted var(--dotted);
+  background: var(--surface-1);
+  overflow: hidden;
+}
+.vc-ticker-badge {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 10px;
+  height: 100%;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.vc-ticker-badge .live-mini {
+  background: var(--accent-ink);
+  box-shadow: none;
+  animation: none;
+  width: 6px; height: 6px;
+}
+.vc-ticker-text {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--fg-2);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+  padding-left: 12px;
+  animation: vc-marquee 24s linear infinite;
+}
+@keyframes vc-marquee {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+
+/* ── Table ────────────────────────────────────────────────── */
+.vc-thead, .vc-row {
+  display: grid;
+  grid-template-columns:
+    22px           /* c0 star */
+    minmax(0, 1fr) /* c1 name */
+    78px           /* c2 dates */
+    44px           /* c3 loc */
+    26px           /* c4 stg */
+    32px           /* c5 sets */
+    64px;          /* c6 T-bar + cd */
+  align-items: center;
+  gap: 6px;
+}
+.vc-thead {
+  padding: 8px 12px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--fg-3);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  background: var(--bg);
+  border-bottom: 1.5px solid var(--hairline);
+}
+.vc-tbody { padding: 0; }
+
+.vc-row {
+  padding: 9px 12px;
+  border-bottom: 1.5px dotted var(--dotted);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  color: var(--fg-2);
+  transition: background var(--dur-1) var(--ease);
+  position: relative;
+}
+.vc-row:hover { background: var(--surface-1); }
+.vc-row.selected { background: var(--surface-2); }
+.vc-row.selected::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 3px;
+  background: var(--accent);
+}
+.vc-row.past { opacity: 0.45; }
+.vc-row.live { background: var(--accent-wash); }
+.vc-row.live::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 3px;
+  background: var(--accent);
+}
+
+.vc-star {
+  background: transparent;
+  border: 0;
+  color: var(--fg-4);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 0;
+  line-height: 1;
+}
+.vc-star.on { color: var(--accent); }
+.vc-star:hover { color: var(--accent); }
+
+.vc-c1 { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.vc-row-name {
+  font-family: var(--font-sans);
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: -0.02em;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.15;
+}
+.vc-row-live {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  color: var(--accent);
+  letter-spacing: 0.1em;
+  margin-left: 4px;
+}
+.vc-row-headliner {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--fg-3);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vc-c2 {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 10px;
+  color: var(--fg);
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+}
+.vc-row-mono { font-variant-numeric: tabular-nums; }
+.vc-row-arrow { color: var(--accent); margin: 0 1px; }
+
+.vc-c3 {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: 10px;
+}
+.vc-row-city {
+  font-size: 8px;
+  color: var(--fg-3);
+  letter-spacing: 0.04em;
+}
+
+.vc-row-num {
+  font-size: 11px;
+  color: var(--fg);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.vc-c6 {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+}
+.vc-bar {
+  display: inline-flex;
+  gap: 1.5px;
+  height: 6px;
+}
+.vc-bar-seg {
+  width: 7px;
+  height: 6px;
+  background: var(--surface-3);
+}
+.vc-bar-seg.on { background: var(--accent); }
+.vc-cd {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--fg-3);
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+.vc-cd.live { color: var(--accent); font-weight: 700; }
+.vc-cd.past { color: var(--fg-4); }
+
+/* ── Empty ─────────────────────────────────────────────────── */
+.vc-empty {
+  padding: 50px 18px;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg-3);
+  letter-spacing: 0.04em;
+}
+.vc-empty-sub {
+  margin-top: 6px;
+  font-size: 10px;
+  color: var(--fg-4);
+}
+.vc-empty-cmd {
+  color: var(--accent);
+  background: var(--accent-wash);
+  padding: 1px 5px;
+}
+
+/* ── Bottom status bar ────────────────────────────────────── */
+.vc-statusbar {
+  flex-shrink: 0;
+  border-top: 1.5px solid var(--hairline);
+  background: var(--surface-1);
+  display: flex;
+  flex-direction: column;
+}
+.vc-statusbar-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  border-bottom: 1.5px dotted var(--dotted);
+}
+.vc-key {
+  background: transparent;
+  border: 0;
+  border-right: 1.5px dotted var(--dotted);
+  padding: 7px 6px;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: var(--fg-3);
+  transition: all var(--dur-2) var(--ease);
+}
+.vc-key:last-child { border-right: 0; }
+.vc-key:hover { color: var(--fg); }
+.vc-key.active {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+.vc-key-id {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 4px;
+  background: var(--surface-3);
+  color: var(--fg-2);
+  letter-spacing: 0.04em;
+  border: 1px solid var(--hairline);
+}
+.vc-key.active .vc-key-id {
+  background: var(--accent-ink);
+  color: var(--accent);
+  border-color: var(--accent-ink);
+}
+.vc-key-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.vc-key-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pulse 1.6s var(--ease) infinite;
+}
+.vc-key.active .vc-key-dot { background: var(--accent-ink); }
+
+.vc-statusbar-hints {
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  height: 22px;
+  padding: 0 8px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--fg-3);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.vc-statusbar-hints span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.vc-statusbar-hints kbd {
+  background: var(--surface-3);
+  border: 1px solid var(--hairline);
+  padding: 1px 4px;
+  font-size: 8px;
+  color: var(--fg-2);
+  font-family: var(--font-mono);
+}

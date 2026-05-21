@@ -1,5 +1,6 @@
 name = "offbeat-server"
 compatibility_date = "2025-05-01"
+compatibility_flags = ["nodejs_compat"]
 main = "src/index.ts"
 
 [[durable_objects.bindings]]
@@ -13,3 +14,7 @@ class_name = "FestivalDO"
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["MainDO", "FestivalDO"]
+
+# Clashfinder API credentials - set these with:
+#   wrangler secret put CLASHFINDER_USERNAME
+#   wrangler secret put CLASHFINDER_PRIVATE_KEY

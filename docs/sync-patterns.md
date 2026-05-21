@@ -2,6 +2,35 @@
 
 > Strategies for efficient state synchronization, fast-forward on late join, and progressive data loading.
 
+## Transport Hierarchy
+
+iroh automatically selects the best available transport:
+
+| Transport | Range | Throughput | MTU | Fragmentation | Use Case |
+|-----------|-------|------------|-----|---------------|----------|
+| Internet | ∞ | Varies | 1500B | No | Full connectivity |
+| WiFi Direct | ~200m | ~250 Mbps | 1500B | No | Local high-speed sync |
+| BLE | ~10m | ~1 Mbps | 247B | Yes | Proximity, low power |
+| Meshtastic | ~3km | ~1 kbps | 228B | Yes | Long-range mesh |
+
+```
+┌─────────────────────────────────────────────────┐
+│ iroh selects best available path automatically  │
+├─────────────────────────────────────────────────┤
+│ 1. Internet (relay/direct)  ← full connectivity │
+│ 2. WiFi Direct              ← local high-speed  │
+│ 3. BLE                      ← proximity sync    │
+│ 4. Meshtastic               ← long-range mesh   │
+└─────────────────────────────────────────────────┘
+```
+
+**Sync capabilities by transport:**
+- **Internet / WiFi Direct**: Full sync — all data types, no restrictions
+- **BLE**: Group state + recent group chat. Festival chat too large.
+- **Meshtastic**: Group state only. Presence updates, stars, pins. No chat.
+
+---
+
 ## Problem Statement
 
 A user arriving on day 4 of a 4-day festival should not wait for days of accumulated state to sync. The app must be usable within seconds, with additional data loading progressively in the background.
@@ -478,6 +507,272 @@ async handleCatchup(ws: WebSocket, req: CatchupRequest) {
 
 ---
 
+## Pattern: Transport-Aware Sync
+
+Different transports have different bandwidth constraints. The sync coordinator should adapt:
+
+```rust
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum TransportTier {
+    HighBandwidth,  // Internet, WiFi Direct (~250 Mbps)
+    LowBandwidth,   // BLE (~1 Mbps)
+    Constrained,    // Meshtastic (~1 kbps)
+}
+
+impl SyncCoordinator {
+    fn tier_for_peer(&self, peer: &NodeId) -> TransportTier {
+        match self.endpoint.best_transport_to(peer) {
+            Some(t) if t.is_internet() || t.is_wifi_direct() => TransportTier::HighBandwidth,
+            Some(t) if t.is_ble() => TransportTier::LowBandwidth,
+            Some(t) if t.is_meshtastic() => TransportTier::Constrained,
+            None => TransportTier::Constrained,  // Assume worst case
+        }
+    }
+
+    async fn sync_with_peer(&self, peer: &NodeId) -> Result<()> {
+        let tier = self.tier_for_peer(peer);
+
+        // Always sync Yrs state (small, critical)
+        self.sync_yrs_docs(peer).await?;
+
+        match tier {
+            TransportTier::HighBandwidth => {
+                // Full sync: all chat, full history available
+                self.sync_all_chat(peer).await?;
+            }
+            TransportTier::LowBandwidth => {
+                // Partial: group chat only, limited history
+                self.sync_group_chat(peer, limit: 50).await?;
+            }
+            TransportTier::Constrained => {
+                // Minimal: state only, no chat over mesh
+                // Yrs docs already synced above
+            }
+        }
+
+        Ok(())
+    }
+}
+```
+
+**Priority by transport:**
+
+| Data | Internet | WiFi Direct | BLE | Meshtastic |
+|------|----------|-------------|-----|------------|
+| Festival Yrs | ✓ | ✓ | ✓ | ✓ |
+| Group Yrs | ✓ | ✓ | ✓ | ✓ |
+| Group chat | Full | Full | Last 50 | — |
+| Stage chat | Full | Full | — | — |
+
+This ensures:
+- Critical state syncs over any transport
+- Chat syncs when bandwidth allows
+- Mesh links aren't saturated with chat history
+
+---
+
+---
+
+## Lineup Updates from Clashfinder
+
+When lineup data changes on Clashfinder (new artists, time changes, cancellations), the server needs to detect changes and push updates to connected clients.
+
+### Architecture Overview
+
+```
+┌─────────────────┐     poll      ┌──────────────────┐
+│  Clashfinder    │◄─────────────│    Main DO       │
+│  API            │              │  (festival reg)  │
+└─────────────────┘              └────────┬─────────┘
+                                          │
+                                          │ POST /broadcast-lineup
+                                          ▼
+                                 ┌──────────────────┐
+                                 │   Festival DO    │
+                                 │   (per-festival) │
+                                 └────────┬─────────┘
+                                          │
+                          ┌───────────────┼───────────────┐
+                          │               │               │
+                          ▼               ▼               ▼
+                     ┌────────┐      ┌────────┐      ┌────────┐
+                     │Client A│      │Client B│      │Client C│
+                     └────────┘      └────────┘      └────────┘
+```
+
+### Update Detection Flow
+
+1. **Trigger**: Cron job or manual `POST /festivals/:id/refresh`
+2. **Fetch**: Call Clashfinder API with auth credentials
+3. **Parse**: Convert API response to `Lineup` using `parseClashfinderApi()`
+4. **Diff**: Compare serialized JSON with last stored lineup
+5. **Store**: If changed, insert new lineup into `festival_history`
+6. **Notify**: POST to Festival DO's `/broadcast-lineup` endpoint
+
+### Main DO: Refresh Endpoint
+
+```typescript
+// POST /festivals/:id/refresh
+// POST /festivals/refresh-all
+
+async #refreshFestival(source: ClashfinderSource, auth: ClashfinderAuth) {
+    // 1. Fetch from Clashfinder API
+    const response = await fetchClashfinder(source.clashfinderId, auth);
+    const newLineup = parseClashfinderApi(source.festivalId, response, {
+        name: source.name,
+        location: source.location,
+    });
+
+    // 2. Compare with current
+    const currentLineup = this.#getLineup(source.festivalId);
+    if (JSON.stringify(currentLineup) === JSON.stringify(newLineup)) {
+        return { updated: false };
+    }
+
+    // 3. Store new version in history
+    this.sql.exec(
+        `INSERT INTO festival_history (festival_id, data) VALUES (?, ?)`,
+        source.festivalId,
+        JSON.stringify(newLineup),
+    );
+
+    // 4. Sync stages table
+    this.#syncStages(source.festivalId, newLineup.stages);
+
+    // 5. Notify Festival DO
+    await this.#notifyFestivalDO(source.festivalId, newLineup);
+
+    return { updated: true };
+}
+
+async #notifyFestivalDO(festivalId: string, lineup: Lineup) {
+    const doId = this.env.FESTIVAL_DO.idFromName(festivalId);
+    const stub = this.env.FESTIVAL_DO.get(doId);
+
+    await stub.fetch(new Request("http://internal/broadcast-lineup", {
+        method: "POST",
+        body: JSON.stringify(lineup),
+    }));
+}
+```
+
+### Festival DO: Broadcast Handler
+
+```typescript
+// Handle internal lineup broadcast request
+if (method === "POST" && path === "/broadcast-lineup") {
+    const lineup = await request.json() as Lineup;
+
+    // Store in relay log for catch-up
+    const result = this.sql.exec(
+        "INSERT INTO relay_log (topic, data) VALUES (?, ?) RETURNING seq",
+        "lineup",
+        JSON.stringify(lineup),
+    ).one() as { seq: number };
+
+    // Broadcast to all clients subscribed to "lineup" topic
+    const broadcast = JSON.stringify({
+        type: "relay",
+        topic: "lineup",
+        seq: result.seq,
+        data: lineup,
+    });
+
+    for (const [ws, session] of this.#sessions) {
+        if (session.topics.has("lineup")) {
+            ws.send(broadcast);
+        }
+    }
+
+    return new Response("OK");
+}
+```
+
+### Client: Subscribe to Lineup Updates
+
+```typescript
+// On connect, subscribe to lineup topic
+ws.send(JSON.stringify({
+    type: "subscribe",
+    topics: ["lineup", "chat:global"],
+}));
+
+// Handle incoming lineup updates
+ws.onmessage = (event) => {
+    const msg = JSON.parse(event.data);
+
+    if (msg.type === "relay" && msg.topic === "lineup") {
+        // Update local lineup state
+        lineupStore.set(msg.data as Lineup);
+
+        // Optionally show UI notification
+        toast("Lineup updated!");
+    }
+};
+
+// On reconnect, catch up from last known sequence
+ws.send(JSON.stringify({
+    type: "catchup",
+    topic: "lineup",
+    sinceSeq: lastKnownSeq,
+}));
+```
+
+### Scheduling Updates
+
+Use Cloudflare Cron Triggers to poll periodically:
+
+```toml
+# wrangler.toml
+[triggers]
+crons = ["0 */6 * * *"]  # Every 6 hours
+```
+
+```typescript
+// In worker
+export default {
+    async scheduled(event: ScheduledEvent, env: Env) {
+        const mainDO = env.MAIN_DO.get(env.MAIN_DO.idFromName("main"));
+        await mainDO.fetch(new Request("http://internal/festivals/refresh-all", {
+            method: "POST",
+        }));
+    },
+};
+```
+
+### Environment Setup
+
+```bash
+# Set Clashfinder credentials
+wrangler secret put CLASHFINDER_USERNAME
+wrangler secret put CLASHFINDER_PRIVATE_KEY
+
+# Local development
+cp apps/server/.dev.vars.example apps/server/.dev.vars
+# Edit with your credentials
+```
+
+### Adding New Festivals
+
+Edit `apps/server/src/sources.ts`:
+
+```typescript
+export const FESTIVAL_SOURCES: ClashfinderSource[] = [
+    {
+        festivalId: "fieldday2026",
+        clashfinderId: "fieldday2026",  // from clashfinder.com/s/{this}/
+        name: "Field Day 2026",
+        location: "Victoria Park, London",
+        city: "London",
+        country: "GB",
+        genres: ["Electronic", "Indie"],
+    },
+    // Add more festivals here
+];
+```
+
+---
+
 ## Implementation Checklist
 
 ### Phase 4 Additions (Rust Core)
@@ -486,13 +781,29 @@ async handleCatchup(ws: WebSocket, req: CatchupRequest) {
 - [ ] `compact()` and `needs_compaction()` in `doc_manager.rs`
 - [ ] `TopicInterest` tracking in `gossip_manager.rs`
 - [ ] `SyncCoordinator` with prioritized sync in `sync.rs`
+- [ ] `TransportTier` enum and `tier_for_peer()` in `sync.rs`
+- [ ] Transport-aware sync limits in `sync_with_peer()`
 
 ### Phase 3 Additions (Server)
 - [ ] Windowed catch-up handler in `festival-do.ts`
 - [ ] `serverNewestSeq` in catch-up response
 - [ ] Nightly compaction job for Yrs docs
+- [ ] `POST /festivals/:id/refresh` endpoint in `main-do.ts`
+- [ ] `POST /festivals/refresh-all` endpoint in `main-do.ts`
+- [ ] `/broadcast-lineup` internal handler in `festival-do.ts`
+- [ ] Cron trigger for periodic Clashfinder polling
+- [ ] Use `FESTIVAL_SOURCES` whitelist + Clashfinder API instead of fixtures
 
 ### Phase 5/7 Additions (UI)
 - [ ] Progressive chat loading with scroll detection
 - [ ] Loading states for chat pagination
 - [ ] "Load older messages" affordance
+
+### Phase 8 Additions (P2P Transports)
+- [ ] `WifiDirectTransport` with platform bridges (Android/iOS)
+- [ ] `BleTransport` with fragmentation layer
+- [ ] `MeshtasticTransport` with fragmentation + protobuf
+- [ ] Fragmentation module shared by BLE and Meshtastic
+- [ ] Multi-transport status UI with expanded detail view
+- [ ] Android `WifiDirectBridge.kt` JNI bridge
+- [ ] iOS `MultipeerBridge.swift` bridge

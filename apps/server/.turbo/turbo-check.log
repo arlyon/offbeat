@@ -2,4 +2,4 @@
 > @offbeat/server@ check /home/arlyon/Programming/offbeat/apps/server
 > tsc --noEmit && biome check src/
 
-Checked 1 file in 3ms. No fixes applied.
+Checked 7 files in 8ms. No fixes applied.

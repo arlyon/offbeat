@@ -1,0 +1,309 @@
+/* ============================================================
+   OFFBEAT // Design Tokens
+   Festival set-times app. Dark, brutalist sans + mono, dotted
+   dividers as signature, magenta as the single live accent.
+   ============================================================ */
+
+/* JetBrains Mono — utility / data / numeric / wordmark.
+   Self-host these in /fonts for offline. CDN fallback below. */
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,500;0,700;1,400&display=swap');
+
+:root {
+  /* ────────────────────────────────────────────────────────
+     COLOR — Ground & Surface
+     Warm-leaning near-black. Pure #000 is reserved for "void"
+     accents (tear-off gutters, deep wells under stickies).
+     ──────────────────────────────────────────────────────── */
+  --void:        #000000;          /* hard black, separators, gutters     */
+  --bg:          #0B0B0C;          /* page background                     */
+  --surface-1:   #131315;          /* cards, panels                       */
+  --surface-2:   #1B1B1E;          /* raised, hovered                     */
+  --surface-3:   #232327;          /* active, pressed                     */
+  --hairline:    #2A2A2E;          /* 1px solid borders                   */
+  --dotted:      #3A3A40;          /* dotted borders (slightly lighter)   */
+
+  /* Foreground — warm off-white scale */
+  --fg:          #F2F0EA;          /* primary text                        */
+  --fg-2:        #B8B6B0;          /* secondary text, labels              */
+  --fg-3:        #7A7873;          /* tertiary, meta, captions            */
+  --fg-4:        #4A4845;          /* disabled, placeholder               */
+
+  /* ────────────────────────────────────────────────────────
+     COLOR — Brand & Semantic
+     One loud accent (magenta). One quiet accent for paired
+     data (cyan). Semantic colors used sparingly.
+     ──────────────────────────────────────────────────────── */
+  --accent:      #FF2D8F;          /* OFFBEAT magenta — primary action    */
+  --accent-ink:  #0B0B0C;          /* text on magenta                     */
+  --accent-dim:  #B81E68;          /* hovered/pressed magenta             */
+  --accent-wash: #2A0F1E;          /* magenta tinted surface              */
+
+  --co-accent:   #3DDBD9;          /* secondary data accent (cyan)        */
+  --live:        #FF2D8F;          /* "now playing" — same as accent      */
+  --warn:        #FFB347;          /* schedule conflicts                  */
+  --ok:          #9BE15D;          /* confirmations, "saved"              */
+  --err:         #FF4D4D;          /* cancellations, errors               */
+
+  /* Stage colors — assigned to festival stages for the grid view.
+     Used as 4px left-bars on rows, never as fills behind text. */
+  --stage-1:     #FF2D8F;
+  --stage-2:     #3DDBD9;
+  --stage-3:     #FFB347;
+  --stage-4:     #9BE15D;
+  --stage-5:     #C77DFF;
+  --stage-6:     #FF8C42;
+
+  /* ────────────────────────────────────────────────────────
+     TYPE
+     Sans:  brutalist, system Helvetica/Arial. No web download.
+     Mono:  JetBrains Mono. Used for time, data, wordmark, chips.
+     ──────────────────────────────────────────────────────── */
+  --font-sans: Helvetica, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* Type scale — mobile-first, generous for legibility on phones.
+     All sizes in rem assume 16px base. */
+  --t-display:   clamp(40px, 11vw, 72px);   /* hero, festival name        */
+  --t-h1:        clamp(28px, 7vw, 40px);    /* section title              */
+  --t-h2:        20px;                      /* card title                 */
+  --t-h3:        16px;                      /* row title, artist name     */
+  --t-body:      15px;
+  --t-small:     13px;
+  --t-meta:      11px;                      /* mono labels, ALL CAPS      */
+
+  --lh-tight:    1.02;
+  --lh-snug:     1.18;
+  --lh-body:     1.45;
+
+  --tr-tight:    -0.02em;                   /* tighten big sans heads     */
+  --tr-mono:     -0.01em;                   /* mono runs cleaner          */
+  --tr-meta:     0.08em;                    /* spaced caps for labels     */
+
+  /* ────────────────────────────────────────────────────────
+     SPACING — 4px base, named for utility
+     ──────────────────────────────────────────────────────── */
+  --sp-0:  0;
+  --sp-1:  4px;
+  --sp-2:  8px;
+  --sp-3:  12px;
+  --sp-4:  16px;
+  --sp-5:  24px;
+  --sp-6:  32px;
+  --sp-7:  48px;
+  --sp-8:  64px;
+  --sp-9:  96px;
+
+  /* ────────────────────────────────────────────────────────
+     RADII — zero. Square edges, always. Pills only for one
+     specific element (live-dot indicator).
+     ──────────────────────────────────────────────────────── */
+  --r-0: 0;
+  --r-pill: 999px;     /* reserved: live dots & status pings only */
+
+  /* ────────────────────────────────────────────────────────
+     BORDERS — hairline solid for structure, dotted for signature.
+     Dotted edges read at 1.5px on most screens; use 2px when
+     the line needs to register as decorative tear-off.
+     ──────────────────────────────────────────────────────── */
+  --bd:           1px solid var(--hairline);
+  --bd-2:         2px solid var(--hairline);
+  --bd-dot:       1.5px dotted var(--dotted);
+  --bd-dot-fg:    1.5px dotted var(--fg-3);
+  --bd-dot-acc:   1.5px dotted var(--accent);
+
+  /* ────────────────────────────────────────────────────────
+     SHADOWS — almost none. This is a dark utilitarian UI.
+     Use a single inset hairline for "lifted" panels.
+     ──────────────────────────────────────────────────────── */
+  --shadow-0:   none;
+  --shadow-inset: inset 0 0 0 1px var(--hairline);
+  --shadow-pop: 0 0 0 1px var(--accent), 0 0 24px -8px var(--accent);
+
+  /* Focus ring — magenta outline, NEVER a glow. */
+  --focus: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
+
+  /* ────────────────────────────────────────────────────────
+     MOTION — fast, snappy. No bouncy easings.
+     ──────────────────────────────────────────────────────── */
+  --dur-1: 80ms;        /* press feedback */
+  --dur-2: 140ms;       /* hover, toggles */
+  --dur-3: 220ms;       /* panel open     */
+  --dur-4: 380ms;       /* page transitions */
+  --ease:  cubic-bezier(0.2, 0.7, 0.2, 1);   /* sharp out */
+  --ease-in: cubic-bezier(0.6, 0.0, 0.8, 0.2);
+
+  /* ────────────────────────────────────────────────────────
+     LAYOUT
+     ──────────────────────────────────────────────────────── */
+  --max-w: 480px;       /* mobile-first column cap                  */
+  --tap:   44px;        /* minimum tap target                       */
+  --nav-h: 52px;        /* top nav height                           */
+  --tab-h: 56px;        /* bottom tab height                        */
+}
+
+/* ============================================================
+   SEMANTIC ELEMENT DEFAULTS
+   Apply these styles by default so authoring is fast.
+   ============================================================ */
+
+html, body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: var(--t-body);
+  line-height: var(--lh-body);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection { background: var(--accent); color: var(--accent-ink); }
+
+h1, .h1 {
+  font-family: var(--font-sans);
+  font-weight: 700;
+  font-size: var(--t-h1);
+  line-height: var(--lh-tight);
+  letter-spacing: var(--tr-tight);
+  margin: 0;
+}
+h2, .h2 {
+  font-family: var(--font-sans);
+  font-weight: 700;
+  font-size: var(--t-h2);
+  line-height: var(--lh-snug);
+  letter-spacing: var(--tr-tight);
+  margin: 0;
+}
+h3, .h3 {
+  font-family: var(--font-sans);
+  font-weight: 700;
+  font-size: var(--t-h3);
+  line-height: var(--lh-snug);
+  margin: 0;
+}
+
+.display {
+  font-family: var(--font-sans);
+  font-weight: 700;
+  font-size: var(--t-display);
+  line-height: var(--lh-tight);
+  letter-spacing: var(--tr-tight);
+  text-transform: uppercase;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum" 1, "zero" 1;
+  letter-spacing: var(--tr-mono);
+}
+
+.meta {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: var(--t-meta);
+  text-transform: uppercase;
+  letter-spacing: var(--tr-meta);
+  color: var(--fg-3);
+}
+
+a, .link {
+  color: inherit;
+  text-decoration: none;
+  border-bottom: var(--bd-dot-fg);
+  padding-bottom: 1px;
+  transition: color var(--dur-2) var(--ease), border-color var(--dur-2) var(--ease);
+}
+a:hover, .link:hover {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+hr, .rule {
+  border: 0;
+  border-top: var(--bd-dot);
+  margin: var(--sp-5) 0;
+}
+
+code, kbd, samp {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+kbd {
+  display: inline-block;
+  padding: 2px 6px;
+  border: var(--bd);
+  background: var(--surface-1);
+  color: var(--fg-2);
+  font-size: 11px;
+}
+
+/* ============================================================
+   UTILITIES
+   ============================================================ */
+
+.dotted-top    { border-top: var(--bd-dot); }
+.dotted-bottom { border-bottom: var(--bd-dot); }
+.dotted-y      { border-top: var(--bd-dot); border-bottom: var(--bd-dot); }
+.dotted-box    { border: var(--bd-dot); }
+
+/* Tear-off edge — used at top/bottom of "ticket" components.
+   Half-circle notches on a dotted line. Apply to a 12px-tall element. */
+.tear {
+  height: 12px;
+  background:
+    radial-gradient(circle at 6px 0, var(--bg) 0 5px, transparent 5.5px) 0 0/12px 12px,
+    linear-gradient(var(--dotted), var(--dotted)) center/100% 1.5px no-repeat;
+  background-position: 0 -6px, 0 50%;
+}
+
+/* Live dot — pulsing magenta circle. The only round thing in the system. */
+.live-dot {
+  display: inline-block;
+  width: 8px; height: 8px;
+  border-radius: var(--r-pill);
+  background: var(--accent);
+  box-shadow: 0 0 0 0 var(--accent);
+  animation: pulse 1.6s var(--ease) infinite;
+  vertical-align: 1px;
+}
+@keyframes pulse {
+  0%   { box-shadow: 0 0 0 0   rgba(255, 45, 143, 0.55); }
+  70%  { box-shadow: 0 0 0 10px rgba(255, 45, 143, 0.00); }
+  100% { box-shadow: 0 0 0 0   rgba(255, 45, 143, 0.00); }
+}
+
+/* Duotone image treatment — magenta + black.
+   Wrap an <img> in .duotone; provide --duo-1 / --duo-2 to override. */
+.duotone {
+  --duo-1: var(--void);
+  --duo-2: var(--accent);
+  position: relative;
+  display: block;
+  overflow: hidden;
+  isolation: isolate;
+  background: var(--duo-1);
+}
+.duotone > img {
+  width: 100%; height: 100%;
+  object-fit: cover;
+  filter: grayscale(1) contrast(1.15) brightness(0.85);
+  mix-blend-mode: screen;
+  opacity: 0.95;
+}
+.duotone::after {
+  content: "";
+  position: absolute; inset: 0;
+  background: var(--duo-2);
+  mix-blend-mode: multiply;
+  pointer-events: none;
+}
+
+/* Grain — tiny SVG noise overlay used on full-bleed imagery */
+.grain::before {
+  content: "";
+  position: absolute; inset: 0;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.4 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+  opacity: 0.06;
+  mix-blend-mode: overlay;
+  pointer-events: none;
+}

@@ -40,42 +40,46 @@ class _LiveDotState extends State<LiveDot> with SingleTickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _controller,
-      builder: (context, child) {
-        final t = _pulse.value;
-        final ringRadius = t * (widget.size * 1.4);
-        final ringOpacity = (1.0 - t) * 0.55;
-        return SizedBox(
-          width: widget.size + ringRadius * 2,
-          height: widget.size + ringRadius * 2,
-          child: Center(
-            child: Stack(
-              alignment: Alignment.center,
-              children: [
-                // Pulsing ring
-                Container(
-                  width: widget.size + ringRadius * 2,
-                  height: widget.size + ringRadius * 2,
+    return SizedBox(
+      width: widget.size,
+      height: widget.size,
+      child: AnimatedBuilder(
+        animation: _controller,
+        builder: (context, child) {
+          final t = _pulse.value;
+          final ringSize = widget.size + t * (widget.size * 2.8);
+          final ringOpacity = (1.0 - t) * 0.55;
+          return Stack(
+            clipBehavior: Clip.none,
+            alignment: Alignment.center,
+            children: [
+              // Pulsing ring (overflows visually, doesn't affect layout)
+              Positioned(
+                left: (widget.size - ringSize) / 2,
+                top: (widget.size - ringSize) / 2,
+                child: Container(
+                  width: ringSize,
+                  height: ringSize,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     color: colorAccent.withOpacity(ringOpacity),
                   ),
                 ),
-                // Core dot
-                Container(
-                  width: widget.size,
-                  height: widget.size,
-                  decoration: const BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: colorAccent,
-                  ),
-                ),
-              ],
-            ),
+              ),
+              // Core dot
+              child!,
+            ],
+          );
+        },
+        child: Container(
+          width: widget.size,
+          height: widget.size,
+          decoration: const BoxDecoration(
+            shape: BoxShape.circle,
+            color: colorAccent,
           ),
-        );
-      },
+        ),
+      ),
     );
   }
 }

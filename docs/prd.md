@@ -61,11 +61,12 @@ The system uses iroh as a unified transport layer (one API across all network pa
 - **U26:** See current connection mode (Full/Local/Mesh/Offline).
 - **U27:** All changes sync automatically when any transport becomes available.
 - **U28:** Sync with nearby friends via Bluetooth.
-- **U29:** Sync group data over LoRa mesh via Meshtastic hardware.
-- **U30:** Catch up on missed group activity from the DO (blind mailbox) when online.
+- **U29:** Sync with nearby friends via WiFi Direct (high-speed local sync without internet).
+- **U30:** Sync group data over LoRa mesh via Meshtastic hardware.
+- **U31:** Catch up on missed group activity from the DO (blind mailbox) when online.
 
 ### Auth
-- **U31:** Authenticate with a passkey (biometric/PIN on device).
+- **U32:** Authenticate with a passkey (biometric/PIN on device).
 
 ## System Architecture
 
@@ -360,12 +361,13 @@ FRB maps Rust `Stream`s to Dart `Stream`s natively:
 - **Acceptance:** No client connects outside window → DO not created. First client connects → DO initializes. After window → DO archives and hibernates.
 
 ### FR3: iroh Transport Layer
-- **FR3.1:** Single `iroh::Endpoint` with IP (built-in), relay (built-in), BLE (custom transport), and Meshtastic (custom transport).
-- **FR3.2:** BLE custom transport: advertise/scan with group-derived service data, GATT sync with fragmentation for 1200-byte QUIC MTU over ~247-byte BLE MTU.
-- **FR3.3:** Meshtastic custom transport: BLE GATT to meshtastic device, wrap QUIC packets in `PRIVATE_APP` protobuf, fragment for 228-byte LoRa payload.
-- **FR3.4:** All transports run concurrently. iroh selects best path automatically.
-- **FR3.5:** Transport status reported to webview (Full/Local/Mesh/Offline).
-- **Acceptance:** Two clients sync group doc over IP. Disable IP → sync continues over BLE. Disable BLE → sync continues over mesh.
+- **FR3.1:** Single `iroh::Endpoint` with IP (built-in), relay (built-in), WiFi Direct (custom transport), BLE (custom transport), and Meshtastic (custom transport).
+- **FR3.2:** WiFi Direct custom transport: service discovery with group context, direct peer connection, standard QUIC MTU (no fragmentation needed). Uses Wi-Fi P2P on Android, Multipeer Connectivity on iOS.
+- **FR3.3:** BLE custom transport: advertise/scan with group-derived service data, GATT sync with fragmentation for 1200-byte QUIC MTU over ~247-byte BLE MTU.
+- **FR3.4:** Meshtastic custom transport: BLE GATT to meshtastic device, wrap QUIC packets in `PRIVATE_APP` protobuf, fragment for 228-byte LoRa payload.
+- **FR3.5:** All transports run concurrently. iroh selects best path automatically based on availability and performance.
+- **FR3.6:** Transport status reported to webview (Full/Local/Mesh/Offline) with peer counts per transport.
+- **Acceptance:** Two clients sync group doc over IP. Disable IP → sync continues over WiFi Direct. Disable WiFi → sync continues over BLE. Disable BLE → sync continues over mesh.
 
 ### FR4: Yrs Doc Manager
 - **FR4.1:** Manages Yrs docs: one per festival (lineup), one per group (state).

@@ -771,9 +771,9 @@ Report: files created, chat features, offline behavior, decisions.
 
 ---
 
-## Phase 8: P2P Transports — BLE + Meshtastic
+## Phase 8: P2P Transports — WiFi Direct + BLE + Meshtastic
 
-**Goal:** BLE and Meshtastic as iroh custom transports with fragmentation.
+**Goal:** WiFi Direct, BLE, and Meshtastic as iroh custom transports. WiFi Direct for high-speed local sync; BLE and Meshtastic with fragmentation for constrained links.
 
 **Dependencies:** Phase 6 (needs groups working)
 
@@ -782,17 +782,85 @@ Report: files created, chat features, offline behavior, decisions.
 **Sub-Agent Prompt:**
 
 ```
-You are implementing BLE and Meshtastic as iroh custom transports for OFFBEAT. Phases 1-6 complete. Read transport/mod.rs and the iroh endpoint setup in lib.rs.
+You are implementing WiFi Direct, BLE, and Meshtastic as iroh custom transports for OFFBEAT. Phases 1-6 complete. Read transport/mod.rs and the iroh endpoint setup in lib.rs.
 
 ## Background
 
-iroh v1 has a custom transport API behind the `unstable-custom-transports` feature flag. Three traits: CustomTransport, CustomEndpoint, CustomSender. Custom transports participate in QUIC multipath alongside built-in IP and relay. The constraint: QUIC requires minimum 1200-byte MTU. BLE gives ~247 bytes, meshtastic gives ~228 bytes. You MUST implement a fragmentation layer.
+iroh v1 has a custom transport API behind the `unstable-custom-transports` feature flag. Three traits: CustomTransport, CustomEndpoint, CustomSender. Custom transports participate in QUIC multipath alongside built-in IP and relay.
+
+Transport characteristics:
+
+| Transport    | Range  | Throughput | MTU    | Fragmentation |
+|--------------|--------|------------|--------|---------------|
+| WiFi Direct  | ~200m  | ~250 Mbps  | 1500B  | No            |
+| BLE          | ~10m   | ~1 Mbps    | 247B   | Yes           |
+| Meshtastic   | ~3km   | ~1 kbps    | 228B   | Yes           |
 
 Reference: the iroh-tor transport (https://github.com/n0-computer/iroh-tor) is a working example of a custom transport. Study its structure.
 
+## src/transport/wifi_direct.rs
+
+WiFi Direct custom iroh transport. No fragmentation needed — standard QUIC MTU works.
+
+**Platform abstraction:**
+
+```rust
+pub struct WifiDirectTransport {
+    #[cfg(target_os = "android")]
+    platform: AndroidWifiDirect,
+    #[cfg(target_os = "ios")]
+    platform: IosMultipeer,
+}
+```
+
+**Android (Wi-Fi P2P API):**
+- Use jni crate to call android.net.wifi.p2p APIs
+- WifiP2pManager for discovery and connection
+- One device becomes group owner (acts as AP), others connect as clients
+- Once connected, devices have local IPs — use standard UDP sockets
+
+**iOS (Multipeer Connectivity):**
+- Use objc2 crate to call MCSession APIs
+- Multipeer automatically selects best transport (WiFi Direct, BLE, or infrastructure)
+- Advertise service type "offbeat-sync"
+- MCSession handles connection, expose send/receive to Rust
+
+**Discovery with group context:**
+- Advertise which groups you're in (TXT records on Android, discoveryInfo on iOS)
+- Only connect to peers with overlapping groups
+- Service instance name: first 8 chars of node_id
+
+**Implement traits:**
+
+```rust
+impl CustomTransport for WifiDirectTransport {
+    const ID: u32 = 0x574644;  // "WFD"
+
+    async fn bind(&self) -> Result<Box<dyn CustomEndpoint>> {
+        self.platform.start_advertising()?;
+        self.platform.start_discovery()?;
+        Ok(Box::new(WifiDirectEndpoint { ... }))
+    }
+}
+
+impl CustomEndpoint for WifiDirectEndpoint {
+    async fn connect(&self, addr: &CustomAddr) -> Result<Box<dyn CustomSender>> {
+        // WiFi Direct gives local IP once connected
+        let socket = UdpSocket::bind("0.0.0.0:0").await?;
+        socket.connect(addr.to_socket_addr()).await?;
+        Ok(Box::new(WifiDirectSender { socket }))
+    }
+
+    async fn accept(&self) -> Result<(Box<dyn CustomSender>, CustomAddr)> {
+        let (socket, addr) = self.listener.accept().await?;
+        Ok((Box::new(WifiDirectSender { socket }), addr.into()))
+    }
+}
+```
+
 ## src/transport/fragmentation.rs
 
-Generic fragmentation/reassembly layer:
+Generic fragmentation/reassembly layer for BLE and Meshtastic:
 
 ```rust
 const HEADER_SIZE: usize = 4;  // 1 byte packet_id, 1 byte chunk_index, 1 byte total_chunks, 1 byte flags
@@ -833,8 +901,8 @@ Implement CustomTransport, CustomEndpoint, CustomSender traits.
 - iroh custom transports use custom addresses (not IP)
 - Map BLE device addresses to iroh CustomAddr
 
-**Transport bias:**
-- Register with AddrKind::Custom(0x424C45) (BLE transport ID from iroh's TRANSPORTS.md)
+**Transport ID:**
+- Register with AddrKind::Custom(0x424C45) ("BLE")
 
 ## src/transport/meshtastic.rs
 
@@ -856,52 +924,118 @@ Meshtastic custom iroh transport:
 - Create proto/meshtastic.proto with minimal subset: MeshPacket, Data, FromRadio, ToRadio, PortNum
 - Use prost for codegen (add to build.rs)
 
+**Transport ID:**
+- Register with AddrKind::Custom(0x4D5348) ("MSH")
+
 ## src/transport/mod.rs
 
-- Export BleTransport and MeshtasticTransport
-- Both implement iroh's CustomTransport trait
-- Register on endpoint builder:
+Export all transports and register on endpoint:
 
 ```rust
-let endpoint = iroh::Endpoint::builder(presets::N0)
-    .custom_transport(BleTransport::new()?)
-    .custom_transport(MeshtasticTransport::new()?)
-    .transport_bias(AddrKind::Custom(BLE_ID), TransportBias::default())
-    .transport_bias(AddrKind::Custom(MESH_ID), TransportBias::default())
-    .bind()
-    .await?;
+pub mod wifi_direct;
+pub mod ble;
+pub mod meshtastic;
+pub mod fragmentation;
+
+pub use wifi_direct::WifiDirectTransport;
+pub use ble::BleTransport;
+pub use meshtastic::MeshtasticTransport;
+
+pub const WIFI_DIRECT_ID: u32 = 0x574644;
+pub const BLE_ID: u32 = 0x424C45;
+pub const MESH_ID: u32 = 0x4D5348;
+
+pub async fn build_endpoint() -> Result<iroh::Endpoint> {
+    iroh::Endpoint::builder(presets::N0)
+        .custom_transport(WifiDirectTransport::new()?)
+        .custom_transport(BleTransport::new()?)
+        .custom_transport(MeshtasticTransport::new()?)
+        .bind()
+        .await
+}
+```
+
+## Platform bridge files
+
+**Android (Kotlin, called via JNI):**
+Create `apps/mobile/android/app/src/main/kotlin/com/offbeat/app/WifiDirectBridge.kt`:
+
+```kotlin
+class WifiDirectBridge(private val context: Context) {
+    private val manager = context.getSystemService(Context.WIFI_P2P_SERVICE) as WifiP2pManager
+    private val channel = manager.initialize(context, Looper.getMainLooper(), null)
+
+    fun discoverPeers(callback: (List<WifiP2pDevice>) -> Unit) { ... }
+    fun connect(deviceAddress: String, callback: (WifiP2pInfo) -> Unit) { ... }
+    fun createGroup(callback: (WifiP2pInfo) -> Unit) { ... }
+    fun getConnectionInfo(): WifiP2pInfo? { ... }
+}
+```
+
+**iOS (Swift, called via swift-bridge or objc2):**
+Create `apps/mobile/ios/Runner/MultipeerBridge.swift`:
+
+```swift
+class MultipeerBridge: NSObject, MCSessionDelegate, MCNearbyServiceAdvertiserDelegate, MCNearbyServiceBrowserDelegate {
+    let serviceType = "offbeat-sync"
+    var session: MCSession!
+    var advertiser: MCNearbyServiceAdvertiser!
+    var browser: MCNearbyServiceBrowser!
+
+    func startAdvertising(groups: [String]) { ... }
+    func startBrowsing() { ... }
+    func send(data: Data, toPeer peer: MCPeerID) throws { ... }
+    func connectedPeers() -> [MCPeerID] { ... }
+}
 ```
 
 ## UI: Update ConnectionStatus.svelte
 
-Show multi-transport status:
-- ● FULL (green dot) — iroh IP/relay connected
-- ◐ LOCAL (amber dot) — BLE peers: N
-- ◉ MESH (magenta dot) — meshtastic connected
-- ○ OFFLINE (grey dot) — cached only
+Show multi-transport status with expanded detail:
 
-Tap to expand: detail view per transport (connected peers, mesh node, last sync time).
+```svelte
+<!-- Collapsed: single indicator -->
+● FULL    — Internet connected
+◐ WIFI    — WiFi Direct: 3 peers
+◑ LOCAL   — BLE: 2 peers
+◉ MESH    — Meshtastic connected
+○ OFFLINE — Cached only
+
+<!-- Expanded: all transports -->
+┌─────────────────────────────┐
+│ CONNECTIVITY                │
+├─────────────────────────────┤
+│ ● Internet    relay-1.iroh  │
+│ ● WiFi Direct 3 peers       │
+│ ● Bluetooth   2 peers       │
+│ ○ Meshtastic  unavailable   │
+├─────────────────────────────┤
+│ Last sync: 2m ago           │
+└─────────────────────────────┘
+```
 
 ## Tests
 
+- WiFi Direct: mock platform layer, test connect/send/receive flow
 - Fragmentation: fragment 2KB payload at 247 MTU → reassemble → matches original
 - Fragmentation: fragment 5KB payload at 228 MTU → reassemble → matches original
 - Fragmentation: missing chunk → reassemble returns None
 - Meshtastic protobuf: encode/decode round-trip
 
 ## Important
-- Both transports MUST gracefully handle hardware not available. Return error from bind(), log warning, report "unavailable" in transport status. Never panic.
-- Only group gossip goes over BLE/mesh. Festival lineup and chat are too large.
-- btleplug may need platform-specific features. Use conditional compilation (#[cfg(target_os)]) where needed.
+- All transports MUST gracefully handle hardware not available. Return error from bind(), log warning, report "unavailable" in transport status. Never panic.
+- WiFi Direct can sync everything (full bandwidth). BLE/mesh should prioritize group state; chat may be too large.
+- Platform-specific code requires conditional compilation (#[cfg(target_os)]) and may need feature flags.
+- iOS Multipeer Connectivity automatically uses WiFi Direct when available, falling back to BLE — this is handled transparently.
 
 ## After implementing
 - cargo test — fragmentation + protobuf tests pass
 - pnpm check — all pass
 - Stack branch: `git spice branch create phase-8-p2p` (onto phase-6-groups)
-- Commit: `git spice commit create -m "implement BLE and meshtastic iroh custom transports with fragmentation"`
+- Commit: `git spice commit create -m "implement WiFi Direct, BLE, and Meshtastic iroh custom transports"`
 - Verify: `pnpm turbo check --ui stream --output-logs errors-only`
 
-Report: files created, GATT service design, fragmentation details, meshtastic integration, hardware limitations.
+Report: files created, platform bridge design, WiFi Direct flow, fragmentation details, meshtastic integration, hardware limitations.
 ```
 
 ---

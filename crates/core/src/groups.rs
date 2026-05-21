@@ -219,10 +219,12 @@ impl GroupManager {
 
         let doc_id = format!("group/{group_id}");
         let mut dm = self.doc_manager.lock().await;
-        let update = dm.set_map_value(&doc_id, &format!("location/{user_id}"), &location_json)?;
+        dm.set_map_value(&doc_id, &format!("location/{user_id}"), &location_json)?;
+        // Encrypt full state so peers without prior state can apply it.
+        let full_state = dm.encode_full_state(&doc_id)?;
         drop(dm);
 
-        let encrypted = crypto::encrypt(&group_key, &update)?;
+        let encrypted = crypto::encrypt(&group_key, &full_state)?;
         Ok(encrypted)
     }
 
@@ -244,10 +246,11 @@ impl GroupManager {
         let stars_json = serde_json::to_string(&set_ids)?;
         let doc_id = format!("group/{group_id}");
         let mut dm = self.doc_manager.lock().await;
-        let update = dm.set_map_value(&doc_id, &format!("stars/{user_id}"), &stars_json)?;
+        dm.set_map_value(&doc_id, &format!("stars/{user_id}"), &stars_json)?;
+        let full_state = dm.encode_full_state(&doc_id)?;
         drop(dm);
 
-        let encrypted = crypto::encrypt(&group_key, &update)?;
+        let encrypted = crypto::encrypt(&group_key, &full_state)?;
         Ok(encrypted)
     }
 
@@ -278,10 +281,11 @@ impl GroupManager {
 
         let doc_id = format!("group/{group_id}");
         let mut dm = self.doc_manager.lock().await;
-        let update = dm.set_map_value(&doc_id, &format!("pin/{pin_id}"), &pin_json)?;
+        dm.set_map_value(&doc_id, &format!("pin/{pin_id}"), &pin_json)?;
+        let full_state = dm.encode_full_state(&doc_id)?;
         drop(dm);
 
-        let encrypted = crypto::encrypt(&group_key, &update)?;
+        let encrypted = crypto::encrypt(&group_key, &full_state)?;
         Ok(encrypted)
     }
 

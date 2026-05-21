@@ -1,0 +1,386 @@
+/* Variant B — Stub Stack */
+
+.vb.phone {
+  background: var(--bg);
+}
+
+/* ── Top chrome ───────────────────────────────────────────── */
+.vb-topnav {
+  flex-shrink: 0;
+  padding: 8px 14px 12px;
+  border-bottom: 1.5px dotted var(--dotted);
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.vb-wm-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 4px 0;
+}
+.vb-wm {
+  display: inline-flex;
+  align-items: center;
+}
+.vb-iconbtn {
+  background: transparent;
+  border: 0;
+  color: var(--fg);
+  cursor: pointer;
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.vb-iconbtn:hover { color: var(--accent); }
+.vb-searchbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  background: var(--surface-1);
+  border: 1.5px solid var(--hairline);
+}
+.vb-searchbox:focus-within {
+  border-color: var(--accent);
+}
+.vb-searchbox input {
+  flex: 1;
+  background: transparent;
+  border: 0;
+  outline: none;
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  min-width: 0;
+}
+.vb-searchbox input::placeholder {
+  color: var(--fg-4);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.vb-clear {
+  background: transparent; border: 0;
+  color: var(--fg-3); cursor: pointer;
+  display: inline-flex;
+}
+
+/* ── Segmented ────────────────────────────────────────────── */
+.vb-segmented {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  border-bottom: 1.5px dotted var(--dotted);
+  background: var(--bg);
+  flex-shrink: 0;
+}
+.vb-seg {
+  background: transparent;
+  border: 0;
+  border-right: 1.5px dotted var(--dotted);
+  padding: 12px 6px 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  cursor: pointer;
+  color: var(--fg-3);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  position: relative;
+  transition: color var(--dur-2) var(--ease);
+}
+.vb-seg:last-child { border-right: 0; }
+.vb-seg:hover { color: var(--fg); }
+.vb-seg.active { color: var(--accent); }
+.vb-seg.active::after {
+  content: "";
+  position: absolute;
+  bottom: -1.5px; left: 8px; right: 8px;
+  height: 2px;
+  background: var(--accent);
+}
+.vb-seg-count {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--fg-4);
+  font-weight: 500;
+  letter-spacing: 0.04em;
+}
+.vb-seg.active .vb-seg-count { color: var(--accent); }
+
+/* ── Main scroll ──────────────────────────────────────────── */
+.vb-main {
+  background:
+    repeating-linear-gradient(
+      0deg,
+      transparent 0,
+      transparent 22px,
+      rgba(58, 58, 64, 0.05) 22px,
+      rgba(58, 58, 64, 0.05) 23px
+    ),
+    var(--bg);
+  padding: 14px 14px 14px;
+}
+
+/* ── Stub ─────────────────────────────────────────────────── */
+.vb-stub {
+  position: relative;
+  background: var(--surface-1);
+  margin-bottom: 18px;
+  display: flex;
+  flex-direction: column;
+}
+.vb-stub.past { opacity: 0.55; }
+
+/* Tear edges */
+.vb-tearedge {
+  height: 10px;
+  flex-shrink: 0;
+  background:
+    radial-gradient(circle at 7px 0px, var(--bg) 0 5px, transparent 5.5px) 0 0 / 14px 10px repeat-x,
+    linear-gradient(to right, var(--dotted) 50%, transparent 50%) center 5px / 6px 1.5px repeat-x;
+}
+.vb-stub .tear-bottom.vb-tearedge {
+  transform: scaleY(-1);
+}
+/* override base tear pseudoelements (we use background directly here) */
+.vb-stub .tear-top::before, .vb-stub .tear-bottom::after { content: none; }
+
+/* meta row */
+.vb-stub-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 16px 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--fg-3);
+}
+.vb-stub-seq {
+  font-weight: 500;
+}
+.vb-stub-cd {
+  font-weight: 700;
+  color: var(--fg-2);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.vb-stub-cd[data-live="true"] {
+  color: var(--accent);
+}
+
+/* hero strip */
+.vb-stub-hero {
+  position: relative;
+  margin: 8px 16px 0;
+  overflow: hidden;
+}
+.vb-stub-hero .fest-art {
+  width: 100% !important;
+}
+.vb-stub-hero-overlay {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  padding: 14px 12px 10px;
+  background: linear-gradient(to top, rgba(0,0,0,0.7) 0%, transparent 100%);
+  pointer-events: none;
+}
+.vb-stub-headliners {
+  font-family: var(--font-sans);
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: -0.01em;
+  color: var(--fg);
+  line-height: 1.2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+.vb-stub-headliners .sep {
+  color: var(--accent);
+  margin: 0 2px;
+}
+.vb-stub-star {
+  position: absolute;
+  top: 6px; right: 6px;
+  background: rgba(0,0,0,0.5) !important;
+  width: 32px; height: 32px;
+  padding: 0 !important;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg) !important;
+  font-size: 16px;
+}
+.vb-stub-star.on { color: var(--accent) !important; background: var(--accent-wash) !important; }
+
+/* body */
+.vb-stub-body {
+  padding: 14px 16px 16px;
+}
+.vb-stub-title-row {
+  display: flex;
+  align-items: stretch;
+  gap: 14px;
+}
+.vb-stub-dates {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  font-family: var(--font-mono);
+  color: var(--fg);
+  padding-right: 12px;
+  border-right: 1.5px dotted var(--dotted);
+  min-width: 56px;
+}
+.vb-stub-month {
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--fg-3);
+}
+.vb-stub-day {
+  font-size: 22px;
+  font-weight: 500;
+  letter-spacing: -0.04em;
+  line-height: 1;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+.vb-stub-arrow {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent);
+  margin: 2px 0;
+}
+.vb-stub-name-wrap {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+}
+.vb-stub-name {
+  font-family: var(--font-sans);
+  font-weight: 700;
+  font-size: 24px;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  color: var(--fg);
+}
+.vb-stub-loc {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg-2);
+}
+.vb-stub-loc .muted { color: var(--fg-4); }
+
+.vb-stub-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 14px;
+}
+.vb-tag {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 4px 7px;
+  background: var(--surface-2);
+  color: var(--fg-2);
+}
+.vb-tag.dim {
+  background: transparent;
+  border: 1.5px dotted var(--dotted);
+  color: var(--fg-3);
+}
+
+/* ── Empty ─────────────────────────────────────────────────── */
+.vb-empty {
+  padding: 60px 18px;
+  text-align: center;
+  font-family: var(--font-mono);
+  color: var(--fg-3);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+.vb-empty-sub {
+  margin-top: 6px;
+  font-size: 10px;
+  color: var(--fg-4);
+}
+
+/* ── Floating dock ────────────────────────────────────────── */
+.vb-dock-wrap {
+  position: absolute;
+  left: 0; right: 0; bottom: 14px;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 20;
+}
+.vb-dock {
+  pointer-events: auto;
+  display: inline-grid;
+  grid-template-columns: repeat(4, minmax(52px, 1fr));
+  gap: 0;
+  background: var(--bg);
+  border: 1.5px solid var(--accent);
+  box-shadow:
+    0 0 0 4px var(--bg),
+    0 20px 40px -10px rgba(0,0,0,0.5),
+    0 0 24px -8px var(--accent);
+}
+.vb-dock-btn {
+  background: transparent;
+  border: 0;
+  border-right: 1.5px solid var(--accent);
+  padding: 10px 12px 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  cursor: pointer;
+  color: var(--fg-2);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  transition: all var(--dur-2) var(--ease);
+}
+.vb-dock-btn:last-child { border-right: 0; }
+.vb-dock-btn:hover { color: var(--fg); }
+.vb-dock-btn.active {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+.vb-dock-btn.active .vb-dock-label {
+  color: var(--accent-ink);
+}
+.vb-dock-label {
+  font-size: 8px;
+  letter-spacing: 0.1em;
+  color: var(--fg-3);
+}
+.vb-dock-btn:hover .vb-dock-label { color: var(--fg-2); }

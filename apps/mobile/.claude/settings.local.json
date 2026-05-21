@@ -1,0 +1,6 @@
+{
+  "enabledMcpjsonServers": [
+    "homeassistant"
+  ],
+  "enableAllProjectMcpServers": true
+}
