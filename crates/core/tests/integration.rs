@@ -1167,3 +1167,264 @@ async fn test_sv_handshake_group_sync() {
     drop(sink_d1);
     drop(sink_d2);
 }
+
+// =============================================================================
+// Test: Festival stage chat — D1 and D2 subscribe to a stage topic, D1 sends,
+//       D2 receives; D1 sends on a different stage that D2 is NOT subscribed to,
+//       D2 does NOT receive it.
+// =============================================================================
+
+#[tokio::test]
+#[ignore = "requires running DO server"]
+async fn test_festival_stage_chat_via_relay() {
+    let festival_id = "chat-stage-test-1";
+    let topic_stage1 = format!("festival/{festival_id}/chat/stage-1");
+    let topic_stage2 = format!("festival/{festival_id}/chat/stage-2");
+
+    // D1 subscribes to both stages, D2 only to stage-1.
+    let (mut sink_d1, _stream_d1) = connect_and_subscribe(festival_id, &topic_stage1)
+        .await
+        .unwrap();
+    let (sink_d2, mut stream_d2) = connect_and_subscribe(festival_id, &topic_stage1)
+        .await
+        .unwrap();
+
+    // Also subscribe D1 to stage-2 (D2 is NOT subscribed to stage-2).
+    send_json(
+        &mut sink_d1,
+        &json!({
+            "type": "subscribe",
+            "topics": [&topic_stage2]
+        }),
+    )
+    .await
+    .unwrap();
+
+    // D1 sends chat on stage-1 — D2 should receive it.
+    let msg_id_1 = uuid::Uuid::new_v4().to_string();
+    send_json(
+        &mut sink_d1,
+        &json!({
+            "type": "chat",
+            "topic": topic_stage1,
+            "message": {
+                "id": msg_id_1,
+                "userId": "d1",
+                "displayName": "D1",
+                "text": "Stage 1 message",
+                "topic": topic_stage1,
+                "timestamp": chrono::Utc::now().to_rfc3339()
+            }
+        }),
+    )
+    .await
+    .unwrap();
+
+    let recv = wait_for_message_type(&mut stream_d2, "chat", 5).await.unwrap();
+    assert_eq!(recv["message"]["id"], msg_id_1);
+    assert_eq!(recv["message"]["text"], "Stage 1 message");
+
+    // D1 sends chat on stage-2 — D2 should NOT receive it within timeout.
+    let msg_id_2 = uuid::Uuid::new_v4().to_string();
+    send_json(
+        &mut sink_d1,
+        &json!({
+            "type": "chat",
+            "topic": topic_stage2,
+            "message": {
+                "id": msg_id_2,
+                "userId": "d1",
+                "displayName": "D1",
+                "text": "Stage 2 message",
+                "topic": topic_stage2,
+                "timestamp": chrono::Utc::now().to_rfc3339()
+            }
+        }),
+    )
+    .await
+    .unwrap();
+
+    // D2 is not subscribed to stage-2 — should time out.
+    let result = tokio::time::timeout(
+        Duration::from_secs(2),
+        wait_for_message_type(&mut stream_d2, "chat", 2),
+    )
+    .await;
+    // Either timeout or a message that is NOT the stage-2 message.
+    match result {
+        Err(_) => {} // expected timeout
+        Ok(Ok(msg)) => {
+            // If something came in, make sure it's not the stage-2 message.
+            assert_ne!(msg["message"]["id"].as_str(), Some(msg_id_2.as_str()));
+        }
+        Ok(Err(_)) => {} // connection error — acceptable
+    }
+
+    drop(sink_d1);
+    drop(sink_d2);
+}
+
+// =============================================================================
+// Test: Encrypted group chat via relay — D1 sends, D2 (with shared key)
+//       receives and decrypts; D3 (no key) receives ciphertext but cannot decrypt.
+// =============================================================================
+
+#[tokio::test]
+#[ignore = "requires running DO server"]
+async fn test_encrypted_group_chat_via_relay() {
+    use base64::Engine as _;
+    use offbeat_core::crypto;
+    use offbeat_core::gossip_manager::GossipWireMessage;
+    use offbeat_core::types::ChatMessage;
+
+    let festival_id = "chat-group-test-1";
+    let group_key = crypto::generate_group_key();
+    let group_id = crypto::group_id_from_key(&group_key);
+    let topic = format!("group/{group_id}/chat");
+
+    // Build and encrypt a chat message.
+    let original = ChatMessage {
+        id: uuid::Uuid::new_v4().to_string(),
+        user_id: "d1-user".to_string(),
+        display_name: "D1".to_string(),
+        text: "secret group hello".to_string(),
+        topic: topic.clone(),
+        stage_id: None,
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    };
+    let plaintext = serde_json::to_vec(&original).unwrap();
+    let encrypted = crypto::encrypt(&group_key, &plaintext).unwrap();
+
+    // Wrap in a GossipWireMessage.
+    let wire = GossipWireMessage {
+        kind: "encrypted_chat".to_string(),
+        doc_id: None,
+        payload: base64::engine::general_purpose::STANDARD.encode(&encrypted),
+        group_key_id: Some(crypto::group_id_from_key(&group_key)),
+    };
+    let wire_bytes = serde_json::to_vec(&wire).unwrap();
+    let encoded_relay = base64::engine::general_purpose::STANDARD.encode(&wire_bytes);
+
+    // D1 sends, D2 receives.
+    let (mut sink_d1, _) = connect_and_subscribe(festival_id, &topic).await.unwrap();
+    let (_sink_d2, mut stream_d2) = connect_and_subscribe(festival_id, &topic).await.unwrap();
+    // D3: eavesdropper — subscribes but has no key.
+    let (_sink_d3, mut stream_d3) = connect_and_subscribe(festival_id, &topic).await.unwrap();
+
+    send_json(
+        &mut sink_d1,
+        &json!({
+            "type": "relay",
+            "topic": topic,
+            "data": encoded_relay
+        }),
+    )
+    .await
+    .unwrap();
+
+    // D2 receives the relay payload.
+    let recv_d2 = wait_for_message_type(&mut stream_d2, "relay", 5).await.unwrap();
+    let received_bytes = base64::engine::general_purpose::STANDARD
+        .decode(recv_d2["data"].as_str().unwrap())
+        .unwrap();
+    let received_wire: GossipWireMessage = serde_json::from_slice(&received_bytes).unwrap();
+    assert_eq!(received_wire.kind, "encrypted_chat");
+
+    // D2 can decrypt and verify the message.
+    let enc = base64::engine::general_purpose::STANDARD
+        .decode(&received_wire.payload)
+        .unwrap();
+    let pt = crypto::decrypt(&group_key, &enc).unwrap();
+    let msg: ChatMessage = serde_json::from_slice(&pt).unwrap();
+    assert_eq!(msg.text, "secret group hello");
+    assert_eq!(msg.id, original.id);
+
+    // D3 also receives the relay (DO relays blindly), but decryption fails.
+    let recv_d3 = wait_for_message_type(&mut stream_d3, "relay", 5).await.unwrap();
+    let recv_bytes_d3 = base64::engine::general_purpose::STANDARD
+        .decode(recv_d3["data"].as_str().unwrap())
+        .unwrap();
+    let wire_d3: GossipWireMessage = serde_json::from_slice(&recv_bytes_d3).unwrap();
+    assert_eq!(wire_d3.kind, "encrypted_chat");
+
+    let wrong_key = crypto::generate_group_key(); // D3 has no real key
+    let enc_d3 = base64::engine::general_purpose::STANDARD
+        .decode(&wire_d3.payload)
+        .unwrap();
+    let decrypt_result = crypto::decrypt(&wrong_key, &enc_d3);
+    assert!(decrypt_result.is_err(), "D3 should not be able to decrypt");
+
+    drop(sink_d1);
+}
+
+// =============================================================================
+// Test: Chat catch-up on reconnect — D1 sends 5 messages, D2 connects late,
+//       requests catchup, receives all 5.
+// =============================================================================
+
+#[tokio::test]
+#[ignore = "requires running DO server"]
+async fn test_chat_catchup_on_reconnect() {
+    let festival_id = "chat-catchup-test-1";
+    let topic = format!("festival/{festival_id}/chat/general");
+
+    // D1 connects and sends 5 messages.
+    let (mut sink_d1, _stream_d1) = connect_and_subscribe(festival_id, &topic).await.unwrap();
+
+    let mut msg_ids = Vec::new();
+    for i in 1..=5 {
+        let msg_id = uuid::Uuid::new_v4().to_string();
+        msg_ids.push(msg_id.clone());
+        send_json(
+            &mut sink_d1,
+            &json!({
+                "type": "chat",
+                "topic": topic,
+                "message": {
+                    "id": msg_id,
+                    "userId": "d1",
+                    "displayName": "D1",
+                    "text": format!("Catchup message {i}"),
+                    "topic": topic,
+                    "timestamp": chrono::Utc::now().to_rfc3339()
+                }
+            }),
+        )
+        .await
+        .unwrap();
+    }
+
+    // Wait for messages to be stored.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // D2 connects late and requests a full catchup.
+    let (mut sink_d2, mut stream_d2) = connect_and_subscribe(festival_id, &topic).await.unwrap();
+
+    send_json(
+        &mut sink_d2,
+        &json!({
+            "type": "catchup",
+            "topic": topic,
+            "sinceSeq": 0
+        }),
+    )
+    .await
+    .unwrap();
+
+    let catchup = wait_for_message_type(&mut stream_d2, "catchup", 5).await.unwrap();
+    assert_eq!(catchup["type"], "catchup");
+
+    let chat_msgs = catchup["chat"].as_array().unwrap();
+
+    // All 5 messages must be present.
+    for msg_id in &msg_ids {
+        let found = chat_msgs
+            .iter()
+            .any(|m| m["message"]["id"].as_str() == Some(msg_id.as_str()));
+        assert!(found, "message {msg_id} not found in catchup");
+    }
+
+    drop(sink_d1);
+    drop(sink_d2);
+}
+

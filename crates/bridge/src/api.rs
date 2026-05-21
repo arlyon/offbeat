@@ -141,6 +141,139 @@ impl AppNode {
             .collect())
     }
 
+    /// Send a festival chat message (plaintext) and broadcast it via gossip if
+    /// networking is active.  Returns the persisted message.
+    ///
+    /// WS relay delivery should be performed separately by the caller via
+    /// `connect_relay`.
+    pub async fn send_festival_chat(
+        &self,
+        festival_id: String,
+        stage_id: Option<String>,
+        text: String,
+    ) -> anyhow::Result<ChatMessageDto> {
+        use offbeat_core::auth;
+        let signing_key = auth::generate_or_load_identity(&self.inner.db)?;
+        let user_id = auth::get_user_id(&signing_key);
+        let display_name = auth::get_display_name(&self.inner.db)?.unwrap_or_else(|| user_id.clone());
+
+        let (msg, topic_id) = self.inner.chat_manager.send_festival_chat(
+            &festival_id,
+            stage_id.as_deref(),
+            &user_id,
+            &display_name,
+            &text,
+        )?;
+
+        // Broadcast via gossip if available.
+        if let Some(gm) = &self.inner.gossip_manager {
+            use offbeat_core::gossip_manager::{GossipMessage, encode_gossip_message_pub};
+            let wire = encode_gossip_message_pub(&GossipMessage::Chat(msg.clone()))?;
+            let bytes = serde_json::to_vec(&wire)?;
+            // Best-effort broadcast — ignore errors (e.g. not subscribed yet).
+            let _ = gm.lock().await.publish(topic_id, bytes).await;
+        }
+
+        Ok(ChatMessageDto {
+            id: msg.id,
+            user_id: msg.user_id,
+            display_name: msg.display_name,
+            text: msg.text,
+            topic: msg.topic,
+            stage_id: msg.stage_id,
+            timestamp: msg.timestamp,
+        })
+    }
+
+    /// Send an encrypted group chat message and broadcast it via gossip if
+    /// networking is active.  Returns the persisted message.
+    pub async fn send_group_chat(
+        &self,
+        group_id: String,
+        text: String,
+    ) -> anyhow::Result<ChatMessageDto> {
+        use offbeat_core::auth;
+        let signing_key = auth::generate_or_load_identity(&self.inner.db)?;
+        let user_id = auth::get_user_id(&signing_key);
+        let display_name = auth::get_display_name(&self.inner.db)?.unwrap_or_else(|| user_id.clone());
+
+        let (encrypted, topic_id) = self.inner.chat_manager.send_group_chat(
+            &group_id,
+            &user_id,
+            &display_name,
+            &text,
+        )?;
+
+        // Retrieve the stored message to return as DTO (most recent for topic).
+        let stored = self
+            .inner
+            .db
+            .get_chat_messages(&format!("group/{group_id}/chat"), 1, 0)?;
+        let msg = stored
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("send_group_chat: message not found after save"))?;
+
+        // Broadcast raw encrypted bytes via gossip if available.
+        if let Some(gm) = &self.inner.gossip_manager {
+            let _ = gm.lock().await.publish(topic_id, encrypted).await;
+        }
+
+        Ok(ChatMessageDto {
+            id: msg.id,
+            user_id: msg.user_id,
+            display_name: msg.display_name,
+            text: msg.text,
+            topic: msg.topic,
+            stage_id: msg.stage_id,
+            timestamp: msg.timestamp,
+        })
+    }
+
+    /// Return paginated chat history for a topic string.
+    pub fn get_chat_history(
+        &self,
+        topic: String,
+        limit: u32,
+        offset: u32,
+    ) -> anyhow::Result<Vec<ChatMessageDto>> {
+        let msgs = self.inner.chat_manager.get_history(&topic, limit, offset)?;
+        Ok(msgs
+            .into_iter()
+            .map(|m| ChatMessageDto {
+                id: m.id,
+                user_id: m.user_id,
+                display_name: m.display_name,
+                text: m.text,
+                topic: m.topic,
+                stage_id: m.stage_id,
+                timestamp: m.timestamp,
+            })
+            .collect())
+    }
+
+    /// Subscribe to all chat topics for a festival (general + campsite + per-stage).
+    pub async fn subscribe_chat_topics(
+        &self,
+        festival_id: String,
+        stage_ids: Vec<String>,
+    ) -> anyhow::Result<()> {
+        let stage_refs: Vec<&str> = stage_ids.iter().map(String::as_str).collect();
+        let chat_topics = self
+            .inner
+            .chat_manager
+            .get_festival_chat_topics(&festival_id, &stage_refs);
+
+        if let Some(gm) = &self.inner.gossip_manager {
+            let mut gm_locked = gm.lock().await;
+            for (_topic_str, topic_id) in &chat_topics {
+                gm_locked.subscribe(*topic_id, vec![]).await?;
+            }
+        }
+
+        Ok(())
+    }
+
     // -----------------------------------------------------------------------
     // Networking methods
     // -----------------------------------------------------------------------

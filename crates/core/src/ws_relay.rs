@@ -281,13 +281,49 @@ async fn handle_server_message(
                     tracing::debug!("ws_relay: relay kind={}", wire.kind);
                     match wire.kind.as_str() {
                         "sync_response" | "sync_update" => {
-                            // These carry an encrypted Yrs diff that we can apply
-                            // if we have the group key.  For now the group-key lookup
-                            // is not wired into WsRelay, so log and skip.
-                            tracing::warn!(
-                                "ws_relay: skipping {} — group key lookup not yet wired",
-                                wire.kind
-                            );
+                            use base64::Engine as _;
+                            let b64 = base64::engine::general_purpose::STANDARD;
+
+                            if let (Some(key_id), Some(doc_id)) =
+                                (&wire.group_key_id, &wire.doc_id)
+                            {
+                                match db.load_group_key(key_id) {
+                                    Ok(Some(group_key)) => {
+                                        match b64.decode(&wire.payload) {
+                                            Ok(encrypted) => {
+                                                let mut dm = doc_manager.lock().await;
+                                                if let Err(e) = dm.apply_encrypted_update(
+                                                    doc_id,
+                                                    &encrypted,
+                                                    &group_key,
+                                                ) {
+                                                    tracing::warn!(
+                                                        "ws_relay: {} apply error: {e}",
+                                                        wire.kind
+                                                    );
+                                                }
+                                            }
+                                            Err(e) => tracing::warn!(
+                                                "ws_relay: {} base64 decode: {e}",
+                                                wire.kind
+                                            ),
+                                        }
+                                    }
+                                    Ok(None) => tracing::debug!(
+                                        "ws_relay: {} unknown key_id={key_id}",
+                                        wire.kind
+                                    ),
+                                    Err(e) => tracing::warn!(
+                                        "ws_relay: {} key lookup error: {e}",
+                                        wire.kind
+                                    ),
+                                }
+                            } else {
+                                tracing::warn!(
+                                    "ws_relay: {} missing group_key_id or doc_id",
+                                    wire.kind
+                                );
+                            }
                         }
                         "sync_request" => {
                             // A peer is requesting a sync.  Responding requires
@@ -299,11 +335,93 @@ async fn handle_server_message(
                                 wire.doc_id
                             );
                         }
-                        "group_update" | "encrypted_chat" => {
-                            tracing::warn!(
-                                "ws_relay: skipping {} — group key lookup not yet wired",
-                                wire.kind
-                            );
+                        "group_update" => {
+                            use base64::Engine as _;
+                            let b64 = base64::engine::general_purpose::STANDARD;
+
+                            if let Some(key_id) = &wire.group_key_id {
+                                match db.load_group_key(key_id) {
+                                    Ok(Some(group_key)) => {
+                                        match b64.decode(&wire.payload) {
+                                            Ok(encrypted) => {
+                                                if let Some(doc_id) = &wire.doc_id {
+                                                    let mut dm = doc_manager.lock().await;
+                                                    if let Err(e) = dm.apply_encrypted_update(
+                                                        doc_id,
+                                                        &encrypted,
+                                                        &group_key,
+                                                    ) {
+                                                        tracing::warn!(
+                                                            "ws_relay: group_update apply error: {e}"
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                            Err(e) => tracing::warn!(
+                                                "ws_relay: group_update base64 decode: {e}"
+                                            ),
+                                        }
+                                    }
+                                    Ok(None) => tracing::debug!(
+                                        "ws_relay: group_update unknown key_id={key_id}"
+                                    ),
+                                    Err(e) => tracing::warn!(
+                                        "ws_relay: group_update key lookup error: {e}"
+                                    ),
+                                }
+                            } else {
+                                tracing::warn!("ws_relay: group_update missing group_key_id");
+                            }
+                        }
+
+                        "encrypted_chat" => {
+                            use base64::Engine as _;
+                            let b64 = base64::engine::general_purpose::STANDARD;
+
+                            if let Some(key_id) = &wire.group_key_id {
+                                match db.load_group_key(key_id) {
+                                    Ok(Some(group_key)) => {
+                                        match b64.decode(&wire.payload) {
+                                            Ok(encrypted) => {
+                                                match crate::crypto::decrypt(&group_key, &encrypted) {
+                                                    Ok(plaintext) => {
+                                                        match serde_json::from_slice::<ChatMessage>(
+                                                            &plaintext,
+                                                        ) {
+                                                            Ok(chat) => {
+                                                                if let Err(e) =
+                                                                    db.save_chat_message(&chat)
+                                                                {
+                                                                    tracing::warn!(
+                                                                        "ws_relay: encrypted_chat save error: {e}"
+                                                                    );
+                                                                }
+                                                            }
+                                                            Err(e) => tracing::warn!(
+                                                                "ws_relay: encrypted_chat deserialise: {e}"
+                                                            ),
+                                                        }
+                                                    }
+                                                    Err(e) => tracing::warn!(
+                                                        "ws_relay: encrypted_chat decrypt error: {e}"
+                                                    ),
+                                                }
+                                            }
+                                            Err(e) => tracing::warn!(
+                                                "ws_relay: encrypted_chat base64 decode: {e}"
+                                            ),
+                                        }
+                                    }
+                                    Ok(None) => tracing::debug!(
+                                        "ws_relay: encrypted_chat unknown key_id={key_id}"
+                                    ),
+                                    Err(e) => tracing::warn!(
+                                        "ws_relay: encrypted_chat key lookup error: {e}"
+                                    ),
+                                }
+                            } else {
+                                tracing::warn!("ws_relay: encrypted_chat missing group_key_id");
+                            }
                         }
                         other => {
                             tracing::debug!("ws_relay: relay kind={other} — no special handling");
@@ -326,7 +444,7 @@ async fn handle_server_message(
                     festival_public_key.as_ref(),
                 )?;
             }
-            // Relay catchup entries: same treatment as live relay events.
+            // Relay catchup entries: apply group-keyed updates if we have the key.
             drop(dm);
             for entry in relay {
                 let raw = base64::engine::general_purpose::STANDARD
@@ -336,8 +454,7 @@ async fn handle_server_message(
                     serde_json::from_slice::<crate::gossip_manager::GossipWireMessage>(&raw)
                 {
                     tracing::debug!("ws_relay catchup: relay kind={}", wire.kind);
-                    // sync_request/sync_response/sync_update in catchup are
-                    // informational only; applying them requires group keys.
+                    apply_relay_wire_catchup(wire, doc_manager, db).await;
                 }
             }
             Ok(())
@@ -351,6 +468,83 @@ async fn handle_server_message(
             Ok(())
         }
         DoServerMessage::Unknown => Ok(()),
+    }
+}
+
+/// Apply a single wire message received in a relay catchup, using DB key
+/// lookup for group-encrypted payloads.  Errors are logged and ignored so
+/// that one bad entry does not abort the whole catchup loop.
+async fn apply_relay_wire_catchup(
+    wire: crate::gossip_manager::GossipWireMessage,
+    doc_manager: &Arc<Mutex<DocManager>>,
+    db: &Arc<Database>,
+) {
+    use base64::Engine as _;
+    let b64 = base64::engine::general_purpose::STANDARD;
+
+    match wire.kind.as_str() {
+        "group_update" | "sync_response" | "sync_update" => {
+            let (Some(key_id), Some(doc_id)) = (&wire.group_key_id, &wire.doc_id) else {
+                return;
+            };
+            let group_key = match db.load_group_key(key_id) {
+                Ok(Some(k)) => k,
+                Ok(None) => return,
+                Err(e) => {
+                    tracing::warn!("ws_relay catchup: key lookup error: {e}");
+                    return;
+                }
+            };
+            let encrypted = match b64.decode(&wire.payload) {
+                Ok(b) => b,
+                Err(e) => {
+                    tracing::warn!("ws_relay catchup: base64 decode: {e}");
+                    return;
+                }
+            };
+            let mut dm = doc_manager.lock().await;
+            if let Err(e) = dm.apply_encrypted_update(doc_id, &encrypted, &group_key) {
+                tracing::warn!("ws_relay catchup: {} apply error: {e}", wire.kind);
+            }
+        }
+        "encrypted_chat" => {
+            let Some(key_id) = &wire.group_key_id else {
+                return;
+            };
+            let group_key = match db.load_group_key(key_id) {
+                Ok(Some(k)) => k,
+                Ok(None) => return,
+                Err(e) => {
+                    tracing::warn!("ws_relay catchup: key lookup error: {e}");
+                    return;
+                }
+            };
+            let encrypted = match b64.decode(&wire.payload) {
+                Ok(b) => b,
+                Err(e) => {
+                    tracing::warn!("ws_relay catchup: base64 decode: {e}");
+                    return;
+                }
+            };
+            let plaintext = match crate::crypto::decrypt(&group_key, &encrypted) {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::warn!("ws_relay catchup: encrypted_chat decrypt: {e}");
+                    return;
+                }
+            };
+            match serde_json::from_slice::<ChatMessage>(&plaintext) {
+                Ok(chat) => {
+                    if let Err(e) = db.save_chat_message(&chat) {
+                        tracing::warn!("ws_relay catchup: encrypted_chat save: {e}");
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("ws_relay catchup: encrypted_chat deserialise: {e}");
+                }
+            }
+        }
+        _ => {}
     }
 }
 

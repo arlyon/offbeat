@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod chat;
 pub mod crypto;
 pub mod db;
 pub mod doc_manager;
@@ -14,6 +15,7 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+use chat::ChatManager;
 use db::Database;
 use doc_manager::DocManager;
 use gossip_manager::GossipManager;
@@ -27,6 +29,7 @@ pub struct OffbeatNode {
     pub doc_manager: Arc<Mutex<DocManager>>,
     pub db: Arc<Database>,
     pub group_manager: Arc<GroupManager>,
+    pub chat_manager: Arc<ChatManager>,
     /// Present when the node was created via `new_with_networking`.
     pub gossip_manager: Option<Arc<Mutex<GossipManager>>>,
     /// Present when the node was created via `new_with_networking`.
@@ -43,10 +46,12 @@ impl OffbeatNode {
         let db = Arc::new(Database::new(db_path)?);
         let doc_manager = Arc::new(Mutex::new(DocManager::new(db.clone())));
         let group_manager = Arc::new(GroupManager::new(db.clone(), doc_manager.clone()));
+        let chat_manager = Arc::new(ChatManager::new(db.clone(), doc_manager.clone()));
         Ok(Self {
             doc_manager,
             db,
             group_manager,
+            chat_manager,
             gossip_manager: None,
             gossip: None,
             endpoint: None,
@@ -58,10 +63,12 @@ impl OffbeatNode {
         let db = Arc::new(Database::new_in_memory()?);
         let doc_manager = Arc::new(Mutex::new(DocManager::new(db.clone())));
         let group_manager = Arc::new(GroupManager::new(db.clone(), doc_manager.clone()));
+        let chat_manager = Arc::new(ChatManager::new(db.clone(), doc_manager.clone()));
         Ok(Self {
             doc_manager,
             db,
             group_manager,
+            chat_manager,
             gossip_manager: None,
             gossip: None,
             endpoint: None,
@@ -76,6 +83,7 @@ impl OffbeatNode {
         let db = Arc::new(Database::new(db_path)?);
         let doc_manager = Arc::new(Mutex::new(DocManager::new(db.clone())));
         let group_manager = Arc::new(GroupManager::new(db.clone(), doc_manager.clone()));
+        let chat_manager = Arc::new(ChatManager::new(db.clone(), doc_manager.clone()));
 
         // Bind an iroh endpoint, accepting gossip connections.
         let endpoint = iroh::Endpoint::builder(presets::N0)
@@ -96,6 +104,7 @@ impl OffbeatNode {
             doc_manager,
             db,
             group_manager,
+            chat_manager,
             gossip_manager: Some(gossip_manager),
             gossip: Some(gossip),
             endpoint: Some(endpoint),

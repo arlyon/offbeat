@@ -386,10 +386,55 @@ async fn handle_wire_bytes(
             let chat: ChatMessage = serde_json::from_str(&wire.payload)?;
             GossipMessage::Chat(chat)
         }
-        "group_update" | "encrypted_chat" | "sync_request" | "sync_response" | "sync_update" => {
-            // These require group key lookup from local storage — not implemented
-            // in this generic wire path. Callers with key access (GroupManager,
-            // WsRelay) handle them directly.
+        "group_update" => {
+            use base64::Engine as _;
+            let b64 = base64::engine::general_purpose::STANDARD;
+
+            let key_id = wire
+                .group_key_id
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("group_update missing group_key_id"))?;
+
+            let group_key = db
+                .load_group_key(key_id)?
+                .ok_or_else(|| anyhow::anyhow!("group_update: unknown group key {key_id}"))?;
+
+            let encrypted = b64
+                .decode(&wire.payload)
+                .map_err(|e| anyhow::anyhow!("group_update: base64 decode: {e}"))?;
+
+            GossipMessage::GroupUpdate {
+                doc_id: wire
+                    .doc_id
+                    .ok_or_else(|| anyhow::anyhow!("group_update missing doc_id"))?,
+                encrypted,
+                group_key,
+            }
+        }
+
+        "encrypted_chat" => {
+            use base64::Engine as _;
+            let b64 = base64::engine::general_purpose::STANDARD;
+
+            let key_id = wire
+                .group_key_id
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("encrypted_chat missing group_key_id"))?;
+
+            let group_key = db
+                .load_group_key(key_id)?
+                .ok_or_else(|| anyhow::anyhow!("encrypted_chat: unknown group key {key_id}"))?;
+
+            let encrypted = b64
+                .decode(&wire.payload)
+                .map_err(|e| anyhow::anyhow!("encrypted_chat: base64 decode: {e}"))?;
+
+            GossipMessage::EncryptedChat { group_key, encrypted }
+        }
+
+        "sync_request" | "sync_response" | "sync_update" => {
+            // Sync messages require a key lookup and, for sync_request, the
+            // ability to send a response. Log and skip in the generic path.
             tracing::warn!(
                 "gossip: {} requires group key lookup (key_id={:?}); skipping in generic wire path",
                 wire.kind,
