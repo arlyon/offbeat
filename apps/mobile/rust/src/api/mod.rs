@@ -1,3 +1,4 @@
+use crate::frb_generated::StreamSink;
 use offbeat_core::OffbeatNode;
 
 /// Initialize the Flutter Rust Bridge utilities. Must be called before any other bridge function.
@@ -101,6 +102,21 @@ pub struct LineupDto {
     pub stages: Vec<LineupStageDto>,
     pub days: Vec<LineupDayDto>,
     pub sets: Vec<LineupSetDto>,
+}
+
+/// Per-resource sync status.
+pub struct ResourceSyncStatusDto {
+    pub id: String,
+    pub syncing: bool,
+    pub last_synced: Option<String>,
+    pub error: Option<String>,
+}
+
+/// Overall sync status for the node.
+pub struct SyncStatusDto {
+    pub syncing: bool,
+    pub resources: Vec<ResourceSyncStatusDto>,
+    pub pending_ops: u32,
 }
 
 // ---------------------------------------------------------------------------
@@ -262,7 +278,7 @@ impl AppNode {
 
             if let Some(gm) = &self.inner.gossip_manager {
                 let bytes = serde_json::to_vec(&wire)?;
-                let _ = gm.lock().await.publish(topic_id, bytes).await;
+                let _ = gm.lock().await.broadcast(topic_id, bytes).await;
             }
 
             if let Some(ws) = &self.inner.ws_relay {
@@ -330,7 +346,7 @@ impl AppNode {
 
             if let Some(gm) = &self.inner.gossip_manager {
                 let bytes = serde_json::to_vec(&wire)?;
-                let _ = gm.lock().await.publish(topic_id, bytes).await;
+                let _ = gm.lock().await.broadcast(topic_id, bytes).await;
             }
 
             if let Some(ws) = &self.inner.ws_relay {
@@ -511,7 +527,7 @@ impl AppNode {
         let bytes = serde_json::to_vec(&wire)?;
 
         if let Some(gm) = &self.inner.gossip_manager {
-            let _ = gm.lock().await.publish(topic_id, bytes).await;
+            let _ = gm.lock().await.broadcast(topic_id, bytes).await;
         }
 
         if let Some(ws) = &self.inner.ws_relay {
@@ -696,7 +712,7 @@ impl AppNode {
             if let Some(gm) = &self.inner.gossip_manager {
                 let topic = offbeat_core::topics::group_topic(&group_key, "state");
                 let bytes = serde_json::to_vec(&wire)?;
-                let _ = gm.lock().await.publish(topic, bytes).await;
+                let _ = gm.lock().await.broadcast(topic, bytes).await;
             }
             if let Some(ws) = &self.inner.ws_relay {
                 let topic_str = format!("group/{group_id}/state");
@@ -733,7 +749,7 @@ impl AppNode {
             if let Some(gm) = &self.inner.gossip_manager {
                 let topic = offbeat_core::topics::group_topic(&group_key, "state");
                 let bytes = serde_json::to_vec(&wire)?;
-                let _ = gm.lock().await.publish(topic, bytes).await;
+                let _ = gm.lock().await.broadcast(topic, bytes).await;
             }
             if let Some(ws) = &self.inner.ws_relay {
                 let topic_str = format!("group/{group_id}/state");
@@ -772,7 +788,7 @@ impl AppNode {
             if let Some(gm) = &self.inner.gossip_manager {
                 let topic = offbeat_core::topics::group_topic(&group_key, "state");
                 let bytes = serde_json::to_vec(&wire)?;
-                let _ = gm.lock().await.publish(topic, bytes).await;
+                let _ = gm.lock().await.broadcast(topic, bytes).await;
             }
             if let Some(ws) = &self.inner.ws_relay {
                 let topic_str = format!("group/{group_id}/state");
@@ -811,6 +827,265 @@ impl AppNode {
                 .collect(),
         })
     }
+
+    // -----------------------------------------------------------------------
+    // Reactive stream methods
+    // -----------------------------------------------------------------------
+
+    /// Watch festival lineup — emits current state, then updates on changes.
+    ///
+    /// The stream emits the current lineup immediately, then re-emits whenever
+    /// the lineup document is updated (via sync or local changes).
+    #[flutter_rust_bridge::frb(stream_dart_await)]
+    pub fn watch_lineup(
+        &self,
+        festival_id: String,
+        sink: StreamSink<Option<LineupDto>>,
+    ) -> anyhow::Result<()> {
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        let doc_id = format!("festival/{festival_id}/state");
+        let doc_manager = Arc::clone(&self.inner.doc_manager);
+        let notifier = Arc::clone(&self.inner.notifier);
+
+        // Subscribe to doc updates
+        let mut rx = notifier.watch_doc(&doc_id);
+
+        // Spawn task to emit on changes
+        let sink = Arc::new(Mutex::new(sink));
+        let sink_clone = Arc::clone(&sink);
+        let doc_manager_clone = Arc::clone(&doc_manager);
+        let doc_id_clone = doc_id.clone();
+
+        tokio::spawn(async move {
+            // Emit initial state
+            {
+                let mut dm = doc_manager_clone.lock().await;
+                let lineup = read_lineup_from_doc(&mut dm, &doc_id_clone);
+                let sink = sink_clone.lock().await;
+                let _ = sink.add(lineup);
+            }
+
+            // Watch for changes
+            loop {
+                if rx.changed().await.is_err() {
+                    break; // Channel closed
+                }
+                let mut dm = doc_manager_clone.lock().await;
+                let lineup = read_lineup_from_doc(&mut dm, &doc_id_clone);
+                let sink = sink_clone.lock().await;
+                if sink.add(lineup).is_err() {
+                    break; // Sink closed
+                }
+            }
+        });
+
+        Ok(())
+    }
+
+    /// Watch group state — emits current state, then updates on changes.
+    #[flutter_rust_bridge::frb(stream_dart_await)]
+    pub fn watch_group_state(
+        &self,
+        group_id: String,
+        sink: StreamSink<GroupStateDto>,
+    ) -> anyhow::Result<()> {
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        let doc_id = format!("group/{group_id}");
+        let group_manager = Arc::clone(&self.inner.group_manager);
+        let notifier = Arc::clone(&self.inner.notifier);
+
+        let mut rx = notifier.watch_doc(&doc_id);
+        let sink = Arc::new(Mutex::new(sink));
+        let sink_clone = Arc::clone(&sink);
+        let group_id_clone = group_id.clone();
+
+        tokio::spawn(async move {
+            // Emit initial state
+            if let Ok(state) = group_manager.get_group_state(&group_id_clone).await {
+                let dto = GroupStateDto {
+                    name: state.name,
+                    members: state
+                        .members
+                        .into_iter()
+                        .map(|m| GroupMemberDto {
+                            user_id: m.user_id,
+                            display_name: m.display_name,
+                            status: m.status,
+                            stage_id: m.stage_id,
+                            custom_location: m.custom_location,
+                        })
+                        .collect(),
+                    pins: state
+                        .pins
+                        .into_iter()
+                        .map(|p| GroupPinDto {
+                            id: p.id,
+                            label: p.label,
+                            location: p.location,
+                            pinned_by: p.pinned_by,
+                        })
+                        .collect(),
+                };
+                let sink = sink_clone.lock().await;
+                let _ = sink.add(dto);
+            }
+
+            // Watch for changes
+            loop {
+                if rx.changed().await.is_err() {
+                    break;
+                }
+                if let Ok(state) = group_manager.get_group_state(&group_id_clone).await {
+                    let dto = GroupStateDto {
+                        name: state.name,
+                        members: state
+                            .members
+                            .into_iter()
+                            .map(|m| GroupMemberDto {
+                                user_id: m.user_id,
+                                display_name: m.display_name,
+                                status: m.status,
+                                stage_id: m.stage_id,
+                                custom_location: m.custom_location,
+                            })
+                            .collect(),
+                        pins: state
+                            .pins
+                            .into_iter()
+                            .map(|p| GroupPinDto {
+                                id: p.id,
+                                label: p.label,
+                                location: p.location,
+                                pinned_by: p.pinned_by,
+                            })
+                            .collect(),
+                    };
+                    let sink = sink_clone.lock().await;
+                    if sink.add(dto).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+
+        Ok(())
+    }
+
+    /// Watch chat messages for a topic — emits current messages, then updates.
+    #[flutter_rust_bridge::frb(stream_dart_await)]
+    pub fn watch_chat(
+        &self,
+        topic: String,
+        last_n: u32,
+        sink: StreamSink<Vec<ChatMessageDto>>,
+    ) -> anyhow::Result<()> {
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        let db = Arc::clone(&self.inner.db);
+        let notifier = Arc::clone(&self.inner.notifier);
+
+        let mut rx = notifier.watch_chat(&topic);
+        let sink = Arc::new(Mutex::new(sink));
+        let sink_clone = Arc::clone(&sink);
+        let topic_clone = topic.clone();
+
+        tokio::spawn(async move {
+            // Emit initial messages
+            if let Ok(msgs) = db.get_chat_messages(&topic_clone, last_n, 0) {
+                let dtos: Vec<ChatMessageDto> = msgs
+                    .into_iter()
+                    .map(|m| ChatMessageDto {
+                        id: m.id,
+                        user_id: m.user_id,
+                        display_name: m.display_name,
+                        text: m.text,
+                        topic: m.topic,
+                        stage_id: m.stage_id,
+                        timestamp: m.timestamp,
+                    })
+                    .collect();
+                let sink = sink_clone.lock().await;
+                let _ = sink.add(dtos);
+            }
+
+            // Watch for changes
+            loop {
+                if rx.changed().await.is_err() {
+                    break;
+                }
+                if let Ok(msgs) = db.get_chat_messages(&topic_clone, last_n, 0) {
+                    let dtos: Vec<ChatMessageDto> = msgs
+                        .into_iter()
+                        .map(|m| ChatMessageDto {
+                            id: m.id,
+                            user_id: m.user_id,
+                            display_name: m.display_name,
+                            text: m.text,
+                            topic: m.topic,
+                            stage_id: m.stage_id,
+                            timestamp: m.timestamp,
+                        })
+                        .collect();
+                    let sink = sink_clone.lock().await;
+                    if sink.add(dtos).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+
+        Ok(())
+    }
+
+    // TODO(Phase 5): watch_sync_status requires FRB codegen to generate
+    // SseEncode implementations for SyncStatusDto and ResourceSyncStatusDto.
+    // Run `flutter_rust_bridge_codegen generate` then uncomment:
+    //
+    // /// Watch sync status — emits current status, then updates on changes.
+    // #[flutter_rust_bridge::frb(stream_dart_await)]
+    // pub fn watch_sync_status(
+    //     &self,
+    //     sink: StreamSink<SyncStatusDto>,
+    // ) -> anyhow::Result<()> {
+    //     use std::sync::Arc;
+    //     use tokio::sync::Mutex;
+    //
+    //     let notifier = Arc::clone(&self.inner.notifier);
+    //
+    //     let mut rx = notifier.watch_sync_status();
+    //     let sink = Arc::new(Mutex::new(sink));
+    //     let sink_clone = Arc::clone(&sink);
+    //
+    //     tokio::spawn(async move {
+    //         // Emit initial status
+    //         {
+    //             let status = rx.borrow().clone();
+    //             let dto = convert_sync_status(&status);
+    //             let sink = sink_clone.lock().await;
+    //             let _ = sink.add(dto);
+    //         }
+    //
+    //         // Watch for changes
+    //         loop {
+    //             if rx.changed().await.is_err() {
+    //                 break;
+    //             }
+    //             let status = rx.borrow().clone();
+    //             let dto = convert_sync_status(&status);
+    //             let sink = sink_clone.lock().await;
+    //             if sink.add(dto).is_err() {
+    //                 break;
+    //             }
+    //         }
+    //     });
+    //
+    //     Ok(())
+    // }
 }
 
 // ---------------------------------------------------------------------------
@@ -828,6 +1103,69 @@ fn parse_json_array<T>(
     };
     arr.iter().filter_map(f).collect()
 }
+
+/// Read lineup from a doc manager (used by watch_lineup).
+fn read_lineup_from_doc(
+    dm: &mut offbeat_core::doc_manager::DocManager,
+    doc_id: &str,
+) -> Option<LineupDto> {
+    let stages = parse_json_array(dm.read_map_value(doc_id, "stages"), |s| {
+        Some(LineupStageDto {
+            id: s.get("id")?.as_str()?.to_string(),
+            name: s.get("name")?.as_str()?.to_string(),
+            short: s.get("short")?.as_str()?.to_string(),
+            color: s.get("color")?.as_str()?.to_string(),
+            order: s.get("order")?.as_i64()? as i32,
+        })
+    });
+
+    let days = parse_json_array(dm.read_map_value(doc_id, "days"), |d| {
+        Some(LineupDayDto {
+            id: d.get("id")?.as_str()?.to_string(),
+            label: d.get("label")?.as_str()?.to_string(),
+            num: d.get("num")?.as_i64()? as i32,
+            month: d.get("month")?.as_str()?.to_string(),
+        })
+    });
+
+    let sets = parse_json_array(dm.read_map_value(doc_id, "sets"), |s| {
+        Some(LineupSetDto {
+            id: s.get("id")?.as_str()?.to_string(),
+            day: s.get("day")?.as_str()?.to_string(),
+            stage: s.get("stage")?.as_str()?.to_string(),
+            artist: s.get("artist")?.as_str()?.to_string(),
+            start_min: s.get("startMin")?.as_i64()? as i32,
+            duration_min: s.get("durationMin")?.as_i64()? as i32,
+            genre: s.get("genre")?.as_str()?.to_string(),
+            cancelled: s.get("cancelled")?.as_bool().unwrap_or(false),
+        })
+    });
+
+    if stages.is_empty() && days.is_empty() && sets.is_empty() {
+        return None;
+    }
+
+    Some(LineupDto { stages, days, sets })
+}
+
+// TODO(Phase 5): Uncomment after FRB codegen
+// /// Convert SyncStatus from notifier to DTO.
+// fn convert_sync_status(status: &offbeat_core::notifier::SyncStatus) -> SyncStatusDto {
+//     SyncStatusDto {
+//         syncing: status.syncing,
+//         resources: status
+//             .resources
+//             .iter()
+//             .map(|r| ResourceSyncStatusDto {
+//                 id: r.id.clone(),
+//                 syncing: r.syncing,
+//                 last_synced: r.last_synced.clone(),
+//                 error: r.error.clone(),
+//             })
+//             .collect(),
+//         pending_ops: status.pending_ops,
+//     }
+// }
 
 // ---------------------------------------------------------------------------
 // Crypto utilities

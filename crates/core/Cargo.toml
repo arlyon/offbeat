@@ -11,6 +11,7 @@ path = "tests/integration.rs"
 aes-gcm = "0.10.3"
 anyhow = "1.0.102"
 base64 = "0.22.1"
+parking_lot = "0.12"
 blake3 = "1.8.5"
 bytes = "1"
 ed25519-dalek = { version = "2.2.0", features = ["rand_core"] }

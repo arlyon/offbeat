@@ -5,18 +5,20 @@ pub mod db;
 pub mod doc_manager;
 pub mod gossip_manager;
 pub mod groups;
+pub mod notifier;
 pub mod resource;
 pub mod signing;
+pub mod sync;
 pub mod topics;
 pub mod transport;
 pub mod types;
 pub mod ws_relay;
 
-use std::path::Path;
-use std::sync::Arc;
-use tokio::sync::Mutex;
-
 use std::collections::HashMap;
+use std::path::Path;
+use std::sync::{Arc, RwLock};
+
+use tokio::sync::Mutex;
 
 use chat::ChatManager;
 use db::Database;
@@ -25,6 +27,9 @@ use gossip_manager::GossipManager;
 use groups::GroupManager;
 use iroh::endpoint::presets;
 use iroh_gossip::net::{Gossip, GOSSIP_ALPN};
+use notifier::ResourceNotifier;
+use resource::ResourceRegistry;
+use sync::SyncOrchestrator;
 use ws_relay::WsRelaySink;
 
 /// Top-level node that ties together the database, document manager, and
@@ -34,6 +39,12 @@ pub struct OffbeatNode {
     pub db: Arc<Database>,
     pub group_manager: Arc<GroupManager>,
     pub chat_manager: Arc<ChatManager>,
+    /// Resource registry for tracking syncable resources.
+    pub resource_registry: Arc<RwLock<ResourceRegistry>>,
+    /// Sync orchestrator for coordinating sync operations.
+    pub sync_orchestrator: Arc<SyncOrchestrator>,
+    /// Resource notifier for reactive updates.
+    pub notifier: Arc<ResourceNotifier>,
     /// Present when the node was created via `new_with_networking`.
     pub gossip_manager: Option<Arc<Mutex<GossipManager>>>,
     /// Present when the node was created via `new_with_networking`.
@@ -55,11 +66,22 @@ impl OffbeatNode {
         let doc_manager = Arc::new(Mutex::new(DocManager::new(db.clone())));
         let group_manager = Arc::new(GroupManager::new(db.clone(), doc_manager.clone()));
         let chat_manager = Arc::new(ChatManager::new(db.clone(), doc_manager.clone()));
+        let resource_registry = Arc::new(RwLock::new(ResourceRegistry::new()));
+        let sync_orchestrator = Arc::new(SyncOrchestrator::new(
+            resource_registry.clone(),
+            doc_manager.clone(),
+            chat_manager.clone(),
+            db.clone(),
+        ));
+        let notifier = ResourceNotifier::new_arc();
         Ok(Self {
             doc_manager,
             db,
             group_manager,
             chat_manager,
+            resource_registry,
+            sync_orchestrator,
+            notifier,
             gossip_manager: None,
             gossip: None,
             endpoint: None,
@@ -74,11 +96,22 @@ impl OffbeatNode {
         let doc_manager = Arc::new(Mutex::new(DocManager::new(db.clone())));
         let group_manager = Arc::new(GroupManager::new(db.clone(), doc_manager.clone()));
         let chat_manager = Arc::new(ChatManager::new(db.clone(), doc_manager.clone()));
+        let resource_registry = Arc::new(RwLock::new(ResourceRegistry::new()));
+        let sync_orchestrator = Arc::new(SyncOrchestrator::new(
+            resource_registry.clone(),
+            doc_manager.clone(),
+            chat_manager.clone(),
+            db.clone(),
+        ));
+        let notifier = ResourceNotifier::new_arc();
         Ok(Self {
             doc_manager,
             db,
             group_manager,
             chat_manager,
+            resource_registry,
+            sync_orchestrator,
+            notifier,
             gossip_manager: None,
             gossip: None,
             endpoint: None,
@@ -96,6 +129,13 @@ impl OffbeatNode {
         let doc_manager = Arc::new(Mutex::new(DocManager::new(db.clone())));
         let group_manager = Arc::new(GroupManager::new(db.clone(), doc_manager.clone()));
         let chat_manager = Arc::new(ChatManager::new(db.clone(), doc_manager.clone()));
+        let resource_registry = Arc::new(RwLock::new(ResourceRegistry::new()));
+        let sync_orchestrator = Arc::new(SyncOrchestrator::new(
+            resource_registry.clone(),
+            doc_manager.clone(),
+            chat_manager.clone(),
+            db.clone(),
+        ));
 
         // Bind an iroh endpoint, accepting gossip connections.
         let endpoint = iroh::Endpoint::builder(presets::N0)
@@ -106,23 +146,30 @@ impl OffbeatNode {
         // Spawn the gossip actor; it takes ownership of a clone of the endpoint.
         let gossip = Gossip::builder().spawn(endpoint.clone());
 
-        let gossip_manager = Arc::new(Mutex::new(GossipManager::new(
-            gossip.clone(),
-            Arc::clone(&doc_manager),
-            Arc::clone(&db),
-            festival_public_key,
-        )));
+        let gossip_manager = Arc::new(Mutex::new(GossipManager::new(gossip.clone())));
+
+        // Store the festival public key for later use
+        let mut festival_public_keys = HashMap::new();
+        festival_public_keys.insert("default".to_string(), festival_public_key);
+
+        // Also register with sync orchestrator
+        sync_orchestrator.set_festival_public_key("default", festival_public_key);
+
+        let notifier = ResourceNotifier::new_arc();
 
         Ok(Self {
             doc_manager,
             db,
             group_manager,
             chat_manager,
+            resource_registry,
+            sync_orchestrator,
+            notifier,
             gossip_manager: Some(gossip_manager),
             gossip: Some(gossip),
             endpoint: Some(endpoint),
             ws_relay: None,
-            festival_public_keys: HashMap::new(),
+            festival_public_keys,
         })
     }
 }

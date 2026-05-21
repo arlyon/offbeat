@@ -2817,6 +2817,7 @@ dependencies = [
  "iroh",
  "iroh-gossip",
  "libc",
+ "parking_lot",
  "rand 0.10.1",
  "reqwest 0.12.28",
  "rusqlite",

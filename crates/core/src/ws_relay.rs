@@ -82,6 +82,13 @@ pub enum WsClientMessage {
         #[serde(rename = "sinceSeq")]
         since_seq: u64,
     },
+    /// Chat catchup request using per-writer HWM state vector.
+    ChatCatchup {
+        topic: String,
+        /// Per-writer high water marks (writer_id → last seen seq).
+        sv: std::collections::HashMap<String, u64>,
+        limit: u32,
+    },
 }
 
 /// Messages received from the DO.
@@ -267,6 +274,58 @@ impl WsRelaySink {
             .send(Message::Text(text.into()))
             .await
             .map_err(|e| anyhow::anyhow!("ws send error: {e}"))
+    }
+
+    /// Request chat messages since the given state vector.
+    ///
+    /// The state vector is a map of writer_id → last seen sequence number.
+    pub async fn chat_catchup(
+        &self,
+        topic: &str,
+        sv: &crate::sync::ChatStateVector,
+        limit: u32,
+    ) -> anyhow::Result<()> {
+        self.send_msg(&WsClientMessage::ChatCatchup {
+            topic: topic.to_string(),
+            sv: sv.writers.clone(),
+            limit,
+        })
+        .await
+    }
+
+    /// Broadcast raw data on a topic (encodes as gossip message).
+    pub async fn broadcast(&self, topic: &str, data: &[u8]) -> anyhow::Result<()> {
+        // Parse the data as a GossipWireMessage
+        let wire: GossipWireMessage = serde_json::from_slice(data)
+            .map_err(|e| anyhow::anyhow!("broadcast: invalid wire message: {e}"))?;
+        self.send_gossip(topic, &wire).await
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PeerConnection implementation
+// ---------------------------------------------------------------------------
+
+impl crate::sync::PeerConnection for WsRelaySink {
+    async fn subscribe(&self, topics: Vec<String>) -> anyhow::Result<()> {
+        WsRelaySink::subscribe(self, topics).await
+    }
+
+    async fn sv_exchange(&self, doc_id: &str, sv: &[u8]) -> anyhow::Result<()> {
+        WsRelaySink::sv_exchange(self, doc_id, sv).await
+    }
+
+    async fn chat_catchup(
+        &self,
+        topic: &str,
+        sv: &crate::sync::ChatStateVector,
+        limit: u32,
+    ) -> anyhow::Result<()> {
+        WsRelaySink::chat_catchup(self, topic, sv, limit).await
+    }
+
+    async fn broadcast(&self, topic: &str, data: &[u8]) -> anyhow::Result<()> {
+        WsRelaySink::broadcast(self, topic, data).await
     }
 }
 

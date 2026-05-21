@@ -2,9 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use futures_util::StreamExt;
 use iroh::EndpointId;
-use iroh_gossip::api::Event;
 use iroh_gossip::net::Gossip;
 use iroh_gossip::proto::TopicId;
 use tokio::sync::Mutex;
@@ -148,91 +146,58 @@ pub fn dispatch_message(
 }
 
 // ---------------------------------------------------------------------------
-// GossipManager — iroh-gossip networking layer
+// GossipManager — iroh-gossip networking layer (simplified)
 // ---------------------------------------------------------------------------
 
-/// Manages iroh-gossip subscriptions and routes incoming events to
-/// `dispatch_message`.
+/// Receiver handle for gossip events on a topic.
+pub type GossipReceiver = iroh_gossip::api::GossipReceiver;
+
+/// Manages iroh-gossip subscriptions and broadcasts.
+///
+/// This is a simplified version that only handles subscribe/unsubscribe/broadcast.
+/// Message dispatch is handled by `SyncOrchestrator`.
 pub struct GossipManager {
     gossip: Gossip,
-    /// Active topic handles, keyed by TopicId.
+    /// Active topic senders, keyed by TopicId.
     subscriptions: HashMap<TopicId, iroh_gossip::api::GossipSender>,
-    doc_manager: Arc<Mutex<DocManager>>,
-    db: Arc<Database>,
-    festival_public_key: [u8; 32],
+    /// Active topic receivers, keyed by TopicId.
+    receivers: HashMap<TopicId, GossipReceiver>,
 }
 
 impl GossipManager {
-    pub fn new(
-        gossip: Gossip,
-        doc_manager: Arc<Mutex<DocManager>>,
-        db: Arc<Database>,
-        festival_public_key: [u8; 32],
-    ) -> Self {
+    pub fn new(gossip: Gossip) -> Self {
         Self {
             gossip,
             subscriptions: HashMap::new(),
-            doc_manager,
-            db,
-            festival_public_key,
+            receivers: HashMap::new(),
         }
     }
 
-    /// Join a gossip topic and store a sender handle for later broadcasts.
+    /// Join a gossip topic and return a receiver for events.
     ///
     /// `bootstrap` is the list of peer endpoint IDs already on the topic.
+    /// The caller is responsible for draining the receiver.
     pub async fn subscribe(
         &mut self,
         topic_id: TopicId,
         bootstrap: Vec<EndpointId>,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<GossipReceiver> {
         let topic = self.gossip.subscribe(topic_id, bootstrap).await?;
-        let (sender, mut receiver) = topic.split();
+        let (sender, receiver) = topic.split();
         self.subscriptions.insert(topic_id, sender);
-
-        // Spawn a background task that drains events for this topic.
-        let doc_manager = Arc::clone(&self.doc_manager);
-        let db = Arc::clone(&self.db);
-        let festival_pk = self.festival_public_key;
-        tokio::spawn(async move {
-            while let Some(event) = receiver.next().await {
-                match event {
-                    Ok(Event::Received(msg)) => {
-                        if let Err(e) =
-                            handle_wire_bytes(&msg.content, &doc_manager, &db, festival_pk).await
-                        {
-                            tracing::warn!("gossip dispatch error: {e}");
-                        }
-                    }
-                    Ok(Event::NeighborUp(id)) => {
-                        tracing::debug!("neighbor up: {id}");
-                    }
-                    Ok(Event::NeighborDown(id)) => {
-                        tracing::debug!("neighbor down: {id}");
-                    }
-                    Ok(Event::Lagged) => {
-                        tracing::warn!("gossip receiver lagged — some messages were dropped");
-                    }
-                    Err(e) => {
-                        tracing::warn!("gossip receiver error: {e}");
-                        break;
-                    }
-                }
-            }
-        });
-
-        Ok(())
+        // Return a clone of the receiver
+        Ok(receiver)
     }
 
     /// Leave a previously joined gossip topic.
-    pub async fn unsubscribe(&mut self, topic_id: TopicId) -> anyhow::Result<()> {
+    pub fn unsubscribe(&mut self, topic_id: TopicId) {
         // Dropping the sender causes the gossip actor to leave the topic.
         self.subscriptions.remove(&topic_id);
-        Ok(())
+        self.receivers.remove(&topic_id);
     }
 
     /// Broadcast raw bytes to all peers on the given topic.
-    pub async fn publish(&mut self, topic_id: TopicId, data: Vec<u8>) -> anyhow::Result<()> {
+    pub async fn broadcast(&mut self, topic_id: TopicId, data: Vec<u8>) -> anyhow::Result<()> {
         let sender = self
             .subscriptions
             .get_mut(&topic_id)
@@ -241,43 +206,20 @@ impl GossipManager {
         Ok(())
     }
 
-    /// Encode a `GossipMessage` as a `GossipWireMessage` and broadcast it.
-    pub async fn publish_message(
+    /// Encode a `GossipMessage` and broadcast it on the given topic.
+    pub async fn broadcast_message(
         &mut self,
         topic_id: TopicId,
         msg: &GossipMessage,
     ) -> anyhow::Result<()> {
         let wire = encode_gossip_message(msg)?;
         let bytes = serde_json::to_vec(&wire)?;
-        self.publish(topic_id, bytes).await
+        self.broadcast(topic_id, bytes).await
     }
 
-    /// Broadcast a `sync_request` for `doc_id` on `topic_id`.
-    ///
-    /// The local state vector is encrypted with `group_key` before sending so
-    /// that eavesdroppers cannot infer doc structure.
-    pub async fn request_sync(
-        &mut self,
-        topic_id: TopicId,
-        doc_id: &str,
-        group_key: &[u8; 32],
-    ) -> anyhow::Result<()> {
-        use crate::crypto;
-
-        let sv_bytes = {
-            let mut dm = self.doc_manager.lock().await;
-            // Ensure doc exists (creates an empty one if not).
-            dm.get_or_create(doc_id);
-            dm.get_state_vector(doc_id)?
-        };
-
-        let encrypted_sv = crypto::encrypt(group_key, &sv_bytes)?;
-        let msg = GossipMessage::SyncRequest {
-            doc_id: doc_id.to_string(),
-            encrypted_sv,
-            group_key: *group_key,
-        };
-        self.publish_message(topic_id, &msg).await
+    /// Check if subscribed to a topic.
+    pub fn is_subscribed(&self, topic_id: &TopicId) -> bool {
+        self.subscriptions.contains_key(topic_id)
     }
 }
 
