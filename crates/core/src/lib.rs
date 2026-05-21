@@ -5,6 +5,7 @@ pub mod db;
 pub mod doc_manager;
 pub mod gossip_manager;
 pub mod groups;
+pub mod resource;
 pub mod signing;
 pub mod topics;
 pub mod transport;
