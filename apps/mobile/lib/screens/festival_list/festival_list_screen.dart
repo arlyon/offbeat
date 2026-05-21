@@ -14,8 +14,19 @@ import 'festival_row.dart';
 
 class FestivalListScreen extends StatefulWidget {
   final void Function(Festival) onFestivalTap;
+  final List<Festival> festivals;
+  final bool loading;
+  final String? error;
+  final VoidCallback? onRefresh;
 
-  const FestivalListScreen({super.key, required this.onFestivalTap});
+  const FestivalListScreen({
+    super.key,
+    required this.onFestivalTap,
+    required this.festivals,
+    this.loading = false,
+    this.error,
+    this.onRefresh,
+  });
 
   @override
   State<FestivalListScreen> createState() => _FestivalListScreenState();
@@ -34,9 +45,9 @@ class _FestivalListScreenState extends State<FestivalListScreen> {
   }
 
   List<Festival> get _filtered {
-    if (_query.isEmpty) return kFests;
+    if (_query.isEmpty) return widget.festivals;
     final q = _query.toLowerCase();
-    return kFests.where((f) {
+    return widget.festivals.where((f) {
       return f.name.toLowerCase().contains(q) ||
           f.city.toLowerCase().contains(q) ||
           f.genres.any((g) => g.toLowerCase().contains(q));
@@ -44,7 +55,7 @@ class _FestivalListScreenState extends State<FestivalListScreen> {
   }
 
   int get _activeCount =>
-      kFests.where((f) => f.status != FestStatus.past).length;
+      widget.festivals.where((f) => f.status != FestStatus.past).length;
 
   @override
   Widget build(BuildContext context) {
@@ -65,68 +76,90 @@ class _FestivalListScreenState extends State<FestivalListScreen> {
         ),
         // Scrollable body
         Expanded(
-          child: ListView(
-            padding: EdgeInsets.zero,
-            children: [
-              // Page header
-              _PageHeader(activeCount: _activeCount, savedCount: _saved.length),
-              // Search bar
-              _SearchBar(
-                controller: _searchController,
-                query: _query,
-                onChanged: (q) => setState(() => _query = q),
-                onClear: () {
-                  _searchController.clear();
-                  setState(() => _query = '');
-                },
-              ),
-              // Saved section
-              if (savedFests.isNotEmpty) ...[
-                _EyebrowRow(
-                  label: '// SAVED',
-                  pill: '★ ${savedFests.length}',
-                  right: 'EDIT',
-                  onRightTap: () {},
-                ),
-                ...savedFests.map(
-                  (f) => FestivalRow(
-                    fest: f,
-                    saved: _saved.contains(f.id),
-                    onToggleSave: () => setState(() {
-                      if (_saved.contains(f.id)) {
-                        _saved.remove(f.id);
-                      } else {
-                        _saved.add(f.id);
-                      }
-                    }),
-                    onTap: () => widget.onFestivalTap(f),
+          child: widget.loading && widget.festivals.isEmpty
+              ? const Center(
+                  child: CircularProgressIndicator(
+                    color: colorAccent,
+                    strokeWidth: 1.5,
+                  ),
+                )
+              : RefreshIndicator(
+                  color: colorAccent,
+                  backgroundColor: colorSurface1,
+                  onRefresh: () async => widget.onRefresh?.call(),
+                  child: ListView(
+                    padding: EdgeInsets.zero,
+                    children: [
+                      // Page header
+                      _PageHeader(
+                        activeCount: _activeCount,
+                        savedCount: _saved.length,
+                      ),
+                      // Error banner
+                      if (widget.error != null)
+                        _ErrorBanner(
+                          message: widget.error!,
+                          onRetry: widget.onRefresh,
+                        ),
+                      // Search bar
+                      _SearchBar(
+                        controller: _searchController,
+                        query: _query,
+                        onChanged: (q) => setState(() => _query = q),
+                        onClear: () {
+                          _searchController.clear();
+                          setState(() => _query = '');
+                        },
+                      ),
+                      // Saved section
+                      if (savedFests.isNotEmpty) ...[
+                        _EyebrowRow(
+                          label: '// SAVED',
+                          pill: '★ ${savedFests.length}',
+                          right: 'EDIT',
+                          onRightTap: () {},
+                        ),
+                        ...savedFests.map(
+                          (f) => FestivalRow(
+                            fest: f,
+                            saved: _saved.contains(f.id),
+                            onToggleSave: () => setState(() {
+                              if (_saved.contains(f.id)) {
+                                _saved.remove(f.id);
+                              } else {
+                                _saved.add(f.id);
+                              }
+                            }),
+                            onTap: () => widget.onFestivalTap(f),
+                          ),
+                        ),
+                      ],
+                      // Discover section
+                      _EyebrowRow(
+                        label: '// DISCOVER',
+                        right: '${discoverFests.length} FESTIVALS',
+                      ),
+                      ...discoverFests.map(
+                        (f) => FestivalRow(
+                          fest: f,
+                          saved: _saved.contains(f.id),
+                          onToggleSave: () => setState(() {
+                            if (_saved.contains(f.id)) {
+                              _saved.remove(f.id);
+                            } else {
+                              _saved.add(f.id);
+                            }
+                          }),
+                          onTap: () => widget.onFestivalTap(f),
+                        ),
+                      ),
+                      // Empty state
+                      if (filtered.isEmpty && !widget.loading)
+                        _EmptyState(query: _query),
+                      const SizedBox(height: 24),
+                    ],
                   ),
                 ),
-              ],
-              // Discover section
-              _EyebrowRow(
-                label: '// DISCOVER',
-                right: '${discoverFests.length} FESTIVALS',
-              ),
-              ...discoverFests.map(
-                (f) => FestivalRow(
-                  fest: f,
-                  saved: _saved.contains(f.id),
-                  onToggleSave: () => setState(() {
-                    if (_saved.contains(f.id)) {
-                      _saved.remove(f.id);
-                    } else {
-                      _saved.add(f.id);
-                    }
-                  }),
-                  onTap: () => widget.onFestivalTap(f),
-                ),
-              ),
-              // Empty state
-              if (filtered.isEmpty) _EmptyState(query: _query),
-              const SizedBox(height: 24),
-            ],
-          ),
         ),
       ],
     );
@@ -348,6 +381,57 @@ class _EyebrowRow extends StatelessWidget {
               ),
             ),
         ],
+      ),
+    );
+  }
+}
+
+class _ErrorBanner extends StatelessWidget {
+  final String message;
+  final VoidCallback? onRetry;
+  const _ErrorBanner({required this.message, this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(18, 0, 18, 8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          border: Border.all(color: colorAccent, width: 1),
+          color: colorSurface1,
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.cloud_off, size: 14, color: colorFg3),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                message.toUpperCase(),
+                style: const TextStyle(
+                  fontFamily: 'JetBrainsMono',
+                  fontSize: 10,
+                  color: colorFg3,
+                  letterSpacing: 0.06 * 10,
+                ),
+              ),
+            ),
+            if (onRetry != null)
+              GestureDetector(
+                onTap: onRetry,
+                child: const Text(
+                  'RETRY',
+                  style: TextStyle(
+                    fontFamily: 'JetBrainsMono',
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    color: colorAccent,
+                    letterSpacing: 0.08 * 10,
+                  ),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }

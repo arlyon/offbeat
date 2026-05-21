@@ -16,6 +16,7 @@ import 'screens/you/registration_screen.dart';
 import 'screens/you/you_screen.dart';
 import 'services/auth_service.dart';
 import 'services/admin_service.dart';
+import 'services/festival_service.dart';
 import 'src/rust/api.dart';
 import 'src/rust/frb_generated.dart';
 
@@ -67,6 +68,11 @@ class _OffbeatShellState extends State<_OffbeatShell> {
   String _publicKeyHex = '';
   String? _displayName;
 
+  // Festival state
+  List<Festival> _festivals = [];
+  bool _festivalsLoading = false;
+  String? _festivalsError;
+
   // Admin state
   bool _isAdmin = false;
   List<String> _adminKeys = [];
@@ -75,11 +81,13 @@ class _OffbeatShellState extends State<_OffbeatShell> {
 
   final _authService = AuthService();
   final _adminService = AdminService();
+  final _festivalService = FestivalService();
 
   @override
   void initState() {
     super.initState();
     _initNode();
+    _loadFestivals();
   }
 
   Future<void> _initNode() async {
@@ -117,6 +125,33 @@ class _OffbeatShellState extends State<_OffbeatShell> {
       _isAdmin = isAdmin;
       if (isAdmin) _adminRequestStatus = 'already_admin';
     });
+  }
+
+  Future<void> _loadFestivals() async {
+    setState(() {
+      _festivalsLoading = true;
+      _festivalsError = null;
+    });
+    try {
+      final festivals = await _festivalService.fetchFestivals();
+      if (!mounted) return;
+      setState(() {
+        _festivals = festivals;
+        _festivalsLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _festivalsLoading = false;
+        // Fall back to mock data when server is unreachable
+        if (_festivals.isEmpty) {
+          _festivals = kFests;
+          _festivalsError = 'offline — showing cached data';
+        } else {
+          _festivalsError = 'could not refresh';
+        }
+      });
+    }
   }
 
   Future<void> _handleRegister() async {
@@ -324,6 +359,10 @@ class _OffbeatShellState extends State<_OffbeatShell> {
           );
         }
         return FestivalListScreen(
+          festivals: _festivals,
+          loading: _festivalsLoading,
+          error: _festivalsError,
+          onRefresh: _loadFestivals,
           onFestivalTap: (fest) => _onFestivalTap(fest),
         );
       case AppTab.schedule:

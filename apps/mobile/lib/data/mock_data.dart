@@ -40,6 +40,82 @@ class Festival {
     required this.status,
     required this.headliners,
   });
+
+  /// Parse a festival from the server's JSON response.
+  factory Festival.fromJson(Map<String, dynamic> j) {
+    final startDate = DateTime.tryParse(j['startDate'] as String? ?? '');
+    final endDate = DateTime.tryParse(j['endDate'] as String? ?? '');
+    final now = DateTime.now();
+
+    // Build human-readable date range string
+    String dates = '';
+    List<String> dateRange = [];
+    int daysAway = 0;
+    if (startDate != null && endDate != null) {
+      dates = _formatDateRange(startDate, endDate);
+      dateRange = _buildDateRange(startDate, endDate);
+      daysAway = startDate.difference(now).inDays;
+    }
+
+    // Parse status
+    final statusStr = (j['status'] as String?) ?? 'upcoming';
+    FestStatus status;
+    if (statusStr == 'live') {
+      status = FestStatus.live;
+    } else if (statusStr == 'past') {
+      status = FestStatus.past;
+    } else {
+      status = FestStatus.upcoming;
+    }
+
+    // Derive a hue from the festival ID for the art tile
+    int hue = 0;
+    for (final c in (j['id'] as String).codeUnits) {
+      hue = (hue + c) % 360;
+    }
+
+    final stages = j['stages'] as List<dynamic>? ?? [];
+
+    return Festival(
+      id: j['id'] as String,
+      name: j['name'] as String,
+      year: (j['year'] ?? '').toString(),
+      where: j['location'] as String? ?? '',
+      city: j['city'] as String? ?? '',
+      cc: j['country'] as String? ?? '',
+      dates: dates,
+      dateRange: dateRange,
+      daysAway: daysAway,
+      stages: stages.length,
+      sets: 0, // sets count comes from the lineup endpoint
+      saved: 0,
+      hue: hue,
+      genres: (j['genres'] as List<dynamic>?)?.cast<String>() ?? [],
+      status: status,
+      headliners: const [], // headliners come from the lineup endpoint
+    );
+  }
+
+  static String _formatDateRange(DateTime start, DateTime end) {
+    const months = [
+      'JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
+      'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC',
+    ];
+    if (start.month == end.month) {
+      return '${start.day}–${end.day} ${months[start.month - 1]} ${start.year}';
+    }
+    return '${start.day} ${months[start.month - 1]}–${end.day} ${months[end.month - 1]} ${start.year}';
+  }
+
+  static List<String> _buildDateRange(DateTime start, DateTime end) {
+    final days = <String>[];
+    var d = start;
+    while (!d.isAfter(end)) {
+      days.add(d.toIso8601String().split('T')[0]);
+      d = d.add(const Duration(days: 1));
+    }
+    return days;
+  }
 }
 
 enum FestStatus { live, upcoming, past }
