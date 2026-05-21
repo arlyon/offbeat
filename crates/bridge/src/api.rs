@@ -60,6 +60,17 @@ pub struct IdentityDto {
     pub display_name: Option<String>,
 }
 
+pub struct AuthStateDto {
+    pub state: String,
+    pub expires_at: Option<String>,
+}
+
+pub struct AttestationDto {
+    pub message: String,
+    pub signature: String,
+    pub issuer: String,
+}
+
 // ---------------------------------------------------------------------------
 // Opaque node handle
 // ---------------------------------------------------------------------------
@@ -317,7 +328,7 @@ impl AppNode {
     /// the dispatch pipeline. The WS sink is stored on the node for sending.
     /// Auto-reconnects on disconnect with exponential backoff.
     pub async fn connect_relay(&mut self, url: String) -> anyhow::Result<()> {
-        use offbeat_core::ws_relay;
+        use offbeat_core::{auth, ws_relay};
         use std::sync::Arc;
 
         let doc_manager = Arc::clone(&self.inner.doc_manager);
@@ -330,6 +341,16 @@ impl AppNode {
             None, // festival public key set later via subscribe_festival
         )
         .await?;
+
+        // Authenticate if we have an attestation
+        if let Ok(Some(attestation)) = auth::load_attestation(&self.inner.db) {
+            if let Ok(signing_key) = auth::generate_or_load_identity(&self.inner.db) {
+                let pubkey_hex = auth::get_public_key_hex(&signing_key);
+                if let Err(e) = sink.authenticate(&pubkey_hex, &attestation, &signing_key).await {
+                    tracing::warn!("ws relay auth failed: {e}");
+                }
+            }
+        }
 
         self.inner.ws_relay = Some(Arc::new(sink));
 
@@ -435,6 +456,63 @@ impl AppNode {
     /// Persist a display name for the local user.
     pub fn set_display_name(&self, name: String) -> anyhow::Result<()> {
         offbeat_core::auth::set_display_name(&self.inner.db, &name)
+    }
+
+    /// Derive the Ed25519 identity from a WebAuthn PRF output (32 bytes).
+    /// Returns the hex-encoded Ed25519 public key.
+    pub fn derive_identity_from_prf(&self, prf_output: Vec<u8>) -> anyhow::Result<String> {
+        let arr: [u8; 32] = prf_output
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("PRF output must be exactly 32 bytes"))?;
+        let key = offbeat_core::auth::derive_identity_from_prf(&self.inner.db, &arr)?;
+        Ok(offbeat_core::auth::get_public_key_hex(&key))
+    }
+
+    /// Get the hex-encoded Ed25519 public key of the local identity.
+    pub fn get_public_key_hex(&self) -> anyhow::Result<String> {
+        let key = offbeat_core::auth::generate_or_load_identity(&self.inner.db)?;
+        Ok(offbeat_core::auth::get_public_key_hex(&key))
+    }
+
+    /// Get the current authentication state.
+    pub fn get_auth_state(&self) -> anyhow::Result<AuthStateDto> {
+        use offbeat_core::auth::{self, AuthState};
+        let state = auth::attestation_state(&self.inner.db)?;
+        let (state_str, expires_at) = match &state {
+            AuthState::Unregistered => ("unregistered".to_string(), None),
+            AuthState::Valid => ("valid".to_string(), None),
+            AuthState::Expiring(days) => ("expiring".to_string(), Some(format!("{days} days"))),
+            AuthState::Expired => ("expired".to_string(), None),
+        };
+        Ok(AuthStateDto {
+            state: state_str,
+            expires_at,
+        })
+    }
+
+    /// Store an attestation received from the MainDO.
+    pub fn store_attestation(
+        &self,
+        message: String,
+        signature: String,
+        issuer: String,
+    ) -> anyhow::Result<()> {
+        let att = offbeat_core::auth::Attestation {
+            message,
+            signature,
+            issuer,
+        };
+        offbeat_core::auth::store_attestation(&self.inner.db, &att)
+    }
+
+    /// Load the stored attestation, if any.
+    pub fn get_attestation(&self) -> anyhow::Result<Option<AttestationDto>> {
+        let att = offbeat_core::auth::load_attestation(&self.inner.db)?;
+        Ok(att.map(|a| AttestationDto {
+            message: a.message,
+            signature: a.signature,
+            issuer: a.issuer,
+        }))
     }
 
     // -----------------------------------------------------------------------

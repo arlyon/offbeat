@@ -12,6 +12,9 @@ import 'shell/top_nav.dart';
 import 'data/mock_data.dart';
 import 'screens/festival_list/festival_list_screen.dart';
 import 'screens/festival_detail/festival_detail_screen.dart';
+import 'screens/you/registration_screen.dart';
+import 'screens/you/you_screen.dart';
+import 'services/auth_service.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -48,6 +51,34 @@ class _OffbeatShell extends StatefulWidget {
 class _OffbeatShellState extends State<_OffbeatShell> {
   AppTab _activeTab = AppTab.festivals;
   Festival? _selectedFestival;
+
+  // Auth state — in a real app this would come from the Rust bridge.
+  // For now, we track it in Dart state until FRB codegen is wired up.
+  String _authState = 'unregistered'; // unregistered, valid, expiring, expired
+  String? _authExpiresAt;
+  String _userId = '';
+  String _publicKeyHex = '';
+  String? _displayName;
+
+  final _authService = AuthService();
+
+  Future<void> _handleRegister() async {
+    // TODO: PRF derivation via Rust bridge once FRB is wired
+    // For now, generate a random identity and register it
+    _publicKeyHex = 'a' * 64; // placeholder until bridge is connected
+
+    final attestation = await _authService.register(
+      ed25519PublicKeyHex: _publicKeyHex,
+    );
+
+    // TODO: Store attestation via Rust bridge
+    // AppNode.storeAttestation(attestation['message'], attestation['signature'], attestation['issuer']);
+
+    setState(() {
+      _authState = 'valid';
+      _userId = _publicKeyHex.substring(0, 16);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -105,9 +136,19 @@ class _OffbeatShellState extends State<_OffbeatShell> {
       case AppTab.now:
         return NowTabPlaceholder();
       case AppTab.you:
-        return _PlaceholderTab(
-          label: 'YOU',
-          sublabel: 'Your profile & preferences',
+        if (_authState == 'unregistered') {
+          return RegistrationScreen(onRegister: _handleRegister);
+        }
+        return YouScreen(
+          userId: _userId,
+          publicKeyHex: _publicKeyHex,
+          displayName: _displayName,
+          authState: _authState,
+          expiresAt: _authExpiresAt,
+          onDisplayNameChanged: (name) {
+            setState(() => _displayName = name);
+            // TODO: AppNode.setDisplayName(name) via bridge
+          },
         );
     }
   }
