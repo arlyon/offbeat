@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
-import type { ClashfinderEvent } from "@offbeat/protocol";
-import { parseClashfinder } from "@offbeat/protocol";
+import type { ClashfinderEvent, ClashfinderSource, Lineup } from "@offbeat/protocol";
+import { fetchClashfinder, parseClashfinder, parseClashfinderApi } from "@offbeat/protocol";
 import fieldday26 from "../../../packages/protocol/fixtures/fieldday26.json";
 import {
 	createJwt,
@@ -9,6 +9,7 @@ import {
 	verifyAuthentication,
 	verifyRegistration,
 } from "./auth";
+import { verify } from "./signing";
 
 const FIELDDAY26_ID = "fieldday26";
 
@@ -67,11 +68,26 @@ export class MainDO extends DurableObject {
 				sort_order INTEGER NOT NULL
 			);
 
-			CREATE TABLE IF NOT EXISTS festival_history (
-				id INTEGER PRIMARY KEY AUTOINCREMENT,
+			CREATE TABLE IF NOT EXISTS festival_days (
+				id TEXT NOT NULL,
 				festival_id TEXT NOT NULL REFERENCES festivals(id),
-				data BLOB NOT NULL,
-				created_at TEXT NOT NULL DEFAULT (datetime('now'))
+				label TEXT NOT NULL,
+				num INTEGER NOT NULL,
+				month TEXT NOT NULL,
+				PRIMARY KEY (festival_id, id)
+			);
+
+			CREATE TABLE IF NOT EXISTS festival_sets (
+				id TEXT NOT NULL,
+				festival_id TEXT NOT NULL REFERENCES festivals(id),
+				day_id TEXT NOT NULL,
+				stage_id TEXT NOT NULL,
+				artist TEXT NOT NULL,
+				start_min INTEGER NOT NULL,
+				duration_min INTEGER NOT NULL,
+				genre TEXT NOT NULL DEFAULT '',
+				cancelled INTEGER NOT NULL DEFAULT 0,
+				PRIMARY KEY (festival_id, id)
 			);
 
 			CREATE TABLE IF NOT EXISTS credentials (
@@ -116,16 +132,54 @@ export class MainDO extends DurableObject {
 			FIELDDAY26_META.public_key,
 		);
 
+		this.#upsertLineup(FIELDDAY26_ID, lineup);
+	}
+
+	/** Insert or replace stages, days, and sets for a festival. */
+	#upsertLineup(festivalId: string, lineup: Lineup) {
+		// Clear existing lineup data for this festival
+		this.sql.exec("DELETE FROM festival_sets WHERE festival_id = ?", festivalId);
+		this.sql.exec("DELETE FROM festival_days WHERE festival_id = ?", festivalId);
+		this.sql.exec("DELETE FROM festival_stages WHERE festival_id = ?", festivalId);
+
 		for (const stage of lineup.stages) {
 			this.sql.exec(
 				`INSERT INTO festival_stages (id, festival_id, name, short, color, sort_order)
 				 VALUES (?, ?, ?, ?, ?, ?)`,
 				stage.id,
-				FIELDDAY26_ID,
+				festivalId,
 				stage.name,
 				stage.short,
 				stage.color,
 				stage.order,
+			);
+		}
+
+		for (const day of lineup.days) {
+			this.sql.exec(
+				`INSERT INTO festival_days (id, festival_id, label, num, month)
+				 VALUES (?, ?, ?, ?, ?)`,
+				day.id,
+				festivalId,
+				day.label,
+				day.num,
+				day.month,
+			);
+		}
+
+		for (const set of lineup.sets) {
+			this.sql.exec(
+				`INSERT INTO festival_sets (id, festival_id, day_id, stage_id, artist, start_min, duration_min, genre, cancelled)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				set.id,
+				festivalId,
+				set.day,
+				set.stage,
+				set.artist,
+				set.startMin,
+				set.durationMin,
+				set.genre,
+				set.cancelled ? 1 : 0,
 			);
 		}
 	}
@@ -201,6 +255,78 @@ export class MainDO extends DurableObject {
 		};
 	}
 
+	/**
+	 * Verify admin auth from request headers.
+	 * Expects `X-Admin-Key` (hex public key) and `X-Admin-Sig` (hex signature
+	 * over the request path). Returns null on success, or an error Response.
+	 */
+	async #requireAdmin(request: Request): Promise<Response | null> {
+		const pubKeyHex = request.headers.get("X-Admin-Key");
+		const sigHex = request.headers.get("X-Admin-Sig");
+		if (!pubKeyHex || !sigHex) {
+			return new Response("X-Admin-Key and X-Admin-Sig headers required", { status: 401 });
+		}
+
+		const isAdmin =
+			this.sql.exec("SELECT 1 FROM admins WHERE public_key = ?", pubKeyHex).toArray().length > 0;
+		if (!isAdmin) {
+			return new Response("Not an admin", { status: 403 });
+		}
+
+		const url = new URL(request.url);
+		const message = new TextEncoder().encode(url.pathname);
+		const valid = await verify(hexToBytes(pubKeyHex), message, hexToBytes(sigHex));
+		if (!valid) {
+			return new Response("Invalid signature", { status: 401 });
+		}
+
+		return null;
+	}
+
+	#getLineup(id: string): Lineup | null {
+		const festival = this.#getFestival(id);
+		if (!festival) return null;
+
+		const stages = this.sql
+			.exec("SELECT * FROM festival_stages WHERE festival_id = ? ORDER BY sort_order", id)
+			.toArray() as Record<string, unknown>[];
+
+		const days = this.sql
+			.exec("SELECT * FROM festival_days WHERE festival_id = ? ORDER BY num", id)
+			.toArray() as Record<string, unknown>[];
+
+		const sets = this.sql
+			.exec("SELECT * FROM festival_sets WHERE festival_id = ? ORDER BY start_min", id)
+			.toArray() as Record<string, unknown>[];
+
+		return {
+			festival: { id, name: festival.name as string, location: festival.location as string },
+			stages: stages.map((s) => ({
+				id: s.id as string,
+				name: s.name as string,
+				short: s.short as string,
+				color: s.color as string,
+				order: s.sort_order as number,
+			})),
+			days: days.map((d) => ({
+				id: d.id as string,
+				label: d.label as string,
+				num: d.num as number,
+				month: d.month as string,
+			})),
+			sets: sets.map((s) => ({
+				id: s.id as string,
+				day: s.day_id as string,
+				stage: s.stage_id as string,
+				artist: s.artist as string,
+				startMin: s.start_min as number,
+				durationMin: s.duration_min as number,
+				genre: s.genre as string,
+				cancelled: (s.cancelled as number) === 1,
+			})),
+		};
+	}
+
 	async fetch(request: Request): Promise<Response> {
 		const url = new URL(request.url);
 		const path = url.pathname;
@@ -215,12 +341,9 @@ export class MainDO extends DurableObject {
 		const lineupMatch = path.match(/^\/festivals\/([^/]+)\/lineup$/);
 		if (method === "GET" && lineupMatch) {
 			const id = lineupMatch[1];
-			if (id === FIELDDAY26_ID) {
-				const events = fieldday26 as ClashfinderEvent[];
-				const lineup = parseClashfinder(id, events);
-				return Response.json(lineup);
-			}
-			return new Response("Festival not found", { status: 404 });
+			const lineup = this.#getLineup(id);
+			if (!lineup) return new Response("Festival not found", { status: 404 });
+			return Response.json(lineup);
 		}
 
 		// GET /festivals/:id
@@ -230,6 +353,210 @@ export class MainDO extends DurableObject {
 			const festival = this.#getFestival(id);
 			if (!festival) return new Response("Festival not found", { status: 404 });
 			return Response.json(festival);
+		}
+
+		// POST /festivals — create a new festival (admin-only).
+		// Accepts either:
+		//   1. Direct metadata: { id, name, startDate, endDate, ... }
+		//   2. ClashfinderSource: { source: { festivalId, clashfinderId, name, location, city, country, genres } }
+		//      → fetches lineup from Clashfinder API and stores it
+		if (method === "POST" && path === "/festivals") {
+			const authResult = await this.#requireAdmin(request);
+			if (authResult instanceof Response) return authResult;
+
+			const body = (await request.json()) as {
+				// Direct creation
+				id?: string;
+				name?: string;
+				year?: number;
+				location?: string;
+				city?: string;
+				country?: string;
+				startDate?: string;
+				endDate?: string;
+				genres?: string[];
+				status?: string;
+				// ClashfinderSource creation
+				source?: ClashfinderSource;
+			};
+
+			if (body.source) {
+				const src = body.source;
+				if (!src.festivalId || !src.clashfinderId || !src.name) {
+					return new Response("source requires festivalId, clashfinderId, name", {
+						status: 400,
+					});
+				}
+
+				if (this.#getFestival(src.festivalId)) {
+					return new Response("Festival already exists", { status: 409 });
+				}
+
+				// Fetch lineup from Clashfinder API
+				const cfUsername = (this.env as Record<string, string>).CLASHFINDER_USERNAME;
+				const cfKey = (this.env as Record<string, string>).CLASHFINDER_PRIVATE_KEY;
+				if (!cfUsername || !cfKey) {
+					return new Response("Clashfinder credentials not configured", { status: 500 });
+				}
+
+				const apiResponse = await fetchClashfinder(src.clashfinderId, {
+					username: cfUsername,
+					privateKey: cfKey,
+				});
+				const lineup = parseClashfinderApi(src.festivalId, apiResponse, {
+					name: src.name,
+					location: src.location,
+				});
+
+				// Derive start/end dates from the lineup days
+				const dayNums = lineup.days.map((d) => d.num);
+				const minDay = Math.min(...dayNums);
+				const maxDay = Math.max(...dayNums);
+				// Best-effort date construction from day numbers + month
+				const month = lineup.days[0]?.month ?? "Jan";
+				const monthIdx = [
+					"Jan",
+					"Feb",
+					"Mar",
+					"Apr",
+					"May",
+					"Jun",
+					"Jul",
+					"Aug",
+					"Sep",
+					"Oct",
+					"Nov",
+					"Dec",
+				].indexOf(month);
+				const year = new Date().getFullYear();
+				const startDate = new Date(year, monthIdx, minDay).toISOString().split("T")[0];
+				const endDate = new Date(year, monthIdx, maxDay).toISOString().split("T")[0];
+
+				this.sql.exec(
+					`INSERT INTO festivals (id, name, year, location, city, country, start_date, end_date, genres, status)
+					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+					src.festivalId,
+					src.name,
+					year,
+					src.location ?? "",
+					src.city ?? "",
+					src.country ?? "",
+					startDate,
+					endDate,
+					JSON.stringify(src.genres ?? []),
+					"upcoming",
+				);
+
+				this.#upsertLineup(src.festivalId, lineup);
+
+				return Response.json(
+					{ festival: this.#getFestival(src.festivalId), lineup: this.#getLineup(src.festivalId) },
+					{ status: 201 },
+				);
+			}
+
+			// Direct creation
+			if (!body.id || !body.name || !body.startDate || !body.endDate) {
+				return new Response("id, name, startDate, endDate required (or provide source)", {
+					status: 400,
+				});
+			}
+
+			if (this.#getFestival(body.id)) {
+				return new Response("Festival already exists", { status: 409 });
+			}
+
+			this.sql.exec(
+				`INSERT INTO festivals (id, name, year, location, city, country, start_date, end_date, genres, status)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				body.id,
+				body.name,
+				body.year ?? new Date(body.startDate).getFullYear(),
+				body.location ?? "",
+				body.city ?? "",
+				body.country ?? "",
+				body.startDate,
+				body.endDate,
+				JSON.stringify(body.genres ?? []),
+				body.status ?? "upcoming",
+			);
+
+			return Response.json(this.#getFestival(body.id), { status: 201 });
+		}
+
+		// PUT /festivals/:id — update festival metadata (admin-only)
+		const festivalPutMatch = path.match(/^\/festivals\/([^/]+)$/);
+		if (method === "PUT" && festivalPutMatch) {
+			const authResult = await this.#requireAdmin(request);
+			if (authResult instanceof Response) return authResult;
+
+			const id = festivalPutMatch[1];
+			if (!this.#getFestival(id)) {
+				return new Response("Festival not found", { status: 404 });
+			}
+
+			const body = (await request.json()) as Record<string, unknown>;
+			const updates: string[] = [];
+			const values: unknown[] = [];
+
+			for (const [key, col] of [
+				["name", "name"],
+				["year", "year"],
+				["location", "location"],
+				["city", "city"],
+				["country", "country"],
+				["startDate", "start_date"],
+				["endDate", "end_date"],
+				["status", "status"],
+			]) {
+				if (body[key] !== undefined) {
+					updates.push(`${col} = ?`);
+					values.push(body[key]);
+				}
+			}
+			if (body.genres !== undefined) {
+				updates.push("genres = ?");
+				values.push(JSON.stringify(body.genres));
+			}
+
+			if (updates.length > 0) {
+				updates.push("updated_at = datetime('now')");
+				values.push(id);
+				this.sql.exec(`UPDATE festivals SET ${updates.join(", ")} WHERE id = ?`, ...values);
+			}
+
+			return Response.json(this.#getFestival(id));
+		}
+
+		// PUT /festivals/:id/lineup — replace the lineup (admin-only)
+		const lineupPutMatch = path.match(/^\/festivals\/([^/]+)\/lineup$/);
+		if (method === "PUT" && lineupPutMatch) {
+			const authResult = await this.#requireAdmin(request);
+			if (authResult instanceof Response) return authResult;
+
+			const id = lineupPutMatch[1];
+			if (!this.#getFestival(id)) {
+				return new Response("Festival not found", { status: 404 });
+			}
+
+			const body = (await request.json()) as {
+				/** Raw ClashfinderEvent[] to parse, OR a pre-parsed lineup */
+				events?: ClashfinderEvent[];
+				lineup?: Lineup;
+			};
+
+			let lineup: Lineup;
+			if (body.lineup) {
+				lineup = body.lineup;
+			} else if (body.events) {
+				lineup = parseClashfinder(id, body.events);
+			} else {
+				return new Response("events or lineup required", { status: 400 });
+			}
+
+			this.#upsertLineup(id, lineup);
+
+			return Response.json(this.#getLineup(id));
 		}
 
 		// POST /auth/register/begin
@@ -315,4 +642,12 @@ export class MainDO extends DurableObject {
 
 		return new Response("Not found", { status: 404 });
 	}
+}
+
+function hexToBytes(hex: string): Uint8Array {
+	const bytes = new Uint8Array(hex.length / 2);
+	for (let i = 0; i < hex.length; i += 2) {
+		bytes[i / 2] = Number.parseInt(hex.substring(i, i + 2), 16);
+	}
+	return bytes;
 }

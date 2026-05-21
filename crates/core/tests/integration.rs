@@ -2173,3 +2173,295 @@ async fn test_global_admins_inherited_by_festival_do() {
     let key_hex = resp.text().await.unwrap();
     assert_eq!(key_hex.len(), 64);
 }
+
+// =============================================================================
+// Helpers for admin-authenticated requests
+// =============================================================================
+
+/// Build auth headers: X-Admin-Key (hex pubkey) and X-Admin-Sig (hex sig over path).
+fn admin_headers(
+    key: &ed25519_dalek::SigningKey,
+    path: &str,
+) -> reqwest::header::HeaderMap {
+    use offbeat_core::signing;
+    use reqwest::header::{HeaderMap, HeaderValue};
+
+    let pub_hex = bytes_to_hex(&key.verifying_key().to_bytes());
+    let sig = signing::sign(key, path.as_bytes());
+    let sig_hex = bytes_to_hex(&sig);
+
+    let mut headers = HeaderMap::new();
+    headers.insert("X-Admin-Key", HeaderValue::from_str(&pub_hex).unwrap());
+    headers.insert("X-Admin-Sig", HeaderValue::from_str(&sig_hex).unwrap());
+    headers
+}
+
+// =============================================================================
+// Test: Create festival via POST, read it back, publish lineup
+// =============================================================================
+
+#[tokio::test]
+async fn test_create_festival_and_publish_lineup() {
+    let server = DevServer::start().await;
+    let base = server.http_url();
+    let client = reqwest::Client::new();
+
+    // Register admin
+    let admin_key = offbeat_core::signing::generate_signing_key();
+    let admin_pub_hex = bytes_to_hex(&admin_key.verifying_key().to_bytes());
+    client
+        .put(format!("{base}/admins"))
+        .json(&json!({ "publicKey": admin_pub_hex }))
+        .send()
+        .await
+        .unwrap();
+
+    // Create festival
+    let resp = client
+        .post(format!("{base}/festivals"))
+        .headers(admin_headers(&admin_key, "/festivals"))
+        .json(&json!({
+            "id": "testfest-1",
+            "name": "Test Festival",
+            "year": 2026,
+            "location": "Hyde Park",
+            "city": "London",
+            "country": "GB",
+            "startDate": "2026-07-01",
+            "endDate": "2026-07-03",
+            "genres": ["Rock", "Electronic"],
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201, "festival creation should succeed");
+
+    let festival: Value = resp.json().await.unwrap();
+    assert_eq!(festival["id"], "testfest-1");
+    assert_eq!(festival["name"], "Test Festival");
+    assert_eq!(festival["city"], "London");
+
+    // Read it back via GET
+    let resp = client.get(format!("{base}/festivals/testfest-1")).send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let fetched: Value = resp.json().await.unwrap();
+    assert_eq!(fetched["name"], "Test Festival");
+
+    // It should appear in the festivals list
+    let resp = client.get(format!("{base}/festivals")).send().await.unwrap();
+    let festivals: Vec<Value> = resp.json().await.unwrap();
+    assert!(festivals.iter().any(|f| f["id"] == "testfest-1"));
+
+    // Publish lineup with raw ClashfinderEvent data
+    let events = json!([
+        { "artist": "The Cure", "stage": "Main Stage", "day": "friday", "start": "21:00", "end": "23:00" },
+        { "artist": "LCD Soundsystem", "stage": "Main Stage", "day": "saturday", "start": "22:00", "end": "23:30" },
+        { "artist": "Four Tet", "stage": "Tent", "day": "friday", "start": "20:00", "end": "21:30" },
+    ]);
+
+    let resp = client
+        .put(format!("{base}/festivals/testfest-1/lineup"))
+        .headers(admin_headers(&admin_key, "/festivals/testfest-1/lineup"))
+        .json(&json!({ "events": events }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "lineup publish should succeed");
+
+    let lineup: Value = resp.json().await.unwrap();
+    assert_eq!(lineup["stages"].as_array().unwrap().len(), 2); // Main Stage + Tent
+    assert_eq!(lineup["sets"].as_array().unwrap().len(), 3);
+
+    // Read lineup via GET
+    let resp = client.get(format!("{base}/festivals/testfest-1/lineup")).send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let fetched_lineup: Value = resp.json().await.unwrap();
+    assert_eq!(fetched_lineup["sets"].as_array().unwrap().len(), 3);
+
+    // Verify artists are correct
+    let artists: Vec<&str> = fetched_lineup["sets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["artist"].as_str().unwrap())
+        .collect();
+    assert!(artists.contains(&"The Cure"));
+    assert!(artists.contains(&"LCD Soundsystem"));
+    assert!(artists.contains(&"Four Tet"));
+}
+
+// =============================================================================
+// Test: Non-admin cannot create or update festivals
+// =============================================================================
+
+#[tokio::test]
+async fn test_festival_crud_requires_admin() {
+    let server = DevServer::start().await;
+    let base = server.http_url();
+    let client = reqwest::Client::new();
+
+    // Register a real admin
+    let admin_key = offbeat_core::signing::generate_signing_key();
+    let admin_pub_hex = bytes_to_hex(&admin_key.verifying_key().to_bytes());
+    client
+        .put(format!("{base}/admins"))
+        .json(&json!({ "publicKey": admin_pub_hex }))
+        .send()
+        .await
+        .unwrap();
+
+    // Non-admin tries to create festival (no auth headers)
+    let resp = client
+        .post(format!("{base}/festivals"))
+        .json(&json!({
+            "id": "evil-fest",
+            "name": "Evil Festival",
+            "startDate": "2026-01-01",
+            "endDate": "2026-01-02",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 401, "no auth headers should get 401");
+
+    // Non-admin with fake headers
+    let intruder = offbeat_core::signing::generate_signing_key();
+    let resp = client
+        .post(format!("{base}/festivals"))
+        .headers(admin_headers(&intruder, "/festivals"))
+        .json(&json!({
+            "id": "evil-fest",
+            "name": "Evil Festival",
+            "startDate": "2026-01-01",
+            "endDate": "2026-01-02",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 403, "non-admin key should get 403");
+
+    // Admin with wrong path signature
+    let resp = client
+        .post(format!("{base}/festivals"))
+        .headers(admin_headers(&admin_key, "/wrong-path"))
+        .json(&json!({
+            "id": "evil-fest",
+            "name": "Evil Festival",
+            "startDate": "2026-01-01",
+            "endDate": "2026-01-02",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 401, "wrong path sig should get 401");
+}
+
+// =============================================================================
+// Test: Update festival metadata and replace lineup
+// =============================================================================
+
+#[tokio::test]
+async fn test_update_festival_and_replace_lineup() {
+    let server = DevServer::start().await;
+    let base = server.http_url();
+    let client = reqwest::Client::new();
+
+    // Register admin + create festival
+    let admin_key = offbeat_core::signing::generate_signing_key();
+    let admin_pub_hex = bytes_to_hex(&admin_key.verifying_key().to_bytes());
+    client
+        .put(format!("{base}/admins"))
+        .json(&json!({ "publicKey": admin_pub_hex }))
+        .send()
+        .await
+        .unwrap();
+
+    client
+        .post(format!("{base}/festivals"))
+        .headers(admin_headers(&admin_key, "/festivals"))
+        .json(&json!({
+            "id": "updatefest",
+            "name": "Original Name",
+            "startDate": "2026-08-01",
+            "endDate": "2026-08-02",
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    // Update metadata
+    let resp = client
+        .put(format!("{base}/festivals/updatefest"))
+        .headers(admin_headers(&admin_key, "/festivals/updatefest"))
+        .json(&json!({ "name": "Updated Name", "city": "Berlin" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let updated: Value = resp.json().await.unwrap();
+    assert_eq!(updated["name"], "Updated Name");
+    assert_eq!(updated["city"], "Berlin");
+
+    // Publish initial lineup
+    client
+        .put(format!("{base}/festivals/updatefest/lineup"))
+        .headers(admin_headers(&admin_key, "/festivals/updatefest/lineup"))
+        .json(&json!({ "events": [
+            { "artist": "Artist A", "stage": "S1", "day": "friday", "start": "20:00", "end": "21:00" },
+        ]}))
+        .send()
+        .await
+        .unwrap();
+
+    let resp = client.get(format!("{base}/festivals/updatefest/lineup")).send().await.unwrap();
+    let lineup: Value = resp.json().await.unwrap();
+    assert_eq!(lineup["sets"].as_array().unwrap().len(), 1);
+
+    // Replace lineup with new data
+    let resp = client
+        .put(format!("{base}/festivals/updatefest/lineup"))
+        .headers(admin_headers(&admin_key, "/festivals/updatefest/lineup"))
+        .json(&json!({ "events": [
+            { "artist": "Artist B", "stage": "S1", "day": "friday", "start": "19:00", "end": "20:00" },
+            { "artist": "Artist C", "stage": "S2", "day": "friday", "start": "20:00", "end": "21:30" },
+        ]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let new_lineup: Value = resp.json().await.unwrap();
+    assert_eq!(new_lineup["sets"].as_array().unwrap().len(), 2, "lineup should be replaced, not appended");
+
+    // Old artist should be gone
+    let artists: Vec<&str> = new_lineup["sets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["artist"].as_str().unwrap())
+        .collect();
+    assert!(!artists.contains(&"Artist A"), "old lineup should be replaced");
+    assert!(artists.contains(&"Artist B"));
+    assert!(artists.contains(&"Artist C"));
+}
+
+// =============================================================================
+// Test: Seeded festival (fieldday26) lineup is served from DB
+// =============================================================================
+
+#[tokio::test]
+async fn test_seeded_festival_lineup_from_db() {
+    let server = DevServer::start().await;
+    let base = server.http_url();
+    let client = reqwest::Client::new();
+
+    // The seeded fieldday26 should have a lineup
+    let resp = client.get(format!("{base}/festivals/fieldday26/lineup")).send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let lineup: Value = resp.json().await.unwrap();
+    assert!(!lineup["stages"].as_array().unwrap().is_empty(), "should have stages");
+    assert!(!lineup["days"].as_array().unwrap().is_empty(), "should have days");
+    assert!(!lineup["sets"].as_array().unwrap().is_empty(), "should have sets");
+    assert_eq!(lineup["festival"]["id"], "fieldday26");
+}

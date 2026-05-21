@@ -38,6 +38,23 @@ app.get("/festivals/:id", (c) => {
 	return forwardToMainDO(c.env, `/festivals/${id}`, c.req.raw);
 });
 
+// POST /festivals — create a new festival (admin-only, forwarded with auth headers)
+app.post("/festivals", (c) => {
+	return forwardToMainDO(c.env, "/festivals", c.req.raw);
+});
+
+// PUT /festivals/:id — update festival metadata (admin-only)
+app.put("/festivals/:id", (c) => {
+	const id = c.req.param("id");
+	return forwardToMainDO(c.env, `/festivals/${id}`, c.req.raw);
+});
+
+// PUT /festivals/:id/lineup — replace lineup (admin-only)
+app.put("/festivals/:id/lineup", (c) => {
+	const id = c.req.param("id");
+	return forwardToMainDO(c.env, `/festivals/${id}/lineup`, c.req.raw);
+});
+
 // POST /auth/register/begin
 app.post("/auth/register/begin", (c) => {
 	return forwardToMainDO(c.env, "/auth/register/begin", c.req.raw);
