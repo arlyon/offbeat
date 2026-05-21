@@ -9,6 +9,7 @@ import '../../theme/tokens.dart';
 import '../../shell/top_nav.dart';
 import '../../widgets/dotted_border.dart';
 import '../../widgets/chip.dart';
+import 'admin_panel.dart';
 import 'gantt_view.dart';
 import 'day_tabs_view.dart';
 import 'stage_tabs_view.dart';
@@ -21,11 +22,17 @@ enum FestDetailView { gantt, dayTabs, stageTabs, filters, clashRadar, nowStrip }
 class FestivalDetailScreen extends StatefulWidget {
   final Festival festival;
   final VoidCallback onBack;
+  final bool isAdmin;
+  final List<String> adminKeys;
+  final String userPublicKeyHex;
 
   const FestivalDetailScreen({
     super.key,
     required this.festival,
     required this.onBack,
+    this.isAdmin = false,
+    this.adminKeys = const [],
+    this.userPublicKeyHex = '',
   });
 
   @override
@@ -37,6 +44,27 @@ class _FestivalDetailScreenState extends State<FestivalDetailScreen> {
 
   // Build the sets for this festival (using Field Day mock data)
   late final List<FestSet> _sets = buildSets();
+
+  void _showAdminPanel(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (_) => AdminPanel(
+        festivalId: widget.festival.id,
+        festivalName: widget.festival.name,
+        adminKeys: widget.adminKeys,
+        userPublicKeyHex: widget.userPublicKeyHex,
+        onRefreshLineup: () {
+          Navigator.pop(context);
+          // TODO: Call admin service to refresh lineup
+        },
+        onExportSigningKey: () {
+          Navigator.pop(context);
+          // TODO: Call admin service to export signing key
+        },
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -50,6 +78,12 @@ class _FestivalDetailScreenState extends State<FestivalDetailScreen> {
           rightWidgets: [
             NavIconButton(icon: Icons.search),
             NavIconButton(icon: Icons.tune),
+            if (widget.isAdmin)
+              NavIconButton(
+                icon: Icons.shield,
+                color: colorAccent,
+                onTap: () => _showAdminPanel(context),
+              ),
           ],
         ),
         // View mode selector

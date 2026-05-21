@@ -515,6 +515,15 @@ impl AppNode {
         }))
     }
 
+    /// Sign an arbitrary message with the local Ed25519 identity key.
+    /// Used for admin operations (signing paths, challenges, etc.).
+    /// Returns the hex-encoded signature.
+    pub fn sign_message(&self, message: String) -> anyhow::Result<String> {
+        let key = offbeat_core::auth::generate_or_load_identity(&self.inner.db)?;
+        let sig = offbeat_core::signing::sign(&key, message.as_bytes());
+        Ok(sig.iter().map(|b| format!("{b:02x}")).collect())
+    }
+
     // -----------------------------------------------------------------------
     // Group lifecycle
     // -----------------------------------------------------------------------

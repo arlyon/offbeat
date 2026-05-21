@@ -114,12 +114,14 @@ class NavIconButton extends StatelessWidget {
   final IconData icon;
   final VoidCallback? onTap;
   final int? badgeCount;
+  final Color? color;
 
   const NavIconButton({
     super.key,
     required this.icon,
     this.onTap,
     this.badgeCount,
+    this.color,
   });
 
   @override
@@ -132,7 +134,7 @@ class NavIconButton extends StatelessWidget {
         child: Stack(
           alignment: Alignment.center,
           children: [
-            Icon(icon, size: 17, color: colorFg),
+            Icon(icon, size: 17, color: color ?? colorFg),
             if (badgeCount != null && badgeCount! > 0)
               Positioned(
                 top: 4,
