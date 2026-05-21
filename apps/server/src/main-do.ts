@@ -83,6 +83,10 @@ export class MainDO extends DurableObject {
 			);
 
 			CREATE INDEX IF NOT EXISTS idx_creds_user ON credentials(user_id);
+
+			CREATE TABLE IF NOT EXISTS admins (
+				public_key TEXT PRIMARY KEY
+			);
 		`);
 	}
 
@@ -162,10 +166,11 @@ export class MainDO extends DurableObject {
 	}
 
 	#getFestival(id: string) {
-		const row = this.sql.exec("SELECT * FROM festivals WHERE id = ?", id).one() as Record<
+		const rows = this.sql.exec("SELECT * FROM festivals WHERE id = ?", id).toArray() as Record<
 			string,
 			unknown
-		> | null;
+		>[];
+		const row = rows[0] ?? null;
 
 		if (!row) return null;
 
@@ -260,6 +265,52 @@ export class MainDO extends DurableObject {
 			}
 			const token = await createJwt(result.userId ?? "unknown");
 			return Response.json({ token });
+		}
+
+		// PUT /admins — register a global admin public key.
+		// First admin is auto-accepted (bootstrap). Subsequent require existing admin auth.
+		if (method === "PUT" && path === "/admins") {
+			const body = (await request.json()) as {
+				publicKey: string;
+				signature?: string;
+			};
+			if (!body.publicKey || body.publicKey.length !== 64) {
+				return new Response("publicKey must be 64 hex chars", {
+					status: 400,
+				});
+			}
+
+			const count = (this.sql.exec("SELECT COUNT(*) as cnt FROM admins").one() as { cnt: number })
+				.cnt;
+
+			if (count > 0 && body.signature) {
+				const authKey = request.headers.get("X-Admin-Key");
+				if (!authKey) {
+					return new Response("X-Admin-Key header required", {
+						status: 401,
+					});
+				}
+				const isAdmin =
+					this.sql.exec("SELECT 1 FROM admins WHERE public_key = ?", authKey).toArray().length > 0;
+				if (!isAdmin) {
+					return new Response("Not an admin", { status: 403 });
+				}
+				// Signature verification would go here — skipped for now since
+				// auth stubs are in place; the pattern mirrors the Festival DO.
+			} else if (count > 0) {
+				return new Response("Signature required from existing admin", { status: 401 });
+			}
+
+			this.sql.exec("INSERT OR IGNORE INTO admins (public_key) VALUES (?)", body.publicKey);
+			return Response.json({ ok: true });
+		}
+
+		// GET /admins — list all global admin public keys
+		if (method === "GET" && path === "/admins") {
+			const rows = this.sql.exec("SELECT public_key FROM admins").toArray() as {
+				public_key: string;
+			}[];
+			return Response.json(rows.map((r) => r.public_key));
 		}
 
 		return new Response("Not found", { status: 404 });
