@@ -14,11 +14,7 @@ class ClashRadarView extends StatefulWidget {
   final List<FestSet> sets;
   final List<Stage> stages;
 
-  const ClashRadarView({
-    super.key,
-    required this.sets,
-    required this.stages,
-  });
+  const ClashRadarView({super.key, required this.sets, required this.stages});
 
   @override
   State<ClashRadarView> createState() => _ClashRadarViewState();
@@ -27,8 +23,7 @@ class ClashRadarView extends StatefulWidget {
 class _ClashRadarViewState extends State<ClashRadarView> {
   final String _day = 'fri';
 
-  Map<String, Stage> get _stageById =>
-      {for (final s in widget.stages) s.id: s};
+  Map<String, Stage> get _stageById => {for (final s in widget.stages) s.id: s};
 
   List<FestSet> get _starred =>
       widget.sets.where((s) => s.day == _day && s.starred).toList();
@@ -70,9 +65,9 @@ class _ClashRadarViewState extends State<ClashRadarView> {
     }).toList();
 
     // Stages with starred sets
-    final stagesWithStars = widget.stages.where(
-      (st) => starred.any((s) => s.stage == st.id),
-    ).toList();
+    final stagesWithStars = widget.stages
+        .where((st) => starred.any((s) => s.stage == st.id))
+        .toList();
 
     return ListView(
       padding: EdgeInsets.zero,
@@ -129,151 +124,175 @@ class _ClashRadarViewState extends State<ClashRadarView> {
                 // Axis labels
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    wStart, wStart + wRange ~/ 4, wStart + wRange ~/ 2,
-                    wStart + (wRange * 3) ~/ 4, wEnd,
-                  ].map((m) => Text(
-                    fmtTime(m),
-                    style: const TextStyle(
-                      fontFamily: 'JetBrainsMono',
-                      fontSize: 9,
-                      color: colorFg4,
-                      letterSpacing: 0.05 * 9,
-                      height: 1,
-                    ),
-                  )).toList(),
+                  children:
+                      [
+                            wStart,
+                            wStart + wRange ~/ 4,
+                            wStart + wRange ~/ 2,
+                            wStart + (wRange * 3) ~/ 4,
+                            wEnd,
+                          ]
+                          .map(
+                            (m) => Text(
+                              fmtTime(m),
+                              style: const TextStyle(
+                                fontFamily: 'JetBrainsMono',
+                                fontSize: 9,
+                                color: colorFg4,
+                                letterSpacing: 0.05 * 9,
+                                height: 1,
+                              ),
+                            ),
+                          )
+                          .toList(),
                 ),
                 const SizedBox(height: 6),
                 // Stage lanes
-                LayoutBuilder(builder: (context, constraints) {
-                  final w = constraints.maxWidth - 32; // minus label offset
-                  return Column(
-                    children: [
-                      Container(
-                        decoration: const BoxDecoration(
-                          border: Border(
-                            top: BorderSide(color: colorDotted, width: 1.5),
-                            bottom: BorderSide(color: colorDotted, width: 1.5),
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final w = constraints.maxWidth - 32; // minus label offset
+                    return Column(
+                      children: [
+                        Container(
+                          decoration: const BoxDecoration(
+                            border: Border(
+                              top: BorderSide(color: colorDotted, width: 1.5),
+                              bottom: BorderSide(
+                                color: colorDotted,
+                                width: 1.5,
+                              ),
+                            ),
                           ),
-                        ),
-                        child: Stack(
-                          children: [
-                            // Lane rows
-                            Column(
-                              children: stagesWithStars.map((stage) {
-                                final stageSets = daySets.where((s) => s.stage == stage.id).toList();
-                                return SizedBox(
-                                  height: 26,
-                                  child: Stack(
-                                    clipBehavior: Clip.hardEdge,
-                                    children: [
-                                      // Label
-                                      Positioned(
-                                        left: 0, top: 6,
-                                        child: Text(
-                                          stage.short,
-                                          style: const TextStyle(
-                                            fontFamily: 'JetBrainsMono',
-                                            fontSize: 9,
-                                            color: colorFg3,
-                                            letterSpacing: 0.08 * 9,
-                                            height: 1,
+                          child: Stack(
+                            children: [
+                              // Lane rows
+                              Column(
+                                children: stagesWithStars.map((stage) {
+                                  final stageSets = daySets
+                                      .where((s) => s.stage == stage.id)
+                                      .toList();
+                                  return SizedBox(
+                                    height: 26,
+                                    child: Stack(
+                                      clipBehavior: Clip.hardEdge,
+                                      children: [
+                                        // Label
+                                        Positioned(
+                                          left: 0,
+                                          top: 6,
+                                          child: Text(
+                                            stage.short,
+                                            style: const TextStyle(
+                                              fontFamily: 'JetBrainsMono',
+                                              fontSize: 9,
+                                              color: colorFg3,
+                                              letterSpacing: 0.08 * 9,
+                                              height: 1,
+                                            ),
                                           ),
                                         ),
-                                      ),
-                                      // Set blobs
-                                      ...stageSets.map((s) {
-                                        final left = xPct(s.t) * w + 32;
-                                        final right = xPct(s.t + s.dur) * w + 32;
-                                        final width = right - left;
-                                        if (width <= 0) return const SizedBox.shrink();
-                                        return Positioned(
-                                          left: left,
-                                          top: 3,
-                                          bottom: 3,
-                                          width: width,
-                                          child: Container(
-                                            decoration: BoxDecoration(
-                                              color: s.starred ? colorAccentWash : colorSurface2,
-                                              border: Border(
-                                                left: BorderSide(
-                                                  color: Color(stage.color),
-                                                  width: 2,
+                                        // Set blobs
+                                        ...stageSets.map((s) {
+                                          final left = xPct(s.t) * w + 32;
+                                          final right =
+                                              xPct(s.t + s.dur) * w + 32;
+                                          final width = right - left;
+                                          if (width <= 0)
+                                            return const SizedBox.shrink();
+                                          return Positioned(
+                                            left: left,
+                                            top: 3,
+                                            bottom: 3,
+                                            width: width,
+                                            child: Container(
+                                              decoration: BoxDecoration(
+                                                color: s.starred
+                                                    ? colorAccentWash
+                                                    : colorSurface2,
+                                                border: Border(
+                                                  left: BorderSide(
+                                                    color: Color(stage.color),
+                                                    width: 2,
+                                                  ),
+                                                ),
+                                              ),
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                    horizontal: 4,
+                                                  ),
+                                              child: Text(
+                                                '${s.starred ? '★ ' : ''}${s.artist.split(' ').first}',
+                                                maxLines: 1,
+                                                overflow: TextOverflow.clip,
+                                                style: const TextStyle(
+                                                  fontFamily: 'JetBrainsMono',
+                                                  fontSize: 9,
+                                                  fontWeight: FontWeight.w700,
+                                                  color: colorFg,
+                                                  height: 1,
                                                 ),
                                               ),
                                             ),
-                                            padding: const EdgeInsets.symmetric(horizontal: 4),
-                                            child: Text(
-                                              '${s.starred ? '★ ' : ''}${s.artist.split(' ').first}',
-                                              maxLines: 1,
-                                              overflow: TextOverflow.clip,
-                                              style: const TextStyle(
-                                                fontFamily: 'JetBrainsMono',
-                                                fontSize: 9,
-                                                fontWeight: FontWeight.w700,
-                                                color: colorFg,
-                                                height: 1,
-                                              ),
-                                            ),
+                                          );
+                                        }),
+                                        // Bottom divider
+                                        const Positioned(
+                                          bottom: 0,
+                                          left: 0,
+                                          right: 0,
+                                          child: Divider(
+                                            height: 1,
+                                            thickness: 1,
+                                            color: colorHairline,
                                           ),
-                                        );
-                                      }),
-                                      // Bottom divider
-                                      const Positioned(
-                                        bottom: 0, left: 0, right: 0,
-                                        child: Divider(
-                                          height: 1, thickness: 1,
-                                          color: colorHairline,
                                         ),
-                                      ),
-                                    ],
-                                  ),
+                                      ],
+                                    ),
+                                  );
+                                }).toList(),
+                              ),
+                              // Clash zones (hatched overlay)
+                              ...clashZones.map((z) {
+                                final left = xPct(z.start) * w + 32;
+                                final width = (xPct(z.end) - xPct(z.start)) * w;
+                                return Positioned(
+                                  left: left,
+                                  top: 0,
+                                  bottom: 0,
+                                  width: width,
+                                  child: CustomPaint(painter: _HatchPainter()),
                                 );
-                              }).toList(),
+                              }),
+                            ],
+                          ),
+                        ),
+                        // Legend
+                        const SizedBox(height: 10),
+                        Row(
+                          children: [
+                            _LegendItem(
+                              color: colorSurface2,
+                              borderColor: colorFg3,
+                              label: 'SCHEDULED',
                             ),
-                            // Clash zones (hatched overlay)
-                            ...clashZones.map((z) {
-                              final left = xPct(z.start) * w + 32;
-                              final width = (xPct(z.end) - xPct(z.start)) * w;
-                              return Positioned(
-                                left: left,
-                                top: 0,
-                                bottom: 0,
-                                width: width,
-                                child: CustomPaint(
-                                  painter: _HatchPainter(),
-                                ),
-                              );
-                            }),
+                            const SizedBox(width: 12),
+                            _LegendItem(
+                              color: colorAccentWash,
+                              borderColor: colorAccent,
+                              label: '★ STARRED',
+                            ),
+                            const SizedBox(width: 12),
+                            _LegendItem(
+                              isHatch: true,
+                              label: 'CLASH',
+                              labelColor: colorWarn,
+                            ),
                           ],
                         ),
-                      ),
-                      // Legend
-                      const SizedBox(height: 10),
-                      Row(
-                        children: [
-                          _LegendItem(
-                            color: colorSurface2,
-                            borderColor: colorFg3,
-                            label: 'SCHEDULED',
-                          ),
-                          const SizedBox(width: 12),
-                          _LegendItem(
-                            color: colorAccentWash,
-                            borderColor: colorAccent,
-                            label: '★ STARRED',
-                          ),
-                          const SizedBox(width: 12),
-                          _LegendItem(
-                            isHatch: true,
-                            label: 'CLASH',
-                            labelColor: colorWarn,
-                          ),
-                        ],
-                      ),
-                    ],
-                  );
-                }),
+                      ],
+                    );
+                  },
+                ),
               ],
             ),
           ),
@@ -308,15 +327,17 @@ class _ClashRadarViewState extends State<ClashRadarView> {
           ),
         ),
         // Clash cards
-        ...clashPairs.map((pair) => Padding(
-          padding: const EdgeInsets.fromLTRB(18, 0, 18, 12),
-          child: _ClashCard(
-            setA: pair[0],
-            setB: pair[1],
-            stageA: stageById[pair[0].stage]!,
-            stageB: stageById[pair[1].stage]!,
+        ...clashPairs.map(
+          (pair) => Padding(
+            padding: const EdgeInsets.fromLTRB(18, 0, 18, 12),
+            child: _ClashCard(
+              setA: pair[0],
+              setB: pair[1],
+              stageA: stageById[pair[0].stage]!,
+              stageB: stageById[pair[1].stage]!,
+            ),
           ),
-        )),
+        ),
         const SizedBox(height: 80),
       ],
     );
@@ -380,14 +401,18 @@ class _HatchPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
-      ..color = colorWarn.withOpacity(0.18)
+      ..color = colorWarn.withValues(alpha: 0.18)
       ..strokeWidth = 4;
     // Left/right borders
     final borderPaint = Paint()
       ..color = colorWarn
       ..strokeWidth = 1.5;
     canvas.drawLine(Offset(0, 0), Offset(0, size.height), borderPaint);
-    canvas.drawLine(Offset(size.width, 0), Offset(size.width, size.height), borderPaint);
+    canvas.drawLine(
+      Offset(size.width, 0),
+      Offset(size.width, size.height),
+      borderPaint,
+    );
 
     // Hatching
     for (double x = -size.height; x < size.width + size.height; x += 8) {
@@ -428,12 +453,15 @@ class _ClashCardState extends State<_ClashCard> {
     final a = widget.setA, b = widget.setB;
     final sA = widget.stageA, sB = widget.stageB;
     final overlapStart = [a.t, b.t].reduce((v, e) => v > e ? v : e);
-    final overlapEnd = [a.t + a.dur, b.t + b.dur].reduce((v, e) => v < e ? v : e);
+    final overlapEnd = [
+      a.t + a.dur,
+      b.t + b.dur,
+    ].reduce((v, e) => v < e ? v : e);
     final overlapMin = overlapEnd - overlapStart;
 
     return Container(
       decoration: BoxDecoration(
-        color: colorWarn.withOpacity(0.04),
+        color: colorWarn.withValues(alpha: 0.04),
         border: Border.all(color: colorWarn, width: 1.5),
       ),
       padding: const EdgeInsets.all(14),
@@ -490,7 +518,8 @@ class _ClashCardState extends State<_ClashCard> {
             children: [
               MonoChip(label: 'SPLIT — 30M EACH', onTap: () {}),
               MonoChip(
-                label: 'UNSTAR ${_chosen == 'a' ? b.artist.split(' ').first : a.artist.split(' ').first}',
+                label:
+                    'UNSTAR ${_chosen == 'a' ? b.artist.split(' ').first : a.artist.split(' ').first}',
                 onTap: () {},
               ),
             ],
@@ -522,15 +551,15 @@ class _ClashOption extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
           color: chosen ? colorSurface2 : colorSurface1,
-          border: Border(
-            left: BorderSide(color: Color(stage.color), width: 3),
-          ),
+          border: Border(left: BorderSide(color: Color(stage.color), width: 3)),
           boxShadow: chosen
-              ? [BoxShadow(
-                  color: colorFg3.withOpacity(0.3),
-                  blurRadius: 0,
-                  spreadRadius: 1,
-                )]
+              ? [
+                  BoxShadow(
+                    color: colorFg3.withValues(alpha: 0.3),
+                    blurRadius: 0,
+                    spreadRadius: 1,
+                  ),
+                ]
               : null,
         ),
         child: Column(

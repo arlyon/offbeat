@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/dotted_border.dart';
+import '../../services/admin_service.dart';
 
 /// Admin panel shown as a bottom sheet when the admin icon is tapped.
 /// Only visible to users who are in the admin list for this festival.
@@ -9,9 +10,12 @@ class AdminPanel extends StatelessWidget {
   final String festivalName;
   final List<String> adminKeys;
   final String userPublicKeyHex;
+  final List<AdminRequest> pendingRequests;
   final VoidCallback? onRefreshLineup;
   final VoidCallback? onExportSigningKey;
   final ValueChanged<String>? onPromoteAdmin;
+  final ValueChanged<String>? onApproveRequest;
+  final ValueChanged<String>? onDenyRequest;
 
   const AdminPanel({
     super.key,
@@ -19,9 +23,12 @@ class AdminPanel extends StatelessWidget {
     required this.festivalName,
     required this.adminKeys,
     required this.userPublicKeyHex,
+    this.pendingRequests = const [],
     this.onRefreshLineup,
     this.onExportSigningKey,
     this.onPromoteAdmin,
+    this.onApproveRequest,
+    this.onDenyRequest,
   });
 
   @override
@@ -95,48 +102,156 @@ class AdminPanel extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 8),
-              ...adminKeys.map((key) => Padding(
-                    padding: const EdgeInsets.only(bottom: 6),
-                    child: Row(
-                      children: [
-                        Icon(
-                          key == userPublicKeyHex
-                              ? Icons.person
-                              : Icons.person_outline,
-                          color: key == userPublicKeyHex
-                              ? colorAccent
-                              : colorFg4,
-                          size: 14,
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            '${key.substring(0, 16)}...',
-                            style: TextStyle(
-                              fontFamily: 'JetBrainsMono',
-                              fontSize: 9,
-                              color: key == userPublicKeyHex
-                                  ? colorFg
-                                  : colorFg3,
-                              height: 1.3,
-                            ),
+              ...adminKeys.map(
+                (key) => Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Row(
+                    children: [
+                      Icon(
+                        key == userPublicKeyHex
+                            ? Icons.person
+                            : Icons.person_outline,
+                        color: key == userPublicKeyHex ? colorAccent : colorFg4,
+                        size: 14,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          '${key.substring(0, 16)}...',
+                          style: TextStyle(
+                            fontFamily: 'JetBrainsMono',
+                            fontSize: 9,
+                            color: key == userPublicKeyHex ? colorFg : colorFg3,
+                            height: 1.3,
                           ),
                         ),
-                        if (key == userPublicKeyHex)
-                          const Text(
-                            'YOU',
-                            style: TextStyle(
-                              fontFamily: 'JetBrainsMono',
-                              fontSize: 8,
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: 0.1 * 8,
-                              color: colorAccent,
-                              height: 1,
-                            ),
+                      ),
+                      if (key == userPublicKeyHex)
+                        const Text(
+                          'YOU',
+                          style: TextStyle(
+                            fontFamily: 'JetBrainsMono',
+                            fontSize: 8,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.1 * 8,
+                            color: colorAccent,
+                            height: 1,
                           ),
-                      ],
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+              // Pending admin requests
+              if (pendingRequests.isNotEmpty) ...[
+                const SizedBox(height: 20),
+                const Text(
+                  'PENDING REQUESTS',
+                  style: TextStyle(
+                    fontFamily: 'JetBrainsMono',
+                    fontSize: 9,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.08 * 9,
+                    color: colorWarn,
+                    height: 1,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                ...pendingRequests.map(
+                  (req) => Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: DottedBorder(
+                      child: Padding(
+                        padding: const EdgeInsets.all(10),
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.person_add_outlined,
+                              color: colorWarn,
+                              size: 14,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    req.displayName.isNotEmpty
+                                        ? req.displayName.toUpperCase()
+                                        : 'ANONYMOUS',
+                                    style: const TextStyle(
+                                      fontFamily: 'JetBrainsMono',
+                                      fontSize: 9,
+                                      fontWeight: FontWeight.w700,
+                                      letterSpacing: 0.06 * 9,
+                                      color: colorFg,
+                                      height: 1,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 3),
+                                  Text(
+                                    '${req.publicKey.substring(0, 16)}...',
+                                    style: const TextStyle(
+                                      fontFamily: 'JetBrainsMono',
+                                      fontSize: 8,
+                                      color: colorFg4,
+                                      height: 1,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            // Deny button
+                            GestureDetector(
+                              onTap: () => onDenyRequest?.call(req.publicKey),
+                              child: Container(
+                                width: 28,
+                                height: 28,
+                                decoration: BoxDecoration(
+                                  border: Border.all(
+                                    color: colorFg4,
+                                    width: 1,
+                                  ),
+                                ),
+                                child: const Center(
+                                  child: Icon(
+                                    Icons.close,
+                                    color: colorFg3,
+                                    size: 14,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            // Approve button
+                            GestureDetector(
+                              onTap: () =>
+                                  onApproveRequest?.call(req.publicKey),
+                              child: Container(
+                                width: 28,
+                                height: 28,
+                                decoration: BoxDecoration(
+                                  border: Border.all(
+                                    color: colorAccent,
+                                    width: 1,
+                                  ),
+                                ),
+                                child: const Center(
+                                  child: Icon(
+                                    Icons.check,
+                                    color: colorAccent,
+                                    size: 14,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
-                  )),
+                  ),
+                ),
+              ],
             ],
           ),
         ),

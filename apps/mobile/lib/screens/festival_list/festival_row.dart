@@ -104,7 +104,10 @@ class FestivalRow extends StatelessWidget {
                         children: [
                           _MetaText('${fest.stages} STAGES', dim: true),
                           _MetaDot(dim: true),
-                          _MetaText('${fest.sets > 0 ? fest.sets : '—'} SETS', dim: true),
+                          _MetaText(
+                            '${fest.sets > 0 ? fest.sets : '—'} SETS',
+                            dim: true,
+                          ),
                           _MetaDot(dim: true),
                           _MetaText(fest.genres.first, dim: true),
                         ],
@@ -204,7 +207,10 @@ class _MetaDot extends StatelessWidget {
   Widget build(BuildContext context) {
     return Text(
       '·',
-      style: TextStyle(color: dim ? colorFg4 : colorFg4, fontSize: dim ? 10 : 11),
+      style: TextStyle(
+        color: dim ? colorFg4 : colorFg4,
+        fontSize: dim ? 10 : 11,
+      ),
     );
   }
 }

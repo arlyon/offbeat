@@ -10,6 +10,7 @@ import '../../shell/top_nav.dart';
 import '../../widgets/dotted_border.dart';
 import '../../widgets/chip.dart';
 import 'admin_panel.dart';
+import '../../services/admin_service.dart';
 import 'gantt_view.dart';
 import 'day_tabs_view.dart';
 import 'stage_tabs_view.dart';
@@ -25,6 +26,9 @@ class FestivalDetailScreen extends StatefulWidget {
   final bool isAdmin;
   final List<String> adminKeys;
   final String userPublicKeyHex;
+  final List<AdminRequest> pendingRequests;
+  final ValueChanged<String>? onApproveRequest;
+  final ValueChanged<String>? onDenyRequest;
 
   const FestivalDetailScreen({
     super.key,
@@ -33,6 +37,9 @@ class FestivalDetailScreen extends StatefulWidget {
     this.isAdmin = false,
     this.adminKeys = const [],
     this.userPublicKeyHex = '',
+    this.pendingRequests = const [],
+    this.onApproveRequest,
+    this.onDenyRequest,
   });
 
   @override
@@ -54,6 +61,7 @@ class _FestivalDetailScreenState extends State<FestivalDetailScreen> {
         festivalName: widget.festival.name,
         adminKeys: widget.adminKeys,
         userPublicKeyHex: widget.userPublicKeyHex,
+        pendingRequests: widget.pendingRequests,
         onRefreshLineup: () {
           Navigator.pop(context);
           // TODO: Call admin service to refresh lineup
@@ -61,6 +69,14 @@ class _FestivalDetailScreenState extends State<FestivalDetailScreen> {
         onExportSigningKey: () {
           Navigator.pop(context);
           // TODO: Call admin service to export signing key
+        },
+        onApproveRequest: (key) {
+          Navigator.pop(context);
+          widget.onApproveRequest?.call(key);
+        },
+        onDenyRequest: (key) {
+          Navigator.pop(context);
+          widget.onDenyRequest?.call(key);
         },
       ),
     );
@@ -92,9 +108,7 @@ class _FestivalDetailScreenState extends State<FestivalDetailScreen> {
           onChanged: (v) => setState(() => _view = v),
         ),
         // Content
-        Expanded(
-          child: _buildView(),
-        ),
+        Expanded(child: _buildView()),
       ],
     );
   }
@@ -102,11 +116,7 @@ class _FestivalDetailScreenState extends State<FestivalDetailScreen> {
   Widget _buildView() {
     switch (_view) {
       case FestDetailView.gantt:
-        return GanttView(
-          sets: _sets,
-          stages: kStages,
-          days: kDays,
-        );
+        return GanttView(sets: _sets, stages: kStages, days: kDays);
       case FestDetailView.dayTabs:
         return DayTabsView(
           sets: _sets,
@@ -115,26 +125,13 @@ class _FestivalDetailScreenState extends State<FestivalDetailScreen> {
           festivalWhere: 'Brockwell Park · London',
         );
       case FestDetailView.stageTabs:
-        return StageTabsView(
-          sets: _sets,
-          stages: kStages,
-          days: kDays,
-        );
+        return StageTabsView(sets: _sets, stages: kStages, days: kDays);
       case FestDetailView.filters:
-        return FilterView(
-          sets: _sets,
-          stages: kStages,
-        );
+        return FilterView(sets: _sets, stages: kStages);
       case FestDetailView.clashRadar:
-        return ClashRadarView(
-          sets: _sets,
-          stages: kStages,
-        );
+        return ClashRadarView(sets: _sets, stages: kStages);
       case FestDetailView.nowStrip:
-        return NowStripView(
-          sets: _sets,
-          stages: kStages,
-        );
+        return NowStripView(sets: _sets, stages: kStages);
     }
   }
 }

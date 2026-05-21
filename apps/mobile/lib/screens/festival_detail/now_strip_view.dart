@@ -15,11 +15,7 @@ class NowStripView extends StatefulWidget {
   final List<FestSet> sets;
   final List<Stage> stages;
 
-  const NowStripView({
-    super.key,
-    required this.sets,
-    required this.stages,
-  });
+  const NowStripView({super.key, required this.sets, required this.stages});
 
   @override
   State<NowStripView> createState() => _NowStripViewState();
@@ -45,8 +41,7 @@ class _NowStripViewState extends State<NowStripView> {
     super.dispose();
   }
 
-  Map<String, Stage> get _stageById =>
-      {for (final s in widget.stages) s.id: s};
+  Map<String, Stage> get _stageById => {for (final s in widget.stages) s.id: s};
 
   @override
   Widget build(BuildContext context) {
@@ -59,16 +54,13 @@ class _NowStripViewState extends State<NowStripView> {
     final liveStage = live != null ? stageById[live.stage] : null;
 
     // Next 4 hours of sets
-    final upcoming = sets
-        .where((s) => s.t > kNowT && s.t < kNowT + 240)
-        .toList()
-      ..sort((a, b) => a.t.compareTo(b.t));
+    final upcoming =
+        sets.where((s) => s.t > kNowT && s.t < kNowT + 240).toList()
+          ..sort((a, b) => a.t.compareTo(b.t));
 
     // Next starred set
-    final nextStarred = sets
-        .where((s) => s.starred && s.t > kNowT)
-        .toList()
-        ..sort((a, b) => a.t.compareTo(b.t));
+    final nextStarred = sets.where((s) => s.starred && s.t > kNowT).toList()
+      ..sort((a, b) => a.t.compareTo(b.t));
     final next = nextStarred.isEmpty ? null : nextStarred.first;
     final diff = next != null ? next.t - kNowT : 0;
     final hh = (diff ~/ 60).toString().padLeft(2, '0');
@@ -94,22 +86,11 @@ class _NowStripViewState extends State<NowStripView> {
             padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
             child: Row(
               children: const [
-                SizedBox(
-                  width: 56,
-                  child: Text(
-                    'TIME',
-                    style: _depHeadStyle,
-                  ),
-                ),
+                SizedBox(width: 56, child: Text('TIME', style: _depHeadStyle)),
                 SizedBox(width: 12),
                 SizedBox(width: 4), // color bar
                 SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    'ARTIST · STAGE',
-                    style: _depHeadStyle,
-                  ),
-                ),
+                Expanded(child: Text('ARTIST · STAGE', style: _depHeadStyle)),
                 SizedBox(
                   width: 70,
                   child: Text(
@@ -190,10 +171,7 @@ class _NowHero extends StatelessWidget {
           gradient: RadialGradient(
             center: const Alignment(-0.64, -0.4),
             radius: 1.2,
-            colors: [
-              colorAccent.withOpacity(0.16),
-              Colors.transparent,
-            ],
+            colors: [colorAccent.withValues(alpha: 0.16), Colors.transparent],
           ),
           color: colorBg,
         ),
@@ -334,11 +312,7 @@ class _DepartureRow extends StatelessWidget {
                 ),
                 const SizedBox(width: 12),
                 // Color bar (4px)
-                Container(
-                  width: 4,
-                  height: 28,
-                  color: Color(stage.color),
-                ),
+                Container(width: 4, height: 28, color: Color(stage.color)),
                 const SizedBox(width: 12),
                 // Artist + meta
                 Expanded(

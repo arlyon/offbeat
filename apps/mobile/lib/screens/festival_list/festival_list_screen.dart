@@ -43,13 +43,16 @@ class _FestivalListScreenState extends State<FestivalListScreen> {
     }).toList();
   }
 
-  int get _activeCount => kFests.where((f) => f.status != FestStatus.past).length;
+  int get _activeCount =>
+      kFests.where((f) => f.status != FestStatus.past).length;
 
   @override
   Widget build(BuildContext context) {
     final filtered = _filtered;
     final savedFests = filtered.where((f) => _saved.contains(f.id)).toList();
-    final discoverFests = filtered.where((f) => !_saved.contains(f.id)).toList();
+    final discoverFests = filtered
+        .where((f) => !_saved.contains(f.id))
+        .toList();
 
     return Column(
       children: [
@@ -66,10 +69,7 @@ class _FestivalListScreenState extends State<FestivalListScreen> {
             padding: EdgeInsets.zero,
             children: [
               // Page header
-              _PageHeader(
-                activeCount: _activeCount,
-                savedCount: _saved.length,
-              ),
+              _PageHeader(activeCount: _activeCount, savedCount: _saved.length),
               // Search bar
               _SearchBar(
                 controller: _searchController,
@@ -88,7 +88,28 @@ class _FestivalListScreenState extends State<FestivalListScreen> {
                   right: 'EDIT',
                   onRightTap: () {},
                 ),
-                ...savedFests.map((f) => FestivalRow(
+                ...savedFests.map(
+                  (f) => FestivalRow(
+                    fest: f,
+                    saved: _saved.contains(f.id),
+                    onToggleSave: () => setState(() {
+                      if (_saved.contains(f.id)) {
+                        _saved.remove(f.id);
+                      } else {
+                        _saved.add(f.id);
+                      }
+                    }),
+                    onTap: () => widget.onFestivalTap(f),
+                  ),
+                ),
+              ],
+              // Discover section
+              _EyebrowRow(
+                label: '// DISCOVER',
+                right: '${discoverFests.length} FESTIVALS',
+              ),
+              ...discoverFests.map(
+                (f) => FestivalRow(
                   fest: f,
                   saved: _saved.contains(f.id),
                   onToggleSave: () => setState(() {
@@ -99,28 +120,10 @@ class _FestivalListScreenState extends State<FestivalListScreen> {
                     }
                   }),
                   onTap: () => widget.onFestivalTap(f),
-                )),
-              ],
-              // Discover section
-              _EyebrowRow(
-                label: '// DISCOVER',
-                right: '${discoverFests.length} FESTIVALS',
+                ),
               ),
-              ...discoverFests.map((f) => FestivalRow(
-                fest: f,
-                saved: _saved.contains(f.id),
-                onToggleSave: () => setState(() {
-                  if (_saved.contains(f.id)) {
-                    _saved.remove(f.id);
-                  } else {
-                    _saved.add(f.id);
-                  }
-                }),
-                onTap: () => widget.onFestivalTap(f),
-              )),
               // Empty state
-              if (filtered.isEmpty)
-                _EmptyState(query: _query),
+              if (filtered.isEmpty) _EmptyState(query: _query),
               const SizedBox(height: 24),
             ],
           ),
@@ -158,20 +161,11 @@ class _PageHeader extends StatelessWidget {
           Wrap(
             spacing: 6,
             children: [
-              Text(
-                '$activeCount ACTIVE',
-                style: _metaStyle,
-              ),
+              Text('$activeCount ACTIVE', style: _metaStyle),
               const Text('·', style: _dimDotStyle),
-              Text(
-                '$savedCount SAVED',
-                style: _metaStyle,
-              ),
+              Text('$savedCount SAVED', style: _metaStyle),
               const Text('·', style: _dimDotStyle),
-              const Text(
-                'SYNC 14:02',
-                style: _metaStyle,
-              ),
+              const Text('SYNC 14:02', style: _metaStyle),
             ],
           ),
         ],
@@ -255,7 +249,10 @@ class _SearchBar extends StatelessWidget {
               else
                 // ⌘K badge
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 5,
+                    vertical: 2,
+                  ),
                   decoration: BoxDecoration(
                     color: colorSurface2,
                     border: Border.all(color: colorHairline),
@@ -316,7 +313,10 @@ class _EyebrowRow extends StatelessWidget {
               if (pill != null) ...[
                 const SizedBox(width: 8),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
                   color: colorAccent,
                   child: Text(
                     pill!,

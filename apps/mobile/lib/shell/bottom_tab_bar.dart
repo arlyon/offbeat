@@ -98,10 +98,7 @@ class _TabItem extends StatelessWidget {
                 top: 0,
                 left: 0,
                 right: 0,
-                child: Container(
-                  height: 1.5,
-                  color: colorAccent,
-                ),
+                child: Container(height: 1.5, color: colorAccent),
               ),
             // Tab content
             Center(

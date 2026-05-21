@@ -28,10 +28,7 @@ class MonoChip extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (prefix != null) ...[
-            prefix!,
-            const SizedBox(width: 6),
-          ],
+          if (prefix != null) ...[prefix!, const SizedBox(width: 6)],
           Text(
             label.toUpperCase(),
             style: TextStyle(
@@ -64,9 +61,7 @@ class MonoChip extends StatelessWidget {
 
     return GestureDetector(
       onTap: onTap,
-      child: DottedBorder(
-        child: content,
-      ),
+      child: DottedBorder(child: content),
     );
   }
 }

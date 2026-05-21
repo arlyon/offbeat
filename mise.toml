@@ -1,10 +1,29 @@
+[env]
+ANDROID_NDK_HOME = "{{env.HOME}}/.local/share/mise/installs/android-sdk/20.0/ndk/28.2.13676358"
+
 [tools]
 flutter = "3.44.0"
 java = "21"
 rust = "latest"
 wrangler = "latest"
+cloudflared = "latest"
 android-sdk = "latest"
 "cargo:flutter_rust_bridge_codegen" = "latest"
+
+[tasks.tunnel]
+description = "Start cloudflared tunnel for local dev"
+run = "cloudflared tunnel run --url http://localhost:8787 offbeat-dev"
+
+[tasks.server]
+description = "Start wrangler dev + cloudflare tunnel"
+run = """
+wrangler dev --config apps/server/wrangler.toml &
+WRANGLER_PID=$!
+cloudflared tunnel run --url http://localhost:8787 offbeat-dev &
+TUNNEL_PID=$!
+trap 'kill $WRANGLER_PID $TUNNEL_PID 2>/dev/null' EXIT
+wait
+"""
 
 [tasks.sdkmanager]
 run = [

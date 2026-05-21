@@ -56,7 +56,9 @@ class _DayTabsViewState extends State<DayTabsView> {
       final hr = s.t ~/ 60;
       g.putIfAbsent(hr, () => []).add(s);
     }
-    return Map.fromEntries(g.entries.toList()..sort((a, b) => a.key.compareTo(b.key)));
+    return Map.fromEntries(
+      g.entries.toList()..sort((a, b) => a.key.compareTo(b.key)),
+    );
   }
 
   @override
@@ -110,16 +112,20 @@ class _DayTabsViewState extends State<DayTabsView> {
             children: [
               for (final entry in grouped.entries) ...[
                 _HourHeader(hour: entry.key, sets: entry.value),
-                ...entry.value.map((s) => SetRow(
-                  set: s,
-                  stage: stageById[s.stage]!,
-                  onStar: (id) => setState(() {
-                    final idx = _sets.indexWhere((x) => x.id == id);
-                    if (idx >= 0) {
-                      _sets[idx] = _sets[idx].copyWith(starred: !_sets[idx].starred);
-                    }
-                  }),
-                )),
+                ...entry.value.map(
+                  (s) => SetRow(
+                    set: s,
+                    stage: stageById[s.stage]!,
+                    onStar: (id) => setState(() {
+                      final idx = _sets.indexWhere((x) => x.id == id);
+                      if (idx >= 0) {
+                        _sets[idx] = _sets[idx].copyWith(
+                          starred: !_sets[idx].starred,
+                        );
+                      }
+                    }),
+                  ),
+                ),
               ],
               const SizedBox(height: 80),
             ],

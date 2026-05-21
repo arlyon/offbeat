@@ -86,9 +86,7 @@ ThemeData buildAppTheme() {
     // All shapes: zero border-radius
     cardTheme: const CardThemeData(
       color: colorSurface1,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.zero,
-      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.zero),
       margin: EdgeInsets.zero,
       elevation: 0,
     ),
@@ -108,7 +106,10 @@ ThemeData buildAppTheme() {
         borderSide: BorderSide(color: colorAccent, width: bdDotWidth),
       ),
       hintStyle: const TextStyle(color: colorFg4, fontSize: 14),
-      contentPadding: const EdgeInsets.symmetric(horizontal: sp3, vertical: sp2),
+      contentPadding: const EdgeInsets.symmetric(
+        horizontal: sp3,
+        vertical: sp2,
+      ),
     ),
     dividerTheme: const DividerThemeData(
       color: colorHairline,

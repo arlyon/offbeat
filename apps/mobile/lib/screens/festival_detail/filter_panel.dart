@@ -45,11 +45,11 @@ class FilterState {
   );
 
   int get totalActive =>
-    genres.length +
-    stages.length +
-    (timeRange[0] != 18 * 60 || timeRange[1] != 26 * 60 ? 1 : 0) +
-    (starredOnly ? 1 : 0) +
-    (hideClashes ? 1 : 0);
+      genres.length +
+      stages.length +
+      (timeRange[0] != 18 * 60 || timeRange[1] != 26 * 60 ? 1 : 0) +
+      (starredOnly ? 1 : 0) +
+      (hideClashes ? 1 : 0);
 
   FilterState get cleared => const FilterState();
 }
@@ -58,11 +58,7 @@ class FilterView extends StatefulWidget {
   final List<FestSet> sets;
   final List<Stage> stages;
 
-  const FilterView({
-    super.key,
-    required this.sets,
-    required this.stages,
-  });
+  const FilterView({super.key, required this.sets, required this.stages});
 
   @override
   State<FilterView> createState() => _FilterViewState();
@@ -78,8 +74,7 @@ class _FilterViewState extends State<FilterView> {
   bool _panelOpen = true;
   final String _day = 'fri';
 
-  Map<String, Stage> get _stageById =>
-      {for (final s in widget.stages) s.id: s};
+  Map<String, Stage> get _stageById => {for (final s in widget.stages) s.id: s};
 
   List<FestSet> get _filtered {
     final f = _filter;
@@ -97,7 +92,11 @@ class _FilterViewState extends State<FilterView> {
 
   Set<String> _toggle(Set<String> set, String val) {
     final n = Set<String>.from(set);
-    if (n.contains(val)) n.remove(val); else n.add(val);
+    if (n.contains(val)) {
+      n.remove(val);
+    } else {
+      n.add(val);
+    }
     return n;
   }
 
@@ -133,7 +132,10 @@ class _FilterViewState extends State<FilterView> {
                 padding: EdgeInsets.zero,
                 children: [
                   Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 18,
+                      vertical: 10,
+                    ),
                     child: Text(
                       '${filtered.length} SETS // ${_day.toUpperCase()} 22',
                       style: const TextStyle(
@@ -145,10 +147,9 @@ class _FilterViewState extends State<FilterView> {
                       ),
                     ),
                   ),
-                  ...filtered.map((s) => SetRow(
-                    set: s,
-                    stage: stageById[s.stage]!,
-                  )),
+                  ...filtered.map(
+                    (s) => SetRow(set: s, stage: stageById[s.stage]!),
+                  ),
                   if (filtered.isEmpty)
                     const Padding(
                       padding: EdgeInsets.all(30),
@@ -216,7 +217,10 @@ class _FilterSummaryBar extends StatelessWidget {
               GestureDetector(
                 onTap: onOpenPanel,
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
                   color: colorFg,
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
@@ -275,14 +279,16 @@ class _FilterSummaryBar extends StatelessWidget {
                 );
               }),
               // Active genre chips
-              ...filter.genres.map((g) => Padding(
-                padding: const EdgeInsets.only(left: 8),
-                child: MonoChip(
-                  label: '$g ×',
-                  active: true,
-                  onTap: () => onRemoveGenre(g),
+              ...filter.genres.map(
+                (g) => Padding(
+                  padding: const EdgeInsets.only(left: 8),
+                  child: MonoChip(
+                    label: '$g ×',
+                    active: true,
+                    onTap: () => onRemoveGenre(g),
+                  ),
                 ),
-              )),
+              ),
               if (filter.hideClashes)
                 Padding(
                   padding: const EdgeInsets.only(left: 8),
@@ -317,7 +323,11 @@ class _FilterSheet extends StatelessWidget {
 
   Set<String> _toggle(Set<String> set, String val) {
     final n = Set<String>.from(set);
-    if (n.contains(val)) n.remove(val); else n.add(val);
+    if (n.contains(val)) {
+      n.remove(val);
+    } else {
+      n.add(val);
+    }
     return n;
   }
 
@@ -378,7 +388,9 @@ class _FilterSheet extends StatelessWidget {
                     // Stages section
                     _FpSection(
                       label: '// STAGES',
-                      value: filter.stages.isEmpty ? 'ALL' : '${filter.stages.length}',
+                      value: filter.stages.isEmpty
+                          ? 'ALL'
+                          : '${filter.stages.length}',
                       child: _StageGrid(
                         stages: stages,
                         activeStages: filter.stages,
@@ -390,26 +402,36 @@ class _FilterSheet extends StatelessWidget {
                     // Time range section
                     _FpSection(
                       label: '// TIME WINDOW',
-                      value: '${fmtTime(filter.timeRange[0])} → ${fmtTime(filter.timeRange[1])}',
+                      value:
+                          '${fmtTime(filter.timeRange[0])} → ${fmtTime(filter.timeRange[1])}',
                       child: _TimeRangeSlider(
                         timeRange: filter.timeRange,
-                        onChanged: (r) => onFilterChanged(filter.copyWith(timeRange: r)),
+                        onChanged: (r) =>
+                            onFilterChanged(filter.copyWith(timeRange: r)),
                       ),
                     ),
                     // Genres section
                     _FpSection(
                       label: '// GENRES',
-                      value: filter.genres.isEmpty ? 'ALL' : '${filter.genres.length}',
+                      value: filter.genres.isEmpty
+                          ? 'ALL'
+                          : '${filter.genres.length}',
                       child: Wrap(
                         spacing: 6,
                         runSpacing: 6,
-                        children: kGenres.map((g) => MonoChip(
-                          label: g,
-                          active: filter.genres.contains(g),
-                          onTap: () => onFilterChanged(
-                            filter.copyWith(genres: _toggle(filter.genres, g)),
-                          ),
-                        )).toList(),
+                        children: kGenres
+                            .map(
+                              (g) => MonoChip(
+                                label: g,
+                                active: filter.genres.contains(g),
+                                onTap: () => onFilterChanged(
+                                  filter.copyWith(
+                                    genres: _toggle(filter.genres, g),
+                                  ),
+                                ),
+                              ),
+                            )
+                            .toList(),
                       ),
                     ),
                     // Smart filters section
@@ -643,102 +665,112 @@ class _TimeRangeSlider extends StatelessWidget {
       children: [
         SizedBox(
           height: 36,
-          child: LayoutBuilder(builder: (context, constraints) {
-            final w = constraints.maxWidth;
-            final xL = pctL * w;
-            final xR = pctR * w;
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final w = constraints.maxWidth;
+              final xL = pctL * w;
+              final xR = pctR * w;
 
-            return Stack(
-              clipBehavior: Clip.none,
-              children: [
-                // Track
-                Positioned(
-                  left: 0, right: 0,
-                  top: 17,
-                  child: const DottedRule(),
-                ),
-                // Fill
-                Positioned(
-                  left: xL, width: xR - xL,
-                  top: 16,
-                  height: 2,
-                  child: Container(color: colorAccent),
-                ),
-                // Left label
-                Positioned(
-                  left: xL - 14,
-                  top: -16,
-                  child: Text(
-                    fmtTime(timeRange[0]),
-                    style: const TextStyle(
-                      fontFamily: 'JetBrainsMono',
-                      fontSize: 10,
-                      fontWeight: FontWeight.w700,
-                      color: colorAccent,
-                      height: 1,
-                    ),
+              return Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  // Track
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    top: 17,
+                    child: const DottedRule(),
                   ),
-                ),
-                // Right label
-                Positioned(
-                  left: xR - 14,
-                  top: -16,
-                  child: Text(
-                    fmtTime(timeRange[1]),
-                    style: const TextStyle(
-                      fontFamily: 'JetBrainsMono',
-                      fontSize: 10,
-                      fontWeight: FontWeight.w700,
-                      color: colorAccent,
-                      height: 1,
-                    ),
+                  // Fill
+                  Positioned(
+                    left: xL,
+                    width: xR - xL,
+                    top: 16,
+                    height: 2,
+                    child: Container(color: colorAccent),
                   ),
-                ),
-                // Left handle
-                Positioned(
-                  left: xL - 7, top: 11,
-                  child: GestureDetector(
-                    onHorizontalDragUpdate: (d) {
-                      final newX = (xL + d.delta.dx).clamp(0.0, w);
-                      final newMin = _min + ((newX / w) * (_max - _min)).round();
-                      if (newMin < timeRange[1]) {
-                        onChanged([newMin.clamp(_min, _max), timeRange[1]]);
-                      }
-                    },
-                    child: Container(
-                      width: 14, height: 14,
-                      color: colorAccent,
-                      decoration: BoxDecoration(
+                  // Left label
+                  Positioned(
+                    left: xL - 14,
+                    top: -16,
+                    child: Text(
+                      fmtTime(timeRange[0]),
+                      style: const TextStyle(
+                        fontFamily: 'JetBrainsMono',
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
                         color: colorAccent,
-                        border: Border.all(color: colorBg, width: 2),
+                        height: 1,
                       ),
                     ),
                   ),
-                ),
-                // Right handle
-                Positioned(
-                  left: xR - 7, top: 11,
-                  child: GestureDetector(
-                    onHorizontalDragUpdate: (d) {
-                      final newX = (xR + d.delta.dx).clamp(0.0, w);
-                      final newMax = _min + ((newX / w) * (_max - _min)).round();
-                      if (newMax > timeRange[0]) {
-                        onChanged([timeRange[0], newMax.clamp(_min, _max)]);
-                      }
-                    },
-                    child: Container(
-                      width: 14, height: 14,
-                      color: colorAccent,
-                      decoration: BoxDecoration(
+                  // Right label
+                  Positioned(
+                    left: xR - 14,
+                    top: -16,
+                    child: Text(
+                      fmtTime(timeRange[1]),
+                      style: const TextStyle(
+                        fontFamily: 'JetBrainsMono',
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
                         color: colorAccent,
-                        border: Border.all(color: colorBg, width: 2),
+                        height: 1,
                       ),
                     ),
                   ),
-                ),
-              ],
-            );
-          }),
+                  // Left handle
+                  Positioned(
+                    left: xL - 7,
+                    top: 11,
+                    child: GestureDetector(
+                      onHorizontalDragUpdate: (d) {
+                        final newX = (xL + d.delta.dx).clamp(0.0, w);
+                        final newMin =
+                            _min + ((newX / w) * (_max - _min)).round();
+                        if (newMin < timeRange[1]) {
+                          onChanged([newMin.clamp(_min, _max), timeRange[1]]);
+                        }
+                      },
+                      child: Container(
+                        width: 14,
+                        height: 14,
+                        color: colorAccent,
+                        decoration: BoxDecoration(
+                          color: colorAccent,
+                          border: Border.all(color: colorBg, width: 2),
+                        ),
+                      ),
+                    ),
+                  ),
+                  // Right handle
+                  Positioned(
+                    left: xR - 7,
+                    top: 11,
+                    child: GestureDetector(
+                      onHorizontalDragUpdate: (d) {
+                        final newX = (xR + d.delta.dx).clamp(0.0, w);
+                        final newMax =
+                            _min + ((newX / w) * (_max - _min)).round();
+                        if (newMax > timeRange[0]) {
+                          onChanged([timeRange[0], newMax.clamp(_min, _max)]);
+                        }
+                      },
+                      child: Container(
+                        width: 14,
+                        height: 14,
+                        color: colorAccent,
+                        decoration: BoxDecoration(
+                          color: colorAccent,
+                          border: Border.all(color: colorBg, width: 2),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
         ),
         const SizedBox(height: 14),
         // Time labels

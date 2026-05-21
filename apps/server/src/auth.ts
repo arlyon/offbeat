@@ -1,49 +1,168 @@
-import * as jose from "jose";
+import {
+	generateRegistrationOptions as genRegOpts,
+	verifyRegistrationResponse,
+	generateAuthenticationOptions as genAuthOpts,
+	verifyAuthenticationResponse,
+} from "@simplewebauthn/server";
+import type {
+	AuthenticationResponseJSON,
+	RegistrationResponseJSON,
+	WebAuthnCredential,
+} from "@simplewebauthn/server";
 
-const JWT_SECRET = new TextEncoder().encode("offbeat-dev-secret"); // TODO: env var
+// ---------------------------------------------------------------------------
+// Configuration
+// ---------------------------------------------------------------------------
 
-export async function generateRegistrationOptions(userId: string): Promise<object> {
-	// Stub — will use @simplewebauthn/server
+const ANDROID_PACKAGE = "com.offbeat.offbeat_mobile";
+
+/** RP ID — the domain passkeys are bound to.
+ *  In dev: "localhost". In production: "offbeat.app". */
+/** RP ID — set via RP_ID in .dev.vars (local) or wrangler secret (deployed). */
+export function getRpId(env: Record<string, unknown>): string {
+	return (env.RP_ID as string) ?? "localhost";
+}
+
+/** Expected origin(s) for WebAuthn ceremonies.
+ *  Includes the web origin and the Android app origin for native passkeys. */
+export function getExpectedOrigins(env: Record<string, unknown>): string[] {
+	const rpId = getRpId(env);
+	const origins: string[] = [];
+
+	// Android native passkey origin (Credential Manager)
+	// The hash is the SHA256 cert fingerprint, base64url-encoded (from .dev.vars or wrangler secret)
+	const apkHash = (env.ANDROID_APK_KEY_HASH as string) ?? "";
+	if (apkHash) {
+		origins.push(`android:apk-key-hash:${apkHash}`);
+	}
+
+	if (rpId === "localhost") {
+		// Dev mode: accept any local address
+		origins.push("http://localhost:8787");
+		origins.push("http://localhost");
+		// Also accept LAN IPs (common dev pattern)
+		if (env.ALLOWED_ORIGINS) {
+			origins.push(...(env.ALLOWED_ORIGINS as string).split(",").map((o) => o.trim()));
+		}
+	} else {
+		origins.push(`https://${rpId}`);
+	}
+
+	return origins.filter((o) => o.length > 0);
+}
+
+// ---------------------------------------------------------------------------
+// Registration
+// ---------------------------------------------------------------------------
+
+export async function generateRegistrationOptions(
+	userId: string,
+	env: Record<string, unknown>,
+	existingCredentials: { id: string; transports?: string[] }[] = [],
+): Promise<object> {
+	const rpId = getRpId(env);
+	const options = await genRegOpts({
+		rpName: "OFFBEAT",
+		rpID: rpId,
+		userName: userId,
+		attestationType: "none",
+		authenticatorSelection: {
+			residentKey: "preferred",
+			userVerification: "preferred",
+		},
+		excludeCredentials: existingCredentials.map((c) => ({
+			id: c.id,
+			transports: c.transports as AuthenticatorTransport[] | undefined,
+		})),
+	});
+	return options;
+}
+
+export async function verifyRegistration(
+	response: unknown,
+	expectedChallenge: string,
+	env: Record<string, unknown>,
+): Promise<{
+	verified: boolean;
+	credentialId?: string;
+	publicKey?: Uint8Array;
+	counter?: number;
+	transports?: string[];
+}> {
+	const rpId = getRpId(env);
+	const expectedOrigins = getExpectedOrigins(env);
+
+	const verification = await verifyRegistrationResponse({
+		response: response as RegistrationResponseJSON,
+		expectedChallenge,
+		expectedOrigin: expectedOrigins,
+		expectedRPID: rpId,
+		requireUserVerification: false,
+	});
+
+	if (!verification.verified || !verification.registrationInfo) {
+		return { verified: false };
+	}
+
+	const { credential } = verification.registrationInfo;
 	return {
-		challenge: crypto.getRandomValues(new Uint8Array(32)),
-		rp: { name: "OFFBEAT", id: "localhost" },
-		user: { id: userId, name: userId, displayName: userId },
+		verified: true,
+		credentialId: credential.id,
+		publicKey: credential.publicKey,
+		counter: credential.counter,
+		transports: credential.transports,
 	};
 }
 
-export async function verifyRegistration(response: unknown): Promise<{
+// ---------------------------------------------------------------------------
+// Authentication
+// ---------------------------------------------------------------------------
+
+export async function generateAuthenticationOptions(
+	env: Record<string, unknown>,
+	allowCredentials: { id: string; transports?: string[] }[] = [],
+): Promise<object> {
+	const rpId = getRpId(env);
+	const options = await genAuthOpts({
+		rpID: rpId,
+		userVerification: "preferred",
+		allowCredentials: allowCredentials.map((c) => ({
+			id: c.id,
+			transports: c.transports as AuthenticatorTransport[] | undefined,
+		})),
+	});
+	return options;
+}
+
+export async function verifyAuthentication(
+	response: unknown,
+	expectedChallenge: string,
+	credential: WebAuthnCredential,
+	env: Record<string, unknown>,
+): Promise<{
 	verified: boolean;
-	credentialId?: string;
-	publicKey?: string;
+	newCounter?: number;
 }> {
-	// Stub — response param reserved for future @simplewebauthn/server integration
-	void response;
-	return { verified: true, credentialId: "stub", publicKey: "stub" };
+	const rpId = getRpId(env);
+	const expectedOrigins = getExpectedOrigins(env);
+
+	const verification = await verifyAuthenticationResponse({
+		response: response as AuthenticationResponseJSON,
+		expectedChallenge,
+		expectedOrigin: expectedOrigins,
+		expectedRPID: rpId,
+		credential,
+		requireUserVerification: false,
+	});
+
+	return {
+		verified: verification.verified,
+		newCounter: verification.authenticationInfo?.newCounter,
+	};
 }
 
-export async function generateAuthenticationOptions(): Promise<object> {
-	// Stub — will use @simplewebauthn/server
-	return { challenge: crypto.getRandomValues(new Uint8Array(32)) };
-}
+// ---------------------------------------------------------------------------
+// Helpers (kept for potential future use)
+// ---------------------------------------------------------------------------
 
-export async function verifyAuthentication(response: unknown): Promise<{
-	verified: boolean;
-	userId?: string;
-}> {
-	// Stub — response param reserved for future @simplewebauthn/server integration
-	void response;
-	return { verified: true, userId: "stub" };
-}
-
-export async function createJwt(userId: string): Promise<string> {
-	return new jose.SignJWT({ sub: userId })
-		.setProtectedHeader({ alg: "HS256" })
-		.setExpirationTime("24h")
-		.setIssuedAt()
-		.sign(JWT_SECRET);
-}
-
-export async function verifyJwt(token: string): Promise<{ userId: string }> {
-	const { payload } = await jose.jwtVerify(token, JWT_SECRET);
-	return { userId: payload.sub as string };
-}
+type AuthenticatorTransport = "ble" | "cable" | "hybrid" | "internal" | "nfc" | "smart-card" | "usb";

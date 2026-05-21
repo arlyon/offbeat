@@ -11,7 +11,11 @@ class YouScreen extends StatelessWidget {
   final String? displayName;
   final String authState; // "valid", "expiring", "expired"
   final String? expiresAt;
+  final bool isAdmin;
+  final String adminRequestStatus; // "", "pending", "already_admin"
+  final List<String> adminKeys;
   final ValueChanged<String> onDisplayNameChanged;
+  final VoidCallback? onRequestAdmin;
 
   const YouScreen({
     super.key,
@@ -20,7 +24,11 @@ class YouScreen extends StatelessWidget {
     this.displayName,
     required this.authState,
     this.expiresAt,
+    this.isAdmin = false,
+    this.adminRequestStatus = '',
+    this.adminKeys = const [],
     required this.onDisplayNameChanged,
+    this.onRequestAdmin,
   });
 
   @override
@@ -43,8 +51,11 @@ class YouScreen extends StatelessWidget {
                       border: Border.all(color: colorAccent, width: 1.5),
                     ),
                     child: const Center(
-                      child:
-                          Icon(Icons.fingerprint, color: colorAccent, size: 28),
+                      child: Icon(
+                        Icons.fingerprint,
+                        color: colorAccent,
+                        size: 28,
+                      ),
                     ),
                   ),
                 ),
@@ -104,6 +115,131 @@ class YouScreen extends StatelessWidget {
                     ),
                   ),
                 ),
+                const SizedBox(height: 32),
+                // Admin section
+                if (isAdmin) ...[
+                  _InfoRow(
+                    label: 'ROLE',
+                    value: 'ADMIN',
+                    valueColor: colorAccent,
+                  ),
+                ] else if (adminRequestStatus == 'pending') ...[
+                  DottedBorder(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(
+                            Icons.hourglass_top,
+                            color: colorWarn,
+                            size: 14,
+                          ),
+                          const SizedBox(width: 8),
+                          const Expanded(
+                            child: Text(
+                              'ADMIN REQUEST PENDING',
+                              style: TextStyle(
+                                fontFamily: 'JetBrainsMono',
+                                fontSize: 9,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 0.08 * 9,
+                                color: colorWarn,
+                                height: 1,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ] else if (onRequestAdmin != null) ...[
+                  SizedBox(
+                    width: double.infinity,
+                    height: 44,
+                    child: DottedBorder(
+                      child: Material(
+                        color: colorSurface2,
+                        child: InkWell(
+                          onTap: onRequestAdmin,
+                          child: const Center(
+                            child: Text(
+                              'REQUEST ADMIN ACCESS',
+                              style: TextStyle(
+                                fontFamily: 'JetBrainsMono',
+                                fontSize: 9,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 0.08 * 9,
+                                color: colorFg2,
+                                height: 1,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+                if (adminKeys.isNotEmpty) ...[
+                  const SizedBox(height: 32),
+                  const Text(
+                    'ADMINS',
+                    style: TextStyle(
+                      fontFamily: 'JetBrainsMono',
+                      fontSize: 9,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.08 * 9,
+                      color: colorFg3,
+                      height: 1,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  ...adminKeys.map(
+                    (key) => Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: Row(
+                        children: [
+                          Icon(
+                            key == publicKeyHex
+                                ? Icons.person
+                                : Icons.person_outline,
+                            color:
+                                key == publicKeyHex ? colorAccent : colorFg4,
+                            size: 14,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              '${key.substring(0, 16)}...',
+                              style: TextStyle(
+                                fontFamily: 'JetBrainsMono',
+                                fontSize: 9,
+                                color: key == publicKeyHex
+                                    ? colorFg
+                                    : colorFg3,
+                                height: 1.3,
+                              ),
+                            ),
+                          ),
+                          if (key == publicKeyHex)
+                            const Text(
+                              'YOU',
+                              style: TextStyle(
+                                fontFamily: 'JetBrainsMono',
+                                fontSize: 8,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 0.1 * 8,
+                                color: colorAccent,
+                                height: 1,
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -144,11 +280,7 @@ class _InfoRow extends StatelessWidget {
   final String value;
   final Color? valueColor;
 
-  const _InfoRow({
-    required this.label,
-    required this.value,
-    this.valueColor,
-  });
+  const _InfoRow({required this.label, required this.value, this.valueColor});
 
   @override
   Widget build(BuildContext context) {

@@ -1,3 +1,4 @@
+import 'dart:developer' as dev;
 import 'package:flutter/material.dart';
 import '../../theme/tokens.dart';
 import '../../shell/top_nav.dart';
@@ -25,7 +26,8 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     });
     try {
       await widget.onRegister();
-    } catch (e) {
+    } catch (e, stack) {
+      dev.log('Registration failed', error: e, stackTrace: stack, name: 'auth');
       setState(() => _error = e.toString());
     } finally {
       if (mounted) setState(() => _loading = false);
@@ -51,7 +53,11 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                     border: Border.all(color: colorDotted, width: 1.5),
                   ),
                   child: const Center(
-                    child: Icon(Icons.fingerprint, color: colorAccent, size: 28),
+                    child: Icon(
+                      Icons.fingerprint,
+                      color: colorAccent,
+                      size: 28,
+                    ),
                   ),
                 ),
                 const SizedBox(height: 24),

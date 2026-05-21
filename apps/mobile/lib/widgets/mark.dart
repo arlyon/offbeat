@@ -35,10 +35,6 @@ class _Bar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: 3,
-      height: height,
-      color: color,
-    );
+    return Container(width: 3, height: height, color: color);
   }
 }

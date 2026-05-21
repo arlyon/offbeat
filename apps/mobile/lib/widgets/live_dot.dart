@@ -62,7 +62,7 @@ class _LiveDotState extends State<LiveDot> with SingleTickerProviderStateMixin {
                   height: ringSize,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: colorAccent.withOpacity(ringOpacity),
+                    color: colorAccent.withValues(alpha: ringOpacity),
                   ),
                 ),
               ),

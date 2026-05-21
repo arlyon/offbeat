@@ -51,7 +51,7 @@ const List<Color> stageColors = [
 // Mono: JetBrains Mono (via google_fonts)
 
 // Type scale (logical px values)
-const double tDisplay = 40.0;  // clamp, use 40 as base for mobile
+const double tDisplay = 40.0; // clamp, use 40 as base for mobile
 const double tH1 = 28.0;
 const double tH2 = 20.0;
 const double tH3 = 16.0;
@@ -65,9 +65,9 @@ const double lhSnug = 1.18;
 const double lhBody = 1.45;
 
 // Letter spacings (em values converted, approx at 15px base)
-const double trTight = -0.02;   // em — negative tracking for big sans heads
-const double trMono = -0.01;    // em — mono runs
-const double trMeta = 0.08;     // em — spaced caps for labels
+const double trTight = -0.02; // em — negative tracking for big sans heads
+const double trMono = -0.01; // em — mono runs
+const double trMeta = 0.08; // em — spaced caps for labels
 
 // ── Spacing (4px base) ───────────────────────────────────────
 const double sp1 = 4.0;
@@ -84,28 +84,34 @@ const double sp9 = 96.0;
 const double navH = 52.0;
 const double tabH = 56.0;
 const double statusBarH = 28.0;
-const double tapMin = 44.0;  // minimum tap target
+const double tapMin = 44.0; // minimum tap target
 
 // ── Borders ──────────────────────────────────────────────────
 const double bdDotWidth = 1.5;
 const double bdWidth = 1.0;
 
 // ── Gantt layout constants ───────────────────────────────────
-const int ganttStartMin = 18 * 60;  // 18:00
-const int ganttEndMin = 26 * 60;    // 02:00+1
-const int ganttRangeMin = ganttEndMin - ganttStartMin;  // 480 min
+const int ganttStartMin = 18 * 60; // 18:00
+const int ganttEndMin = 26 * 60; // 02:00+1
+const int ganttRangeMin = ganttEndMin - ganttStartMin; // 480 min
 const double ganttPxPerMin = 3.0;
-const double ganttContentW = ganttRangeMin * ganttPxPerMin;  // 1440px
+const double ganttContentW = ganttRangeMin * ganttPxPerMin; // 1440px
 const double ganttStageLabelW = 46.0;
 
 // ── FestArt gradient palettes (hue index 1–5) ────────────────
 List<Color> festArtGradient(int hue) {
   switch (hue) {
-    case 1: return [const Color(0xFF14040A), const Color(0xFFFF2D8F)];
-    case 2: return [const Color(0xFF001818), const Color(0xFF3DDBD9)];
-    case 3: return [const Color(0xFF1A1408), const Color(0xFFFFB347)];
-    case 4: return [const Color(0xFF0A1A08), const Color(0xFF9BE15D)];
-    case 5: return [const Color(0xFF1A0A1F), const Color(0xFFC77DFF)];
-    default: return [const Color(0xFF14040A), const Color(0xFFFF2D8F)];
+    case 1:
+      return [const Color(0xFF14040A), const Color(0xFFFF2D8F)];
+    case 2:
+      return [const Color(0xFF001818), const Color(0xFF3DDBD9)];
+    case 3:
+      return [const Color(0xFF1A1408), const Color(0xFFFFB347)];
+    case 4:
+      return [const Color(0xFF0A1A08), const Color(0xFF9BE15D)];
+    case 5:
+      return [const Color(0xFF1A0A1F), const Color(0xFFC77DFF)];
+    default:
+      return [const Color(0xFF14040A), const Color(0xFFFF2D8F)];
   }
 }

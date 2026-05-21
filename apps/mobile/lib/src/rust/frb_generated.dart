@@ -71,7 +71,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
         stem: 'offbeat_bridge',
-        ioDirectory: '../../crates/bridge/target/release/',
+        ioDirectory: 'rust/target/release/',
         webPrefix: 'pkg/',
         wasmBindgenName: 'wasm_bindgen',
       );
@@ -2509,10 +2509,6 @@ class AppNodeImpl extends RustOpaque implements AppNode {
   );
 
   /// Connect this node to the Festival Durable Object relay at `url`.
-  ///
-  /// Spawns a background task that receives messages and feeds them into
-  /// the dispatch pipeline. The WS sink is stored on the node for sending.
-  /// Auto-reconnects on disconnect with exponential backoff.
   Future<void> connectRelay({required String url}) =>
       RustLib.instance.api.crateApiAppNodeConnectRelay(that: this, url: url);
 
@@ -2533,7 +2529,6 @@ class AppNodeImpl extends RustOpaque implements AppNode {
       RustLib.instance.api.crateApiAppNodeDeleteGroup(that: this, id: id);
 
   /// Derive the Ed25519 identity from a WebAuthn PRF output (32 bytes).
-  /// Returns the hex-encoded Ed25519 public key.
   Future<String> deriveIdentityFromPrf({required List<int> prfOutput}) =>
       RustLib.instance.api.crateApiAppNodeDeriveIdentityFromPrf(
         that: this,
@@ -2637,10 +2632,7 @@ class AppNodeImpl extends RustOpaque implements AppNode {
   );
 
   /// Send a festival chat message (plaintext) and broadcast it via gossip if
-  /// networking is active.  Returns the persisted message.
-  ///
-  /// WS relay delivery should be performed separately by the caller via
-  /// `connect_relay`.
+  /// networking is active. Returns the persisted message.
   Future<ChatMessageDto> sendFestivalChat({
     required String festivalId,
     String? stageId,
@@ -2653,7 +2645,7 @@ class AppNodeImpl extends RustOpaque implements AppNode {
   );
 
   /// Send an encrypted group chat message and broadcast it via gossip if
-  /// networking is active.  Returns the persisted message.
+  /// networking is active. Returns the persisted message.
   Future<ChatMessageDto> sendGroupChat({
     required String groupId,
     required String text,
@@ -2668,8 +2660,6 @@ class AppNodeImpl extends RustOpaque implements AppNode {
       .crateApiAppNodeSetDisplayName(that: this, name: name);
 
   /// Cache a festival's Ed25519 public key (hex-encoded, 64 chars).
-  /// Call this after fetching from `GET /festivals/:id/public-key` on the
-  /// Dart/Flutter side.
   Future<void> setFestivalPublicKey({
     required String festivalId,
     required String hexKey,
@@ -2680,8 +2670,6 @@ class AppNodeImpl extends RustOpaque implements AppNode {
   );
 
   /// Sign an arbitrary message with the local Ed25519 identity key.
-  /// Used for admin operations (signing paths, challenges, etc.).
-  /// Returns the hex-encoded signature.
   Future<String> signMessage({required String message}) => RustLib.instance.api
       .crateApiAppNodeSignMessage(that: this, message: message);
 
@@ -2707,8 +2695,7 @@ class AppNodeImpl extends RustOpaque implements AppNode {
     stageIds: stageIds,
   );
 
-  /// Subscribe to the gossip topic for a festival, using the iroh-gossip
-  /// layer (if networking was started).
+  /// Subscribe to the gossip topic for a festival.
   Future<void> subscribeFestival({required String festivalId}) => RustLib
       .instance
       .api

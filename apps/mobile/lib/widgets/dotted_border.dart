@@ -102,7 +102,10 @@ class _DottedBorderPainter extends CustomPainter {
     final drawAll = sides.contains(DottedBorderSide.all);
 
     if (drawAll || sides.contains(DottedBorderSide.top)) {
-      drawDashedLine(Offset(0, strokeWidth / 2), Offset(size.width, strokeWidth / 2));
+      drawDashedLine(
+        Offset(0, strokeWidth / 2),
+        Offset(size.width, strokeWidth / 2),
+      );
     }
     if (drawAll || sides.contains(DottedBorderSide.bottom)) {
       drawDashedLine(
@@ -111,7 +114,10 @@ class _DottedBorderPainter extends CustomPainter {
       );
     }
     if (drawAll || sides.contains(DottedBorderSide.left)) {
-      drawDashedLine(Offset(strokeWidth / 2, 0), Offset(strokeWidth / 2, size.height));
+      drawDashedLine(
+        Offset(strokeWidth / 2, 0),
+        Offset(strokeWidth / 2, size.height),
+      );
     }
     if (drawAll || sides.contains(DottedBorderSide.right)) {
       drawDashedLine(
@@ -136,11 +142,7 @@ class DottedRule extends StatelessWidget {
   final Color color;
   final double height;
 
-  const DottedRule({
-    super.key,
-    this.color = colorDotted,
-    this.height = 1.5,
-  });
+  const DottedRule({super.key, this.color = colorDotted, this.height = 1.5});
 
   @override
   Widget build(BuildContext context) {

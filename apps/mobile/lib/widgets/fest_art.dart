@@ -3,7 +3,6 @@
 // SVG grain overlay as noise texture
 // Optional label at bottom-left
 
-import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import '../theme/tokens.dart';
 
@@ -32,9 +31,7 @@ class FestArt extends StatelessWidget {
         child: Stack(
           children: [
             // Grain overlay via shader (approximated via noise pattern)
-            Positioned.fill(
-              child: _GrainOverlay(),
-            ),
+            Positioned.fill(child: _GrainOverlay()),
             // Label bottom-left
             if (label != null)
               Positioned(
@@ -81,9 +78,7 @@ class _GrainOverlay extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     // Approximate grain with a fine dot pattern using CustomPaint
-    return CustomPaint(
-      painter: _GrainPainter(),
-    );
+    return CustomPaint(painter: _GrainPainter());
   }
 }
 
@@ -91,7 +86,7 @@ class _GrainPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
-      ..color = Colors.white.withOpacity(0.04)
+      ..color = Colors.white.withValues(alpha: 0.04)
       ..style = PaintingStyle.fill;
 
     // Create a fine noise pattern by painting tiny dots pseudo-randomly

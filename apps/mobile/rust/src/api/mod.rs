@@ -153,10 +153,7 @@ impl AppNode {
     }
 
     /// Send a festival chat message (plaintext) and broadcast it via gossip if
-    /// networking is active.  Returns the persisted message.
-    ///
-    /// WS relay delivery should be performed separately by the caller via
-    /// `connect_relay`.
+    /// networking is active. Returns the persisted message.
     pub async fn send_festival_chat(
         &self,
         festival_id: String,
@@ -176,7 +173,6 @@ impl AppNode {
             &text,
         )?;
 
-        // Broadcast via gossip if available.
         {
             use offbeat_core::gossip_manager::{GossipMessage, encode_gossip_message_pub};
             let wire = encode_gossip_message_pub(&GossipMessage::Chat(msg.clone()))?;
@@ -186,7 +182,6 @@ impl AppNode {
                 let _ = gm.lock().await.publish(topic_id, bytes).await;
             }
 
-            // Also send via WS relay
             if let Some(ws) = &self.inner.ws_relay {
                 let topic_str = format!(
                     "festival/{}/chat/{}",
@@ -209,7 +204,7 @@ impl AppNode {
     }
 
     /// Send an encrypted group chat message and broadcast it via gossip if
-    /// networking is active.  Returns the persisted message.
+    /// networking is active. Returns the persisted message.
     pub async fn send_group_chat(
         &self,
         group_id: String,
@@ -227,7 +222,6 @@ impl AppNode {
             &text,
         )?;
 
-        // Retrieve the stored message to return as DTO (most recent for topic).
         let stored = self
             .inner
             .db
@@ -237,7 +231,6 @@ impl AppNode {
             .next()
             .ok_or_else(|| anyhow::anyhow!("send_group_chat: message not found after save"))?;
 
-        // Broadcast via gossip + WS relay
         {
             use offbeat_core::gossip_manager::{GossipMessage, encode_gossip_message_pub};
 
@@ -323,10 +316,6 @@ impl AppNode {
     // -----------------------------------------------------------------------
 
     /// Connect this node to the Festival Durable Object relay at `url`.
-    ///
-    /// Spawns a background task that receives messages and feeds them into
-    /// the dispatch pipeline. The WS sink is stored on the node for sending.
-    /// Auto-reconnects on disconnect with exponential backoff.
     pub async fn connect_relay(&mut self, url: String) -> anyhow::Result<()> {
         use offbeat_core::{auth, ws_relay};
         use std::sync::Arc;
@@ -338,11 +327,10 @@ impl AppNode {
             &url,
             doc_manager,
             db,
-            None, // festival public key set later via subscribe_festival
+            None,
         )
         .await?;
 
-        // Authenticate if we have an attestation
         if let Ok(Some(attestation)) = auth::load_attestation(&self.inner.db) {
             if let Ok(signing_key) = auth::generate_or_load_identity(&self.inner.db) {
                 let pubkey_hex = auth::get_public_key_hex(&signing_key);
@@ -363,12 +351,8 @@ impl AppNode {
         Ok(())
     }
 
-    /// Subscribe to the gossip topic for a festival, using the iroh-gossip
-    /// layer (if networking was started).
-    pub async fn subscribe_festival(
-        &mut self,
-        festival_id: String,
-    ) -> anyhow::Result<()> {
+    /// Subscribe to the gossip topic for a festival.
+    pub async fn subscribe_festival(&mut self, festival_id: String) -> anyhow::Result<()> {
         let topic_id = offbeat_core::topics::festival_topic(&festival_id, "state");
 
         if let Some(gm) = &self.inner.gossip_manager {
@@ -379,8 +363,6 @@ impl AppNode {
     }
 
     /// Cache a festival's Ed25519 public key (hex-encoded, 64 chars).
-    /// Call this after fetching from `GET /festivals/:id/public-key` on the
-    /// Dart/Flutter side.
     pub fn set_festival_public_key(
         &mut self,
         festival_id: String,
@@ -417,8 +399,6 @@ impl AppNode {
             timestamp: message.timestamp,
         };
 
-        // Derive the topic id from the topic string.
-        // Expected format: "festival/{id}/{channel}"
         let parts: Vec<&str> = topic.splitn(3, '/').collect();
         let topic_id = if parts.len() == 3 && parts[0] == "festival" {
             offbeat_core::topics::festival_topic(parts[1], parts[2])
@@ -459,7 +439,6 @@ impl AppNode {
     }
 
     /// Derive the Ed25519 identity from a WebAuthn PRF output (32 bytes).
-    /// Returns the hex-encoded Ed25519 public key.
     pub fn derive_identity_from_prf(&self, prf_output: Vec<u8>) -> anyhow::Result<String> {
         let arr: [u8; 32] = prf_output
             .try_into()
@@ -516,8 +495,6 @@ impl AppNode {
     }
 
     /// Sign an arbitrary message with the local Ed25519 identity key.
-    /// Used for admin operations (signing paths, challenges, etc.).
-    /// Returns the hex-encoded signature.
     pub fn sign_message(&self, message: String) -> anyhow::Result<String> {
         let key = offbeat_core::auth::generate_or_load_identity(&self.inner.db)?;
         let sig = offbeat_core::signing::sign(&key, message.as_bytes());

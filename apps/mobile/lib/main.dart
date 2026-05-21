@@ -1,11 +1,11 @@
 // OFFBEAT Mobile App — Entry point
 
+import 'dart:developer' as dev;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'theme/app_theme.dart';
 import 'theme/tokens.dart';
-import 'shell/status_bar.dart';
 import 'shell/bottom_tab_bar.dart';
 import 'shell/top_nav.dart';
 import 'data/mock_data.dart';
@@ -70,6 +70,8 @@ class _OffbeatShellState extends State<_OffbeatShell> {
   // Admin state
   bool _isAdmin = false;
   List<String> _adminKeys = [];
+  List<AdminRequest> _pendingRequests = [];
+  String _adminRequestStatus = ''; // '', 'pending', 'already_admin'
 
   final _authService = AuthService();
   final _adminService = AdminService();
@@ -93,6 +95,16 @@ class _OffbeatShellState extends State<_OffbeatShell> {
       pubKeyHex = await node.getPublicKeyHex();
     }
 
+    // Check admin status if registered
+    List<String> admins = [];
+    bool isAdmin = false;
+    if (pubKeyHex.isNotEmpty) {
+      try {
+        admins = await _adminService.listAdmins();
+        isAdmin = admins.contains(pubKeyHex);
+      } catch (_) {}
+    }
+
     setState(() {
       _node = node;
       _nodeReady = true;
@@ -101,6 +113,9 @@ class _OffbeatShellState extends State<_OffbeatShell> {
       _userId = identity.userId;
       _displayName = identity.displayName;
       _publicKeyHex = pubKeyHex;
+      _adminKeys = admins;
+      _isAdmin = isAdmin;
+      if (isAdmin) _adminRequestStatus = 'already_admin';
     });
   }
 
@@ -142,9 +157,19 @@ class _OffbeatShellState extends State<_OffbeatShell> {
       try {
         final admins = await _adminService.listAdmins();
         final isAdmin = admins.contains(_publicKeyHex);
+
+        List<AdminRequest> requests = [];
+        if (isAdmin) {
+          try {
+            requests = await _adminService.listAdminRequests();
+          } catch (_) {}
+        }
+
         setState(() {
           _adminKeys = admins;
           _isAdmin = isAdmin;
+          _pendingRequests = requests;
+          if (isAdmin) _adminRequestStatus = 'already_admin';
         });
 
         // Show bootstrap dialog if no admins exist
@@ -183,7 +208,69 @@ class _OffbeatShellState extends State<_OffbeatShell> {
     setState(() {
       _isAdmin = admins.contains(_publicKeyHex);
       _adminKeys = admins;
+      _adminRequestStatus = 'already_admin';
     });
+  }
+
+  Future<void> _handleRequestAdmin() async {
+    if (_publicKeyHex.isEmpty) return;
+    try {
+      // If no admins exist, bootstrap directly (first admin is auto-accepted)
+      if (_adminKeys.isEmpty) {
+        await _adminService.registerAdmin(publicKeyHex: _publicKeyHex);
+        final admins = await _adminService.listAdmins();
+        setState(() {
+          _adminKeys = admins;
+          _isAdmin = admins.contains(_publicKeyHex);
+          _adminRequestStatus = 'already_admin';
+        });
+        return;
+      }
+      final status = await _adminService.requestAdmin(
+        publicKeyHex: _publicKeyHex,
+        displayName: _displayName,
+      );
+      setState(() => _adminRequestStatus = status);
+    } catch (_) {
+      // Server unreachable
+    }
+  }
+
+  Future<void> _handleApproveRequest(String key) async {
+    if (_publicKeyHex.isEmpty || _node == null) return;
+    try {
+      // Sign the approve path
+      final path = '/admins/requests/$key/approve';
+      final sig = await _node!.signMessage(message: path);
+      await _adminService.approveAdminRequest(
+        publicKeyHex: key,
+        adminKeyHex: _publicKeyHex,
+        adminSigHex: sig,
+      );
+      // Refresh
+      final admins = await _adminService.listAdmins();
+      final requests = await _adminService.listAdminRequests();
+      setState(() {
+        _adminKeys = admins;
+        _pendingRequests = requests;
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _handleDenyRequest(String key) async {
+    if (_publicKeyHex.isEmpty || _node == null) return;
+    try {
+      final path = '/admins/requests/$key/deny';
+      final sig = await _node!.signMessage(message: path);
+      await _adminService.denyAdminRequest(
+        publicKeyHex: key,
+        adminKeyHex: _publicKeyHex,
+        adminSigHex: sig,
+      );
+      // Refresh
+      final requests = await _adminService.listAdminRequests();
+      setState(() => _pendingRequests = requests);
+    } catch (_) {}
   }
 
   @override
@@ -199,7 +286,6 @@ class _OffbeatShellState extends State<_OffbeatShell> {
         backgroundColor: colorBg,
         body: Column(
           children: [
-            const OffbeatStatusBar(),
             Expanded(child: _buildBody()),
             OffbeatTabBar(
               activeTab: _activeTab,
@@ -232,6 +318,9 @@ class _OffbeatShellState extends State<_OffbeatShell> {
             isAdmin: _isAdmin,
             adminKeys: _adminKeys,
             userPublicKeyHex: _publicKeyHex,
+            pendingRequests: _pendingRequests,
+            onApproveRequest: _handleApproveRequest,
+            onDenyRequest: _handleDenyRequest,
           );
         }
         return FestivalListScreen(
@@ -254,10 +343,14 @@ class _OffbeatShellState extends State<_OffbeatShell> {
           displayName: _displayName,
           authState: _authState,
           expiresAt: _authExpiresAt,
+          isAdmin: _isAdmin,
+          adminRequestStatus: _adminRequestStatus,
+          adminKeys: _adminKeys,
           onDisplayNameChanged: (name) async {
             await _node?.setDisplayName(name: name);
             setState(() => _displayName = name);
           },
+          onRequestAdmin: _handleRequestAdmin,
         );
     }
   }

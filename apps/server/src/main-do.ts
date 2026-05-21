@@ -121,6 +121,12 @@ export class MainDO extends DurableObject {
 				public_key TEXT PRIMARY KEY
 			);
 
+			CREATE TABLE IF NOT EXISTS pending_admins (
+				public_key TEXT PRIMARY KEY,
+				display_name TEXT NOT NULL DEFAULT '',
+				requested_at TEXT NOT NULL DEFAULT (datetime('now'))
+			);
+
 			CREATE TABLE IF NOT EXISTS revocations (
 				public_key TEXT PRIMARY KEY,
 				revoked_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -326,6 +332,33 @@ export class MainDO extends DurableObject {
 		return null;
 	}
 
+	/** Look up a stored WebAuthn credential by its credential ID. */
+	#getCredentialById(credentialId: string): {
+		id: string;
+		publicKey: Uint8Array;
+		counter: number;
+		transports?: string[];
+	} | null {
+		const rows = this.sql
+			.exec("SELECT credential_data FROM credentials WHERE id = ?", credentialId)
+			.toArray() as { credential_data: string }[];
+		if (rows.length === 0) return null;
+		const data = JSON.parse(rows[0].credential_data) as {
+			credentialId: string;
+			publicKey: Record<string, number>;
+			counter: number;
+			transports?: string[];
+		};
+		// publicKey was stored as a serialized Uint8Array (JSON object with numeric keys)
+		const pkBytes = new Uint8Array(Object.values(data.publicKey));
+		return {
+			id: data.credentialId,
+			publicKey: pkBytes,
+			counter: data.counter ?? 0,
+			transports: data.transports,
+		};
+	}
+
 	#getLineup(id: string): Lineup | null {
 		const festival = this.#getFestival(id);
 		if (!festival) return null;
@@ -370,10 +403,20 @@ export class MainDO extends DurableObject {
 		};
 	}
 
+	/** Clean up expired challenges. */
+	async alarm() {
+		// Delete all expired challenges (older than 5 minutes)
+		const keys = await this.ctx.storage.list({ prefix: "challenge:" });
+		if (keys.size > 0) {
+			await this.ctx.storage.delete([...keys.keys()]);
+		}
+	}
+
 	async fetch(request: Request): Promise<Response> {
 		const url = new URL(request.url);
 		const path = url.pathname;
 		const method = request.method;
+		const env = this.env as Record<string, unknown>;
 
 		// GET /festivals
 		if (method === "GET" && path === "/festivals") {
@@ -436,8 +479,8 @@ export class MainDO extends DurableObject {
 				}
 
 				// Fetch lineup from Clashfinder API
-				const cfUsername = (this.env as Record<string, string>).CLASHFINDER_USERNAME;
-				const cfKey = (this.env as Record<string, string>).CLASHFINDER_PRIVATE_KEY;
+				const cfUsername = (env as Record<string, string>).CLASHFINDER_USERNAME;
+				const cfKey = (env as Record<string, string>).CLASHFINDER_PRIVATE_KEY;
 				if (!cfUsername || !cfKey) {
 					return new Response("Clashfinder credentials not configured", { status: 500 });
 				}
@@ -615,7 +658,7 @@ export class MainDO extends DurableObject {
 		// POST /auth/register/begin
 		if (method === "POST" && path === "/auth/register/begin") {
 			const body = (await request.json()) as { userId: string };
-			const options = await generateRegistrationOptions(body.userId);
+			const options = await generateRegistrationOptions(body.userId, env);
 			// Store challenge for verification (5-min TTL)
 			const challenge = (options as { challenge: string }).challenge;
 			await this.ctx.storage.put(`challenge:${challenge}`, body.userId);
@@ -627,15 +670,33 @@ export class MainDO extends DurableObject {
 		if (method === "POST" && path === "/auth/register/complete") {
 			const body = (await request.json()) as {
 				webauthnResponse: unknown;
+				challenge: string;
 				ed25519PublicKey: string;
 			};
 			if (!body.ed25519PublicKey || body.ed25519PublicKey.length !== 64) {
 				return new Response("ed25519PublicKey must be 64 hex chars", { status: 400 });
 			}
-			const result = await verifyRegistration(body.webauthnResponse);
-			if (!result.verified) {
-				return new Response("Registration failed", { status: 400 });
+			if (!body.challenge) {
+				return new Response("challenge is required", { status: 400 });
 			}
+
+			// Verify the challenge was issued by us
+			const storedUserId = await this.ctx.storage.get<string>(`challenge:${body.challenge}`);
+			if (!storedUserId) {
+				return new Response("Invalid or expired challenge", { status: 400 });
+			}
+			await this.ctx.storage.delete(`challenge:${body.challenge}`);
+
+			let result: Awaited<ReturnType<typeof verifyRegistration>>;
+			try {
+				result = await verifyRegistration(body.webauthnResponse, body.challenge, env);
+			} catch {
+				return new Response("Registration verification failed", { status: 400 });
+			}
+			if (!result.verified) {
+				return new Response("Registration verification failed", { status: 400 });
+			}
+
 			// Store WebAuthn credential with the Ed25519 public key
 			this.sql.exec(
 				`INSERT INTO credentials (id, user_id, public_key, credential_data, created_at)
@@ -651,7 +712,10 @@ export class MainDO extends DurableObject {
 
 		// POST /auth/recover/begin — new device recovery
 		if (method === "POST" && path === "/auth/recover/begin") {
-			const options = await generateAuthenticationOptions();
+			const options = await generateAuthenticationOptions(env);
+			const challenge = (options as { challenge: string }).challenge;
+			await this.ctx.storage.put(`challenge:${challenge}`, "recovery");
+			await this.ctx.storage.setAlarm(Date.now() + 5 * 60 * 1000);
 			return Response.json(options);
 		}
 
@@ -659,20 +723,60 @@ export class MainDO extends DurableObject {
 		if (method === "POST" && path === "/auth/recover/complete") {
 			const body = (await request.json()) as {
 				assertion: unknown;
+				challenge: string;
 				ed25519PublicKey: string;
 			};
 			if (!body.ed25519PublicKey || body.ed25519PublicKey.length !== 64) {
 				return new Response("ed25519PublicKey must be 64 hex chars", { status: 400 });
 			}
-			const result = await verifyAuthentication(body.assertion);
+			if (!body.challenge) {
+				return new Response("challenge is required", { status: 400 });
+			}
+
+			// Verify the challenge was issued by us
+			const stored = await this.ctx.storage.get<string>(`challenge:${body.challenge}`);
+			if (!stored) {
+				return new Response("Invalid or expired challenge", { status: 400 });
+			}
+			await this.ctx.storage.delete(`challenge:${body.challenge}`);
+
+			// Look up the credential by the assertion's credential ID
+			const assertionObj = body.assertion as { id?: string };
+			const credentialId = assertionObj?.id;
+			if (!credentialId) {
+				return new Response("assertion.id is required", { status: 400 });
+			}
+
+			const credential = this.#getCredentialById(credentialId);
+			if (!credential) {
+				return new Response("Unknown credential", { status: 403 });
+			}
+
+			let result: Awaited<ReturnType<typeof verifyAuthentication>>;
+			try {
+				result = await verifyAuthentication(
+					body.assertion,
+					body.challenge,
+					{
+						id: credential.id,
+						publicKey: credential.publicKey,
+						counter: credential.counter,
+						transports: credential.transports as import("@simplewebauthn/server").AuthenticatorTransportFuture[] | undefined,
+					},
+					env,
+				);
+			} catch {
+				return new Response("Authentication failed", { status: 400 });
+			}
 			if (!result.verified) {
 				return new Response("Authentication failed", { status: 400 });
 			}
+
 			// Verify the Ed25519 key matches what we stored at registration
-			const stored = this.sql
+			const storedCred = this.sql
 				.exec("SELECT public_key FROM credentials WHERE public_key = ?", body.ed25519PublicKey)
 				.toArray();
-			if (stored.length === 0) {
+			if (storedCred.length === 0) {
 				return new Response("Ed25519 key does not match registered key", { status: 403 });
 			}
 			const attestation = await this.#issueAttestation(body.ed25519PublicKey);
@@ -681,19 +785,60 @@ export class MainDO extends DurableObject {
 
 		// POST /auth/refresh — re-issue attestation for existing credential
 		if (method === "POST" && path === "/auth/refresh") {
-			const body = (await request.json()) as { assertion: unknown; ed25519PublicKey: string };
+			const body = (await request.json()) as {
+				assertion: unknown;
+				challenge: string;
+				ed25519PublicKey: string;
+			};
 			if (!body.ed25519PublicKey || body.ed25519PublicKey.length !== 64) {
 				return new Response("ed25519PublicKey must be 64 hex chars", { status: 400 });
 			}
-			const result = await verifyAuthentication(body.assertion);
+			if (!body.challenge) {
+				return new Response("challenge is required", { status: 400 });
+			}
+
+			const storedChallenge = await this.ctx.storage.get<string>(`challenge:${body.challenge}`);
+			if (!storedChallenge) {
+				return new Response("Invalid or expired challenge", { status: 400 });
+			}
+			await this.ctx.storage.delete(`challenge:${body.challenge}`);
+
+			const assertionObj = body.assertion as { id?: string };
+			const credentialId = assertionObj?.id;
+			if (!credentialId) {
+				return new Response("assertion.id is required", { status: 400 });
+			}
+
+			const credential = this.#getCredentialById(credentialId);
+			if (!credential) {
+				return new Response("Unknown credential", { status: 403 });
+			}
+
+			let result: Awaited<ReturnType<typeof verifyAuthentication>>;
+			try {
+				result = await verifyAuthentication(
+					body.assertion,
+					body.challenge,
+					{
+						id: credential.id,
+						publicKey: credential.publicKey,
+						counter: credential.counter,
+						transports: credential.transports as import("@simplewebauthn/server").AuthenticatorTransportFuture[] | undefined,
+					},
+					env,
+				);
+			} catch {
+				return new Response("Authentication failed", { status: 400 });
+			}
 			if (!result.verified) {
 				return new Response("Authentication failed", { status: 400 });
 			}
+
 			// Check key is registered and not revoked
-			const stored = this.sql
+			const storedCred = this.sql
 				.exec("SELECT public_key FROM credentials WHERE public_key = ?", body.ed25519PublicKey)
 				.toArray();
-			if (stored.length === 0) {
+			if (storedCred.length === 0) {
 				return new Response("Unknown key", { status: 403 });
 			}
 			const revoked = this.sql
@@ -711,7 +856,6 @@ export class MainDO extends DurableObject {
 		if (method === "PUT" && path === "/admins") {
 			const body = (await request.json()) as {
 				publicKey: string;
-				signature?: string;
 			};
 			if (!body.publicKey || body.publicKey.length !== 64) {
 				return new Response("publicKey must be 64 hex chars", {
@@ -722,25 +866,15 @@ export class MainDO extends DurableObject {
 			const count = (this.sql.exec("SELECT COUNT(*) as cnt FROM admins").one() as { cnt: number })
 				.cnt;
 
-			if (count > 0 && body.signature) {
-				const authKey = request.headers.get("X-Admin-Key");
-				if (!authKey) {
-					return new Response("X-Admin-Key header required", {
-						status: 401,
-					});
-				}
-				const isAdmin =
-					this.sql.exec("SELECT 1 FROM admins WHERE public_key = ?", authKey).toArray().length > 0;
-				if (!isAdmin) {
-					return new Response("Not an admin", { status: 403 });
-				}
-				// Signature verification would go here — skipped for now since
-				// auth stubs are in place; the pattern mirrors the Festival DO.
-			} else if (count > 0) {
-				return new Response("Signature required from existing admin", { status: 401 });
+			if (count > 0) {
+				// Require existing admin to promote
+				const authResult = await this.#requireAdmin(request);
+				if (authResult instanceof Response) return authResult;
 			}
 
 			this.sql.exec("INSERT OR IGNORE INTO admins (public_key) VALUES (?)", body.publicKey);
+			// Remove from pending if they were there
+			this.sql.exec("DELETE FROM pending_admins WHERE public_key = ?", body.publicKey);
 			return Response.json({ ok: true });
 		}
 
@@ -750,6 +884,76 @@ export class MainDO extends DurableObject {
 				public_key: string;
 			}[];
 			return Response.json(rows.map((r) => r.public_key));
+		}
+
+		// POST /admins/request — request to become an admin
+		if (method === "POST" && path === "/admins/request") {
+			const body = (await request.json()) as {
+				publicKey: string;
+				displayName?: string;
+			};
+			if (!body.publicKey || body.publicKey.length !== 64) {
+				return new Response("publicKey must be 64 hex chars", { status: 400 });
+			}
+
+			// Already an admin?
+			const isAdmin =
+				this.sql.exec("SELECT 1 FROM admins WHERE public_key = ?", body.publicKey).toArray()
+					.length > 0;
+			if (isAdmin) {
+				return Response.json({ status: "already_admin" });
+			}
+
+			this.sql.exec(
+				`INSERT OR REPLACE INTO pending_admins (public_key, display_name) VALUES (?, ?)`,
+				body.publicKey,
+				body.displayName ?? "",
+			);
+			return Response.json({ status: "pending" });
+		}
+
+		// GET /admins/requests — list pending admin requests
+		if (method === "GET" && path === "/admins/requests") {
+			const rows = this.sql
+				.exec("SELECT public_key, display_name, requested_at FROM pending_admins ORDER BY requested_at")
+				.toArray() as { public_key: string; display_name: string; requested_at: string }[];
+			return Response.json(
+				rows.map((r) => ({
+					publicKey: r.public_key,
+					displayName: r.display_name,
+					requestedAt: r.requested_at,
+				})),
+			);
+		}
+
+		// POST /admins/requests/:key/approve — approve a pending admin request
+		const approveMatch = path.match(/^\/admins\/requests\/([0-9a-f]{64})\/approve$/);
+		if (method === "POST" && approveMatch) {
+			const authResult = await this.#requireAdmin(request);
+			if (authResult instanceof Response) return authResult;
+
+			const key = approveMatch[1];
+			const pending = this.sql
+				.exec("SELECT 1 FROM pending_admins WHERE public_key = ?", key)
+				.toArray();
+			if (pending.length === 0) {
+				return new Response("No pending request for this key", { status: 404 });
+			}
+
+			this.sql.exec("INSERT OR IGNORE INTO admins (public_key) VALUES (?)", key);
+			this.sql.exec("DELETE FROM pending_admins WHERE public_key = ?", key);
+			return Response.json({ ok: true });
+		}
+
+		// POST /admins/requests/:key/deny — deny a pending admin request
+		const denyMatch = path.match(/^\/admins\/requests\/([0-9a-f]{64})\/deny$/);
+		if (method === "POST" && denyMatch) {
+			const authResult = await this.#requireAdmin(request);
+			if (authResult instanceof Response) return authResult;
+
+			const key = denyMatch[1];
+			this.sql.exec("DELETE FROM pending_admins WHERE public_key = ?", key);
+			return Response.json({ ok: true });
 		}
 
 		return new Response("Not found", { status: 404 });

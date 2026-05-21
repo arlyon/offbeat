@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter_passkey_service/flutter_passkey_service.dart';
+import 'package:flutter_passkey_service/pigeons/messages.g.dart';
 import 'package:http/http.dart' as http;
 import '../config.dart';
 
@@ -23,11 +24,9 @@ class AuthService {
   final String _baseUrl;
   final String _rpId;
 
-  AuthService({
-    String? baseUrl,
-    String rpId = 'localhost',
-  })  : _baseUrl = baseUrl ?? mainDoBaseUrl,
-        _rpId = rpId;
+  AuthService({String? baseUrl, String? rpIdOverride})
+    : _baseUrl = baseUrl ?? mainDoBaseUrl,
+      _rpId = rpIdOverride ?? rpId;
 
   /// Register a new identity.
   ///
@@ -54,17 +53,16 @@ class AuthService {
     final serverOptions = jsonDecode(beginResp.body) as Map<String, dynamic>;
     final challenge = serverOptions['challenge'] as String;
 
-    // Step 2: WebAuthn registration with PRF enabled
-    final regOptions = FlutterPasskeyService.createRegistrationOptions(
-      challenge: challenge,
-      rpName: 'OFFBEAT',
-      rpId: _rpId,
-      userId: DateTime.now().millisecondsSinceEpoch.toString(),
-      username: 'offbeat-user',
-      displayName: 'Offbeat User',
-      enablePrf: true,
+    // Step 2: WebAuthn registration (PRF requested at auth time, not creation)
+    final regOptions = FlutterPasskeyService.createRegistrationOptionsFromJson(
+      serverOptions,
     );
-    final regResponse = await FlutterPasskeyService.register(regOptions);
+    final CreatePasskeyResponseData regResponse;
+    try {
+      regResponse = await FlutterPasskeyService.register(regOptions);
+    } on PasskeyException catch (e) {
+      throw AuthException('Passkey registration: ${e.message} ${e.details}');
+    }
 
     // Step 3: Authenticate immediately with PRF to derive key
     final prfSaltB64 = _toBase64Url(_prfSalt);
@@ -73,17 +71,25 @@ class AuthService {
       rpId: _rpId,
       prfEval: {'first': prfSaltB64},
     );
-    final authResponse = await FlutterPasskeyService.authenticate(authOptions);
+    final GetPasskeyAuthenticationResponseData authResponse;
+    try {
+      authResponse = await FlutterPasskeyService.authenticate(authOptions);
+    } on PasskeyException catch (e) {
+      throw AuthException('Passkey auth: ${e.message} ${e.details}');
+    }
 
     // Step 4: Extract PRF output and derive Ed25519 key via Rust bridge
-    final prfResult = authResponse.clientExtensionResults?.prf?.results?['first'];
+    final prfResult =
+        authResponse.clientExtensionResults?.prf?.results?['first'];
     if (prfResult == null) {
-      throw AuthException('PRF output not available -- platform may not support it');
+      throw AuthException(
+        'PRF output not available -- platform may not support it',
+      );
     }
     final prfBytes = base64Url.decode(base64Url.normalize(prfResult));
     final ed25519PublicKeyHex = await onPrfOutput(Uint8List.fromList(prfBytes));
 
-    // Step 5: Complete registration with server
+    // Step 5: Complete registration with server — send full WebAuthn response
     final completeResp = await http.post(
       Uri.parse('$_baseUrl/auth/register/complete'),
       headers: {'Content-Type': 'application/json'},
@@ -92,7 +98,16 @@ class AuthService {
           'id': regResponse.id,
           'rawId': regResponse.rawId,
           'type': regResponse.type,
+          'response': {
+            'clientDataJSON': regResponse.response.clientDataJSON,
+            'attestationObject': regResponse.response.attestationObject,
+            if (regResponse.response.transports != null)
+              'transports': regResponse.response.transports,
+          },
+          if (regResponse.authenticatorAttachment != null)
+            'authenticatorAttachment': regResponse.authenticatorAttachment,
         },
+        'challenge': challenge,
         'ed25519PublicKey': ed25519PublicKeyHex,
       }),
     );
@@ -134,17 +149,23 @@ class AuthService {
       rpId: _rpId,
       prfEval: {'first': prfSaltB64},
     );
-    final authResponse = await FlutterPasskeyService.authenticate(authOptions);
+    final GetPasskeyAuthenticationResponseData authResponse;
+    try {
+      authResponse = await FlutterPasskeyService.authenticate(authOptions);
+    } on PasskeyException catch (e) {
+      throw AuthException('Passkey auth: ${e.message} ${e.details}');
+    }
 
     // Extract PRF output
-    final prfResult = authResponse.clientExtensionResults?.prf?.results?['first'];
+    final prfResult =
+        authResponse.clientExtensionResults?.prf?.results?['first'];
     if (prfResult == null) {
       throw AuthException('PRF output not available');
     }
     final prfBytes = base64Url.decode(base64Url.normalize(prfResult));
     final ed25519PublicKeyHex = await onPrfOutput(Uint8List.fromList(prfBytes));
 
-    // Complete recovery -- server verifies key matches
+    // Complete recovery -- send full assertion response
     final completeResp = await http.post(
       Uri.parse('$_baseUrl/auth/recover/complete'),
       headers: {'Content-Type': 'application/json'},
@@ -153,7 +174,17 @@ class AuthService {
           'id': authResponse.id,
           'rawId': authResponse.rawId,
           'type': authResponse.type,
+          'response': {
+            'clientDataJSON': authResponse.response.clientDataJSON,
+            'authenticatorData': authResponse.response.authenticatorData,
+            'signature': authResponse.response.signature,
+            if (authResponse.response.userHandle != null)
+              'userHandle': authResponse.response.userHandle,
+          },
+          if (authResponse.authenticatorAttachment != null)
+            'authenticatorAttachment': authResponse.authenticatorAttachment,
         },
+        'challenge': challenge,
         'ed25519PublicKey': ed25519PublicKeyHex,
       }),
     );
@@ -188,7 +219,12 @@ class AuthService {
       challenge: challenge,
       rpId: _rpId,
     );
-    final authResponse = await FlutterPasskeyService.authenticate(authOptions);
+    final GetPasskeyAuthenticationResponseData authResponse;
+    try {
+      authResponse = await FlutterPasskeyService.authenticate(authOptions);
+    } on PasskeyException catch (e) {
+      throw AuthException('Passkey auth: ${e.message} ${e.details}');
+    }
 
     final resp = await http.post(
       Uri.parse('$_baseUrl/auth/refresh'),
@@ -198,7 +234,17 @@ class AuthService {
           'id': authResponse.id,
           'rawId': authResponse.rawId,
           'type': authResponse.type,
+          'response': {
+            'clientDataJSON': authResponse.response.clientDataJSON,
+            'authenticatorData': authResponse.response.authenticatorData,
+            'signature': authResponse.response.signature,
+            if (authResponse.response.userHandle != null)
+              'userHandle': authResponse.response.userHandle,
+          },
+          if (authResponse.authenticatorAttachment != null)
+            'authenticatorAttachment': authResponse.authenticatorAttachment,
         },
+        'challenge': challenge,
         'ed25519PublicKey': ed25519PublicKeyHex,
       }),
     );

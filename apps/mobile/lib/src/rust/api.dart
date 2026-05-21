@@ -31,10 +31,6 @@ abstract class AppNode implements RustOpaqueInterface {
   });
 
   /// Connect this node to the Festival Durable Object relay at `url`.
-  ///
-  /// Spawns a background task that receives messages and feeds them into
-  /// the dispatch pipeline. The WS sink is stored on the node for sending.
-  /// Auto-reconnects on disconnect with exponential backoff.
   Future<void> connectRelay({required String url});
 
   /// Open (or create) the node database at `db_path`.
@@ -56,7 +52,6 @@ abstract class AppNode implements RustOpaqueInterface {
   Future<void> deleteGroup({required String id});
 
   /// Derive the Ed25519 identity from a WebAuthn PRF output (32 bytes).
-  /// Returns the hex-encoded Ed25519 public key.
   Future<String> deriveIdentityFromPrf({required List<int> prfOutput});
 
   /// Load the stored attestation, if any.
@@ -118,10 +113,7 @@ abstract class AppNode implements RustOpaqueInterface {
   });
 
   /// Send a festival chat message (plaintext) and broadcast it via gossip if
-  /// networking is active.  Returns the persisted message.
-  ///
-  /// WS relay delivery should be performed separately by the caller via
-  /// `connect_relay`.
+  /// networking is active. Returns the persisted message.
   Future<ChatMessageDto> sendFestivalChat({
     required String festivalId,
     String? stageId,
@@ -129,7 +121,7 @@ abstract class AppNode implements RustOpaqueInterface {
   });
 
   /// Send an encrypted group chat message and broadcast it via gossip if
-  /// networking is active.  Returns the persisted message.
+  /// networking is active. Returns the persisted message.
   Future<ChatMessageDto> sendGroupChat({
     required String groupId,
     required String text,
@@ -139,16 +131,12 @@ abstract class AppNode implements RustOpaqueInterface {
   Future<void> setDisplayName({required String name});
 
   /// Cache a festival's Ed25519 public key (hex-encoded, 64 chars).
-  /// Call this after fetching from `GET /festivals/:id/public-key` on the
-  /// Dart/Flutter side.
   Future<void> setFestivalPublicKey({
     required String festivalId,
     required String hexKey,
   });
 
   /// Sign an arbitrary message with the local Ed25519 identity key.
-  /// Used for admin operations (signing paths, challenges, etc.).
-  /// Returns the hex-encoded signature.
   Future<String> signMessage({required String message});
 
   /// Store an attestation received from the MainDO.
@@ -164,8 +152,7 @@ abstract class AppNode implements RustOpaqueInterface {
     required List<String> stageIds,
   });
 
-  /// Subscribe to the gossip topic for a festival, using the iroh-gossip
-  /// layer (if networking was started).
+  /// Subscribe to the gossip topic for a festival.
   Future<void> subscribeFestival({required String festivalId});
 
   /// Toggle a star on a set. Returns the new starred state (`true` = now starred).

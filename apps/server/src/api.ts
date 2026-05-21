@@ -7,7 +7,25 @@ type Env = {
 	};
 };
 
+const ANDROID_PACKAGE = "com.offbeat.offbeat_mobile";
+const ANDROID_SHA256 =
+	"B8:03:AB:79:63:E7:3B:91:6F:CE:BE:25:33:34:BC:87:BE:A3:08:4B:8C:CE:B8:A2:4E:80:A5:7D:F5:F3:AF:BA";
+
 const app = new Hono<Env>();
+
+// /.well-known/assetlinks.json — Android Digital Asset Links for passkey domain verification
+app.get("/.well-known/assetlinks.json", (c) => {
+	return c.json([
+		{
+			relation: ["delegate_permission/common.handle_all_urls", "delegate_permission/common.get_login_creds"],
+			target: {
+				namespace: "android_app",
+				package_name: ANDROID_PACKAGE,
+				sha256_cert_fingerprints: [ANDROID_SHA256],
+			},
+		},
+	]);
+});
 
 function getMainDO(env: Env["Bindings"]) {
 	const id = env.MAIN_DO.idFromName("main");
@@ -129,6 +147,28 @@ app.put("/admins", async (c) => {
 // GET /admins — list global admins
 app.get("/admins", (c) => {
 	return forwardToMainDO(c.env, "/admins", c.req.raw);
+});
+
+// POST /admins/request — request to become an admin
+app.post("/admins/request", (c) => {
+	return forwardToMainDO(c.env, "/admins/request", c.req.raw);
+});
+
+// GET /admins/requests — list pending admin requests (admin-only)
+app.get("/admins/requests", (c) => {
+	return forwardToMainDO(c.env, "/admins/requests", c.req.raw);
+});
+
+// POST /admins/requests/:key/approve — approve an admin request
+app.post("/admins/requests/:key/approve", (c) => {
+	const key = c.req.param("key");
+	return forwardToMainDO(c.env, `/admins/requests/${key}/approve`, c.req.raw);
+});
+
+// POST /admins/requests/:key/deny — deny an admin request
+app.post("/admins/requests/:key/deny", (c) => {
+	const key = c.req.param("key");
+	return forwardToMainDO(c.env, `/admins/requests/${key}/deny`, c.req.raw);
 });
 
 // PUT /festivals/:id/admins — register an admin on a specific Festival DO

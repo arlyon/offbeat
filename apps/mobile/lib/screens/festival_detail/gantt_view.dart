@@ -39,12 +39,14 @@ class _GanttViewState extends State<GanttView> {
   final ScrollController _scrollController = ScrollController();
   static const double _sentinelHeight = 1500.0;
 
-  double get _maxTx => (ganttContentW - _viewportInnerW).clamp(0.0, double.infinity);
+  double get _maxTx =>
+      (ganttContentW - _viewportInnerW).clamp(0.0, double.infinity);
   double get _tx => _progress * _maxTx;
 
   // What time is centered?
   String get _centerTimeStr {
-    final centerMin = ganttStartMin + (_tx + _viewportInnerW / 2) / ganttPxPerMin;
+    final centerMin =
+        ganttStartMin + (_tx + _viewportInnerW / 2) / ganttPxPerMin;
     final h = (centerMin ~/ 60) % 24;
     final m = centerMin ~/ 1 % 60;
     return '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}';
@@ -55,7 +57,9 @@ class _GanttViewState extends State<GanttView> {
 
   List<int> get _axisHours {
     final arr = <int>[];
-    for (int m = ganttStartMin; m <= ganttEndMin; m += 60) arr.add(m);
+    for (int m = ganttStartMin; m <= ganttEndMin; m += 60) {
+      arr.add(m);
+    }
     return arr;
   }
 
@@ -142,10 +146,7 @@ class _GanttViewState extends State<GanttView> {
                   Positioned.fill(
                     child: SingleChildScrollView(
                       controller: _scrollController,
-                      child: const SizedBox(
-                        width: 1,
-                        height: _sentinelHeight,
-                      ),
+                      child: const SizedBox(width: 1, height: _sentinelHeight),
                     ),
                   ),
                   // Bottom HUD — always on top
@@ -233,7 +234,10 @@ class _MetaStrip extends StatelessWidget {
                   child: GestureDetector(
                     onTap: () => onDayChanged(d.id),
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 6,
+                      ),
                       decoration: BoxDecoration(
                         color: isActive ? colorFg : Colors.transparent,
                         border: Border.all(
@@ -292,11 +296,7 @@ class _GanttContent extends StatelessWidget {
     return Column(
       children: [
         // Time axis
-        _TimeAxis(
-          tx: tx,
-          axisHours: axisHours,
-          centerTimeStr: centerTimeStr,
-        ),
+        _TimeAxis(tx: tx, axisHours: axisHours, centerTimeStr: centerTimeStr),
         // Stage rows
         Expanded(
           child: _StageRows(
@@ -364,20 +364,14 @@ class _TimeAxis extends StatelessWidget {
                             right: 0,
                             top: 0,
                             bottom: 0,
-                            child: Container(
-                              width: 1,
-                              color: colorDotted,
-                            ),
+                            child: Container(width: 1, color: colorDotted),
                           ),
                           // Half-hour mark
                           Positioned(
                             left: tickW / 2,
                             top: 0,
                             bottom: 0,
-                            child: Container(
-                              width: 1,
-                              color: colorHairline,
-                            ),
+                            child: Container(width: 1, color: colorHairline),
                           ),
                         ],
                       ),
@@ -441,7 +435,9 @@ class _StageRows extends StatelessWidget {
           children: stages.asMap().entries.map((entry) {
             final i = entry.key;
             final stage = entry.value;
-            final stageSets = daySets.where((s) => s.stage == stage.id).toList();
+            final stageSets = daySets
+                .where((s) => s.stage == stage.id)
+                .toList();
             return Expanded(
               child: _SingleStageRow(
                 stage: stage,
@@ -503,12 +499,7 @@ class _SingleStageRow extends StatelessWidget {
       children: [
         // Bottom dotted border
         if (!isLast)
-          Positioned(
-            bottom: 0,
-            left: 0,
-            right: 0,
-            child: const DottedRule(),
-          ),
+          Positioned(bottom: 0, left: 0, right: 0, child: const DottedRule()),
         // Stage label (sticky left)
         Positioned(
           left: 0,
@@ -520,7 +511,7 @@ class _SingleStageRow extends StatelessWidget {
               gradient: LinearGradient(
                 begin: Alignment.centerLeft,
                 end: Alignment.centerRight,
-                colors: [colorBg, colorBg.withOpacity(0)],
+                colors: [colorBg, colorBg.withValues(alpha: 0)],
                 stops: const [0.6, 1.0],
               ),
             ),
@@ -541,18 +532,15 @@ class _SingleStageRow extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 4),
-                Container(
-                  width: 14,
-                  height: 3,
-                  color: stageColor,
-                ),
+                Container(width: 14, height: 3, color: stageColor),
               ],
             ),
           ),
         ),
         // Set blocks
         ...sets.map((s) {
-          final left = (s.t - ganttStartMin) * ganttPxPerMin + ganttStageLabelW - tx;
+          final left =
+              (s.t - ganttStartMin) * ganttPxPerMin + ganttStageLabelW - tx;
           final width = s.dur * ganttPxPerMin;
           if (left + width < 0 || left > 2000) return const SizedBox.shrink();
 
@@ -611,7 +599,10 @@ class _SetBlock extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               if (set.starred)
-                const Text('★ ', style: TextStyle(color: colorAccent, fontSize: 10, height: 1)),
+                const Text(
+                  '★ ',
+                  style: TextStyle(color: colorAccent, fontSize: 10, height: 1),
+                ),
               if (set.live)
                 const Padding(
                   padding: EdgeInsets.only(right: 4),
@@ -665,7 +656,8 @@ class _GanttHUD extends StatefulWidget {
   State<_GanttHUD> createState() => _GanttHUDState();
 }
 
-class _GanttHUDState extends State<_GanttHUD> with SingleTickerProviderStateMixin {
+class _GanttHUDState extends State<_GanttHUD>
+    with SingleTickerProviderStateMixin {
   late AnimationController _bobController;
   late Animation<double> _bobAnim;
 
@@ -676,9 +668,10 @@ class _GanttHUDState extends State<_GanttHUD> with SingleTickerProviderStateMixi
       vsync: this,
       duration: const Duration(milliseconds: 1600),
     )..repeat(reverse: true);
-    _bobAnim = Tween<double>(begin: 0.0, end: 3.0).animate(
-      CurvedAnimation(parent: _bobController, curve: Curves.easeInOut),
-    );
+    _bobAnim = Tween<double>(
+      begin: 0.0,
+      end: 3.0,
+    ).animate(CurvedAnimation(parent: _bobController, curve: Curves.easeInOut));
   }
 
   @override
@@ -690,14 +683,16 @@ class _GanttHUDState extends State<_GanttHUD> with SingleTickerProviderStateMixi
   @override
   Widget build(BuildContext context) {
     final startMin = (ganttStartMin + widget.tx / ganttPxPerMin).round();
-    final endMin = (ganttStartMin + (widget.tx + widget.viewportInnerW) / ganttPxPerMin).round();
+    final endMin =
+        (ganttStartMin + (widget.tx + widget.viewportInnerW) / ganttPxPerMin)
+            .round();
 
     return Container(
       decoration: BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [colorBg.withOpacity(0), colorBg],
+          colors: [colorBg.withValues(alpha: 0), colorBg],
           stops: const [0.0, 0.4],
         ),
       ),
@@ -706,55 +701,62 @@ class _GanttHUDState extends State<_GanttHUD> with SingleTickerProviderStateMixi
         children: [
           // Scrubber
           Expanded(
-            child: LayoutBuilder(builder: (context, constraints) {
-              final scrubberW = constraints.maxWidth;
-              return Container(
-                height: 22,
-                decoration: BoxDecoration(
-                  color: colorSurface1,
-                  border: Border.all(color: colorDotted, width: 1.5),
-                ),
-                child: Stack(
-                  clipBehavior: Clip.hardEdge,
-                  children: [
-                    // Fill
-                    Positioned(
-                      left: 0,
-                      top: 0,
-                      bottom: 0,
-                      width: widget.progress * scrubberW,
-                      child: Container(color: colorAccent.withOpacity(0.18)),
-                    ),
-                    // Head
-                    Positioned(
-                      left: (widget.progress * scrubberW - 1.5).clamp(0.0, scrubberW - 3),
-                      top: -3,
-                      bottom: -3,
-                      width: 3,
-                      child: Container(color: colorAccent),
-                    ),
-                    // Label
-                    Positioned(
-                      left: 8,
-                      top: 0,
-                      bottom: 0,
-                      right: 8,
-                      child: Center(
-                        child: Text(
-                          '${fmtTime(startMin)} → ${fmtTime(endMin)}',
-                          style: const TextStyle(
-                            fontFamily: 'JetBrainsMono',
-                            fontSize: 10,
-                            color: colorFg2,
-                            height: 1,
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final scrubberW = constraints.maxWidth;
+                return Container(
+                  height: 22,
+                  decoration: BoxDecoration(
+                    color: colorSurface1,
+                    border: Border.all(color: colorDotted, width: 1.5),
+                  ),
+                  child: Stack(
+                    clipBehavior: Clip.hardEdge,
+                    children: [
+                      // Fill
+                      Positioned(
+                        left: 0,
+                        top: 0,
+                        bottom: 0,
+                        width: widget.progress * scrubberW,
+                        child: Container(
+                          color: colorAccent.withValues(alpha: 0.18),
+                        ),
+                      ),
+                      // Head
+                      Positioned(
+                        left: (widget.progress * scrubberW - 1.5).clamp(
+                          0.0,
+                          scrubberW - 3,
+                        ),
+                        top: -3,
+                        bottom: -3,
+                        width: 3,
+                        child: Container(color: colorAccent),
+                      ),
+                      // Label
+                      Positioned(
+                        left: 8,
+                        top: 0,
+                        bottom: 0,
+                        right: 8,
+                        child: Center(
+                          child: Text(
+                            '${fmtTime(startMin)} → ${fmtTime(endMin)}',
+                            style: const TextStyle(
+                              fontFamily: 'JetBrainsMono',
+                              fontSize: 10,
+                              color: colorFg2,
+                              height: 1,
+                            ),
                           ),
                         ),
                       ),
-                    ),
-                  ],
-                ),
-              );
-            }),
+                    ],
+                  ),
+                );
+              },
+            ),
           ),
           const SizedBox(width: 12),
           // Hint

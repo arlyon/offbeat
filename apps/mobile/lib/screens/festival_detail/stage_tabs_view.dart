@@ -50,7 +50,9 @@ class _StageTabsViewState extends State<StageTabsView> {
 
   Map<String, List<FestSet>> get _setsByStage {
     final m = <String, List<FestSet>>{};
-    for (final s in widget.stages) m[s.id] = [];
+    for (final s in widget.stages) {
+      m[s.id] = [];
+    }
     for (final s in _sets.where((s) => s.day == _day)) {
       m[s.stage]?.add(s);
     }
@@ -95,8 +97,7 @@ class _StageTabsViewState extends State<StageTabsView> {
               // Stage hero card
               _StageHero(stage: stage, sets: sets),
               // Now-on-stage callout
-              if (live != null)
-                _NowCallout(set: live, stage: stage),
+              if (live != null) _NowCallout(set: live, stage: stage),
               // Lineup eyebrow
               Padding(
                 padding: const EdgeInsets.fromLTRB(18, 20, 18, 8),
@@ -128,16 +129,20 @@ class _StageTabsViewState extends State<StageTabsView> {
                 ),
               ),
               // BigCard lineup
-              ...sets.map((s) => _BigCard(
-                set: s,
-                stage: stage,
-                onStar: () => setState(() {
-                  final idx = _sets.indexWhere((x) => x.id == s.id);
-                  if (idx >= 0) {
-                    _sets[idx] = _sets[idx].copyWith(starred: !_sets[idx].starred);
-                  }
-                }),
-              )),
+              ...sets.map(
+                (s) => _BigCard(
+                  set: s,
+                  stage: stage,
+                  onStar: () => setState(() {
+                    final idx = _sets.indexWhere((x) => x.id == s.id);
+                    if (idx >= 0) {
+                      _sets[idx] = _sets[idx].copyWith(
+                        starred: !_sets[idx].starred,
+                      );
+                    }
+                  }),
+                ),
+              ),
               const SizedBox(height: 80),
             ],
           ),
@@ -177,14 +182,16 @@ class _DayPillRow extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 8),
-            ...days.map((d) => Padding(
-              padding: const EdgeInsets.only(left: 8),
-              child: MonoChip(
-                label: '${d.label} ${d.num}',
-                active: d.id == activeDay,
-                onTap: () => onDayChanged(d.id),
+            ...days.map(
+              (d) => Padding(
+                padding: const EdgeInsets.only(left: 8),
+                child: MonoChip(
+                  label: '${d.label} ${d.num}',
+                  active: d.id == activeDay,
+                  onTap: () => onDayChanged(d.id),
+                ),
               ),
-            )),
+            ),
           ],
         ),
       ),
@@ -219,7 +226,9 @@ class _StageTabs extends StatelessWidget {
             final isActive = s.id == activeStageId;
             final stageColor = Color(s.color);
             final ct = setsByStage[s.id]?.length ?? 0;
-            final liveOn = sets.any((x) => x.stage == s.id && x.day == day && x.live);
+            final liveOn = sets.any(
+              (x) => x.stage == s.id && x.day == day && x.live,
+            );
 
             return GestureDetector(
               onTap: () => onStageChanged(s.id),
@@ -388,10 +397,7 @@ class _MetaSep extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const Text(
-      '|',
-      style: TextStyle(color: colorFg4, fontSize: 11),
-    );
+    return const Text('|', style: TextStyle(color: colorFg4, fontSize: 11));
   }
 }
 
@@ -471,7 +477,11 @@ class _BigCard extends StatelessWidget {
   final Stage stage;
   final VoidCallback onStar;
 
-  const _BigCard({required this.set, required this.stage, required this.onStar});
+  const _BigCard({
+    required this.set,
+    required this.stage,
+    required this.onStar,
+  });
 
   @override
   Widget build(BuildContext context) {

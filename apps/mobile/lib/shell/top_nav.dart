@@ -44,7 +44,11 @@ class TopNav extends StatelessWidget {
                         width: 36,
                         height: 36,
                         child: Center(
-                          child: Icon(Icons.chevron_left, color: colorFg, size: 18),
+                          child: Icon(
+                            Icons.chevron_left,
+                            color: colorFg,
+                            size: 18,
+                          ),
                         ),
                       ),
                     )
@@ -97,10 +101,7 @@ class TopNav extends StatelessWidget {
                 ],
               ),
               // Right side
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: rightWidgets,
-              ),
+              Row(mainAxisSize: MainAxisSize.min, children: rightWidgets),
             ],
           ),
         ),
