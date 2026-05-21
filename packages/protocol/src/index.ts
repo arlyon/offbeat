@@ -1,4 +1,2 @@
-export interface Festival {
-	id: string;
-	name: string;
-}
+export * from "./clashfinder.js";
+export * from "./types.js";

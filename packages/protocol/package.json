@@ -2,6 +2,10 @@
 	"name": "@offbeat/protocol",
 	"private": true,
 	"scripts": {
-		"check": "tsc --noEmit && biome check src/"
+		"check": "tsc --noEmit && biome check src/",
+		"test": "vitest run"
+	},
+	"devDependencies": {
+		"vitest": "^4.1.7"
 	}
 }

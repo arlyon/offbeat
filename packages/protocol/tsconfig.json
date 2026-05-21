@@ -6,7 +6,9 @@
 		"strict": true,
 		"declaration": true,
 		"composite": true,
-		"outDir": "dist"
+		"outDir": "dist",
+		"resolveJsonModule": true
 	},
-	"include": ["src"]
+	"include": ["src"],
+	"exclude": ["src/**/*.test.ts", "src/**/*.spec.ts"]
 }
