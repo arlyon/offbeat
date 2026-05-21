@@ -869,7 +869,7 @@ async fn test_d1_disconnect_d2_sends_d1_catchup() {
 }
 
 // =============================================================================
-// Test: Group encrypted state sync via DO relay
+// Test: Group encrypted state sync via DO relay (with SV handshake)
 // =============================================================================
 
 #[tokio::test]
@@ -881,7 +881,7 @@ async fn test_group_encrypted_state_sync_via_relay() {
     let festival_id = "relay-group-test-1";
     let topic = format!("festival/{festival_id}/state");
 
-    // D1 creates a group and a shared key via GroupManager.
+    // D1 creates a group.
     let node_d1 = OffbeatNode::new_in_memory().unwrap();
     let create_result = node_d1
         .group_manager
@@ -891,8 +891,16 @@ async fn test_group_encrypted_state_sync_via_relay() {
 
     let group_id = &create_result.group_id;
     let group_key = node_d1.db.load_group_key(group_id).unwrap().unwrap();
+    let doc_id = format!("group/{group_id}");
 
-    // D2 joins the group using the invite payload (shares the same key).
+    // D1 adds a pin.
+    node_d1
+        .group_manager
+        .add_pin(group_id, "pin-relay-1", "Tent Area", "51.5,-0.1", "d1-user")
+        .await
+        .unwrap();
+
+    // D2 joins the group.
     let node_d2 = OffbeatNode::new_in_memory().unwrap();
     node_d2
         .group_manager
@@ -904,87 +912,67 @@ async fn test_group_encrypted_state_sync_via_relay() {
     let (mut sink_d1, mut stream_d1) = connect_and_subscribe(festival_id, &topic).await.unwrap();
     let (mut sink_d2, mut stream_d2) = connect_and_subscribe(festival_id, &topic).await.unwrap();
 
-    // D1 adds a pin, encrypts the update.
-    let encrypted_d1 = node_d1
-        .group_manager
-        .add_pin(group_id, "pin-relay-1", "Tent Area", "51.5,-0.1", "d1-user")
-        .await
-        .unwrap();
+    // --- SV handshake: D2 → D1 → D2 ---
 
-    // D1 sends the encrypted update as a relay message.
-    let encoded = base64::engine::general_purpose::STANDARD.encode(&encrypted_d1);
-    send_json(
-        &mut sink_d1,
-        &json!({
-            "type": "relay",
-            "topic": topic,
-            "data": encoded
-        }),
-    )
-    .await
-    .unwrap();
+    // D2 sends its SV (encrypted) so D1 can compute a targeted diff.
+    let encrypted_sv_d2 = node_d2.group_manager.request_group_sync(group_id).await.unwrap();
+    let encoded_sv = base64::engine::general_purpose::STANDARD.encode(&encrypted_sv_d2);
+    send_json(&mut sink_d2, &json!({ "type": "relay", "topic": topic, "data": encoded_sv })).await.unwrap();
 
-    // D2 receives and applies the update.
-    let recv = wait_for_message_type(&mut stream_d2, "relay", 5).await.unwrap();
-    let received_encoded = recv["data"].as_str().unwrap();
-    let received_encrypted = base64::engine::general_purpose::STANDARD
-        .decode(received_encoded)
-        .unwrap();
+    // D1 receives D2's SV, computes diff, sends back.
+    let recv = wait_for_message_type(&mut stream_d1, "relay", 5).await.unwrap();
+    let sv_encrypted = base64::engine::general_purpose::STANDARD.decode(recv["data"].as_str().unwrap()).unwrap();
+    let diff_for_d2 = node_d1.group_manager.handle_sync_request(group_id, &sv_encrypted).await.unwrap();
+    let encoded_diff = base64::engine::general_purpose::STANDARD.encode(&diff_for_d2);
+    send_json(&mut sink_d1, &json!({ "type": "relay", "topic": topic, "data": encoded_diff })).await.unwrap();
 
-    let decrypted = crypto::decrypt(&group_key, &received_encrypted).unwrap();
-    node_d2
-        .doc_manager
-        .lock()
-        .await
-        .apply_update(&format!("group/{group_id}"), &decrypted)
-        .unwrap();
+    // D2 receives diff and applies it.
+    let recv_d2 = wait_for_message_type(&mut stream_d2, "relay", 5).await.unwrap();
+    let diff_encrypted = base64::engine::general_purpose::STANDARD.decode(recv_d2["data"].as_str().unwrap()).unwrap();
+    let diff_bytes = crypto::decrypt(&group_key, &diff_encrypted).unwrap();
+    node_d2.doc_manager.lock().await.apply_update(&doc_id, &diff_bytes).unwrap();
 
-    // Verify D2 sees the pin.
+    // D2 now has D1's pin.
     let state_d2 = node_d2.group_manager.get_group_state(group_id).await.unwrap();
     assert_eq!(state_d2.pins.len(), 1);
     assert_eq!(state_d2.pins[0].label, "Tent Area");
 
-    // D2 makes a change (check-in), sends back.
-    let encrypted_d2 = node_d2
+    // --- Reverse handshake: D1 → D2 → D1 (so D1 gets D2's member entry) ---
+
+    let encrypted_sv_d1 = node_d1.group_manager.request_group_sync(group_id).await.unwrap();
+    let encoded_sv_d1 = base64::engine::general_purpose::STANDARD.encode(&encrypted_sv_d1);
+    send_json(&mut sink_d1, &json!({ "type": "relay", "topic": topic, "data": encoded_sv_d1 })).await.unwrap();
+
+    let recv_d2_sv = wait_for_message_type(&mut stream_d2, "relay", 5).await.unwrap();
+    let sv_d1_encrypted = base64::engine::general_purpose::STANDARD.decode(recv_d2_sv["data"].as_str().unwrap()).unwrap();
+    let diff_for_d1 = node_d2.group_manager.handle_sync_request(group_id, &sv_d1_encrypted).await.unwrap();
+    let encoded_diff_d1 = base64::engine::general_purpose::STANDARD.encode(&diff_for_d1);
+    send_json(&mut sink_d2, &json!({ "type": "relay", "topic": topic, "data": encoded_diff_d1 })).await.unwrap();
+
+    let recv_d1_diff = wait_for_message_type(&mut stream_d1, "relay", 5).await.unwrap();
+    let diff_d1_encrypted = base64::engine::general_purpose::STANDARD.decode(recv_d1_diff["data"].as_str().unwrap()).unwrap();
+    let diff_d1_bytes = crypto::decrypt(&group_key, &diff_d1_encrypted).unwrap();
+    node_d1.doc_manager.lock().await.apply_update(&doc_id, &diff_d1_bytes).unwrap();
+
+    // --- Now both are synced. D2 checks in, sends diff. ---
+
+    let encrypted_d2_checkin = node_d2
         .group_manager
         .check_in(group_id, "d2-user", Some("main-stage"), None)
         .await
         .unwrap();
+    let encoded_checkin = base64::engine::general_purpose::STANDARD.encode(&encrypted_d2_checkin);
+    send_json(&mut sink_d2, &json!({ "type": "relay", "topic": topic, "data": encoded_checkin })).await.unwrap();
 
-    let encoded_d2 = base64::engine::general_purpose::STANDARD.encode(&encrypted_d2);
-    send_json(
-        &mut sink_d2,
-        &json!({
-            "type": "relay",
-            "topic": topic,
-            "data": encoded_d2
-        }),
-    )
-    .await
-    .unwrap();
-
-    // D1 receives and applies.
-    let recv_d1 = wait_for_message_type(&mut stream_d1, "relay", 5).await.unwrap();
-    let received_encoded_d1 = recv_d1["data"].as_str().unwrap();
-    let received_encrypted_d1 = base64::engine::general_purpose::STANDARD
-        .decode(received_encoded_d1)
-        .unwrap();
-
-    let decrypted_d1 = crypto::decrypt(&group_key, &received_encrypted_d1).unwrap();
-    node_d1
-        .doc_manager
-        .lock()
-        .await
-        .apply_update(&format!("group/{group_id}"), &decrypted_d1)
-        .unwrap();
+    // D1 receives and applies the diff (works because they are synced).
+    let recv_d1_checkin = wait_for_message_type(&mut stream_d1, "relay", 5).await.unwrap();
+    let checkin_encrypted = base64::engine::general_purpose::STANDARD.decode(recv_d1_checkin["data"].as_str().unwrap()).unwrap();
+    let checkin_bytes = crypto::decrypt(&group_key, &checkin_encrypted).unwrap();
+    node_d1.doc_manager.lock().await.apply_update(&doc_id, &checkin_bytes).unwrap();
 
     // D1 sees D2's location.
     let state_d1 = node_d1.group_manager.get_group_state(group_id).await.unwrap();
-    let d2_member = state_d1
-        .members
-        .iter()
-        .find(|m| m.user_id == "d2-user")
-        .expect("d2-user should be in state");
+    let d2_member = state_d1.members.iter().find(|m| m.user_id == "d2-user").expect("d2-user should be in state");
     assert_eq!(d2_member.stage_id.as_deref(), Some("main-stage"));
 
     drop(sink_d1);
@@ -1136,60 +1124,44 @@ async fn test_sv_handshake_group_sync() {
         .expect("D2 should see d1-user after sync");
     assert_eq!(d1_member.stage_id.as_deref(), Some("main-stage"));
 
-    // --- Step 4: D2 makes a change and sends a sync_update diff ---
+    // --- Step 4: Reverse handshake so D1 gets D2's member entry ---
+    // D1 sends its SV, D2 computes diff (with member/d2-user), D1 applies.
+    let encrypted_sv_d1 = node_d1.group_manager.request_group_sync(group_id).await.unwrap();
+    let encoded_sv_d1 = base64::engine::general_purpose::STANDARD.encode(&encrypted_sv_d1);
+    send_json(&mut sink_d1, &serde_json::json!({ "type": "relay", "topic": topic, "data": encoded_sv_d1 })).await.unwrap();
+
+    let recv_sv_d2 = wait_for_message_type(&mut stream_d2, "relay", 5).await.unwrap();
+    let sv_d1_enc = base64::engine::general_purpose::STANDARD.decode(recv_sv_d2["data"].as_str().unwrap()).unwrap();
+    let diff_for_d1 = node_d2.group_manager.handle_sync_request(group_id, &sv_d1_enc).await.unwrap();
+    let encoded_diff_d1 = base64::engine::general_purpose::STANDARD.encode(&diff_for_d1);
+    send_json(&mut sink_d2, &serde_json::json!({ "type": "relay", "topic": topic, "data": encoded_diff_d1 })).await.unwrap();
+
+    let recv_diff_d1 = wait_for_message_type(&mut stream_d1, "relay", 5).await.unwrap();
+    let diff_d1_enc = base64::engine::general_purpose::STANDARD.decode(recv_diff_d1["data"].as_str().unwrap()).unwrap();
+    let diff_d1_bytes = crypto::decrypt(&group_key, &diff_d1_enc).unwrap();
+    node_d1.doc_manager.lock().await.apply_update(&format!("group/{group_id}"), &diff_d1_bytes).unwrap();
+
+    // --- Step 5: D2 makes a change and sends diff (works now — D1 has D2's state) ---
     let encrypted_d2_diff = node_d2
         .group_manager
         .check_in(group_id, "d2-user", Some("side-stage"), None)
         .await
         .unwrap();
-
-    let wire_update = GossipWireMessage {
-        kind: "sync_update".to_string(),
-        doc_id: Some(format!("group/{group_id}")),
-        payload: base64::engine::general_purpose::STANDARD.encode(&encrypted_d2_diff),
-        group_key_id: Some(crypto::group_id_from_key(&group_key)),
-    };
-    let wire_update_bytes = serde_json::to_vec(&wire_update).unwrap();
-    let encoded_update = base64::engine::general_purpose::STANDARD.encode(&wire_update_bytes);
-
-    send_json(
-        &mut sink_d2,
-        &serde_json::json!({
-            "type": "relay",
-            "topic": topic,
-            "data": encoded_update
-        }),
-    )
-    .await
-    .unwrap();
+    let encoded_d2_diff = base64::engine::general_purpose::STANDARD.encode(&encrypted_d2_diff);
+    send_json(&mut sink_d2, &serde_json::json!({ "type": "relay", "topic": topic, "data": encoded_d2_diff })).await.unwrap();
 
     // D1 receives and applies D2's diff.
-    let recv_d1 = wait_for_message_type(&mut stream_d1, "relay", 5).await.unwrap();
-    let received_bytes_update = base64::engine::general_purpose::STANDARD
-        .decode(recv_d1["data"].as_str().unwrap())
-        .unwrap();
-    let received_wire_update: GossipWireMessage =
-        serde_json::from_slice(&received_bytes_update).unwrap();
-    assert_eq!(received_wire_update.kind, "sync_update");
-
-    let d2_diff_encrypted = base64::engine::general_purpose::STANDARD
-        .decode(&received_wire_update.payload)
-        .unwrap();
-    let d2_diff = crypto::decrypt(&group_key, &d2_diff_encrypted).unwrap();
-
-    node_d1
-        .doc_manager
-        .lock()
-        .await
-        .apply_update(&format!("group/{group_id}"), &d2_diff)
-        .unwrap();
+    let recv_d1_update = wait_for_message_type(&mut stream_d1, "relay", 5).await.unwrap();
+    let d2_diff_enc = base64::engine::general_purpose::STANDARD.decode(recv_d1_update["data"].as_str().unwrap()).unwrap();
+    let d2_diff = crypto::decrypt(&group_key, &d2_diff_enc).unwrap();
+    node_d1.doc_manager.lock().await.apply_update(&format!("group/{group_id}"), &d2_diff).unwrap();
 
     let state_d1 = node_d1.group_manager.get_group_state(group_id).await.unwrap();
     let d2_in_d1 = state_d1
         .members
         .iter()
         .find(|m| m.user_id == "d2-user")
-        .expect("D1 should see d2-user after sync_update");
+        .expect("D1 should see d2-user after sync");
     assert_eq!(d2_in_d1.stage_id.as_deref(), Some("side-stage"));
 
     drop(sink_d1);
