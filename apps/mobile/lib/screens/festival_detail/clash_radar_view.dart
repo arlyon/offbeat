@@ -13,15 +13,27 @@ import '../../widgets/chip.dart';
 class ClashRadarView extends StatefulWidget {
   final List<FestSet> sets;
   final List<Stage> stages;
+  final List<Day> days;
 
-  const ClashRadarView({super.key, required this.sets, required this.stages});
+  const ClashRadarView({
+    super.key,
+    required this.sets,
+    required this.stages,
+    required this.days,
+  });
 
   @override
   State<ClashRadarView> createState() => _ClashRadarViewState();
 }
 
 class _ClashRadarViewState extends State<ClashRadarView> {
-  final String _day = 'fri';
+  late String _day;
+
+  @override
+  void initState() {
+    super.initState();
+    _day = widget.days.first.id;
+  }
 
   Map<String, Stage> get _stageById => {for (final s in widget.stages) s.id: s};
 
@@ -42,12 +54,15 @@ class _ClashRadarViewState extends State<ClashRadarView> {
     return pairs;
   }
 
+  Day get _currentDay => widget.days.firstWhere((d) => d.id == _day);
+
   @override
   Widget build(BuildContext context) {
     final stageById = _stageById;
     final clashPairs = _clashPairs;
     final starred = _starred;
     final daySets = widget.sets.where((s) => s.day == _day).toList();
+    final day = _currentDay;
 
     // Window for strip
     const wStart = 19 * 60;
@@ -79,8 +94,8 @@ class _ClashRadarViewState extends State<ClashRadarView> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
-                  '// YOUR PLAN · FRI 22 AUG',
+                Text(
+                  '// YOUR PLAN · ${day.label} ${day.num} ${day.month}',
                   style: TextStyle(
                     fontFamily: 'JetBrainsMono',
                     fontSize: 11,
@@ -197,8 +212,9 @@ class _ClashRadarViewState extends State<ClashRadarView> {
                                           final right =
                                               xPct(s.t + s.dur) * w + 32;
                                           final width = right - left;
-                                          if (width <= 0)
+                                          if (width <= 0) {
                                             return const SizedBox.shrink();
+                                          }
                                           return Positioned(
                                             left: left,
                                             top: 3,

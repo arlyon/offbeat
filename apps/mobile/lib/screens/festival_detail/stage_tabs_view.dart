@@ -30,13 +30,15 @@ class StageTabsView extends StatefulWidget {
 }
 
 class _StageTabsViewState extends State<StageTabsView> {
-  String _stageId = 's1';
-  String _day = 'fri';
+  late String _stageId;
+  late String _day;
   late List<FestSet> _sets;
 
   @override
   void initState() {
     super.initState();
+    _day = widget.days.first.id;
+    _stageId = widget.stages.first.id;
     _sets = List.from(widget.sets);
   }
 
@@ -67,19 +69,19 @@ class _StageTabsViewState extends State<StageTabsView> {
   @override
   Widget build(BuildContext context) {
     final stage = _currentStage;
-    final stageColor = Color(stage.color);
     final sets = _dayStageSets;
     final live = _liveSet;
     final setsByStage = _setsByStage;
 
     return Column(
       children: [
-        // Day pill row
-        _DayPillRow(
-          days: widget.days,
-          activeDay: _day,
-          onDayChanged: (d) => setState(() => _day = d),
-        ),
+        // Day pill row (hidden for single-day festivals)
+        if (widget.days.length > 1)
+          _DayPillRow(
+            days: widget.days,
+            activeDay: _day,
+            onDayChanged: (d) => setState(() => _day = d),
+          ),
         // Stage tabs
         _StageTabs(
           stages: widget.stages,

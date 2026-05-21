@@ -9,7 +9,7 @@ import '../theme/tokens.dart';
 import '../widgets/live_dot.dart';
 import '../widgets/dotted_border.dart';
 
-enum AppTab { festivals, schedule, now, you }
+enum AppTab { schedule, now, you }
 
 class OffbeatTabBar extends StatelessWidget {
   final AppTab activeTab;
@@ -28,13 +28,6 @@ class OffbeatTabBar extends StatelessWidget {
         height: tabH,
         child: Row(
           children: [
-            _TabItem(
-              tab: AppTab.festivals,
-              label: 'FESTIVALS',
-              icon: Icons.music_note,
-              activeTab: activeTab,
-              onTap: onTabChanged,
-            ),
             _TabItem(
               tab: AppTab.schedule,
               label: 'SCHEDULE',

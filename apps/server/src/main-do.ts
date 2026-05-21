@@ -1,30 +1,14 @@
 import { DurableObject } from "cloudflare:workers";
-import type { ClashfinderEvent, ClashfinderSource, Lineup } from "@offbeat/protocol";
-import { fetchClashfinder, parseClashfinder, parseClashfinderApi } from "@offbeat/protocol";
-import fieldday26 from "../../../packages/protocol/fixtures/fieldday26.json";
+import type { ClashfinderSource, Lineup } from "@offbeat/protocol";
+import { fetchClashfinder, parseClashfinderApi } from "@offbeat/protocol";
 import {
 	generateAuthenticationOptions,
 	generateRegistrationOptions,
+	getExpectedOrigins,
 	verifyAuthentication,
 	verifyRegistration,
 } from "./auth";
 import { generateKeypair, sign, verify } from "./signing";
-
-const FIELDDAY26_ID = "fieldday26";
-
-const FIELDDAY26_META = {
-	id: FIELDDAY26_ID,
-	name: "Field Day 2026",
-	year: 2026,
-	location: "Victoria Park, London",
-	city: "London",
-	country: "GB",
-	start_date: "2026-06-13",
-	end_date: "2026-06-14",
-	genres: JSON.stringify(["Electronic", "Indie", "Experimental"]),
-	status: "upcoming",
-	public_key: null as string | null,
-};
 
 export class MainDO extends DurableObject {
 	#publicKey: Uint8Array | null = null;
@@ -37,11 +21,10 @@ export class MainDO extends DurableObject {
 	constructor(ctx: DurableObjectState, env: Record<string, unknown>) {
 		super(ctx, env);
 
-		// Create schema, init keypair, and seed data
+		// Create schema and init keypair
 		this.ctx.blockConcurrencyWhile(async () => {
 			this.#initSchema();
 			await this.#initKeypair();
-			await this.#seed();
 		});
 	}
 
@@ -72,6 +55,7 @@ export class MainDO extends DurableObject {
 				end_date TEXT NOT NULL,
 				genres TEXT NOT NULL DEFAULT '[]',
 				status TEXT NOT NULL DEFAULT 'upcoming',
+				clashfinder_id TEXT,
 				public_key TEXT,
 				updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 			);
@@ -133,35 +117,6 @@ export class MainDO extends DurableObject {
 				reason TEXT
 			);
 		`);
-	}
-
-	async #seed() {
-		const existing = this.sql.exec("SELECT COUNT(*) as cnt FROM festivals").one() as {
-			cnt: number;
-		};
-
-		if (existing.cnt > 0) return;
-
-		const events = fieldday26 as ClashfinderEvent[];
-		const lineup = parseClashfinder(FIELDDAY26_ID, events);
-
-		this.sql.exec(
-			`INSERT INTO festivals (id, name, year, location, city, country, start_date, end_date, genres, status, public_key)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			FIELDDAY26_META.id,
-			FIELDDAY26_META.name,
-			FIELDDAY26_META.year,
-			FIELDDAY26_META.location,
-			FIELDDAY26_META.city,
-			FIELDDAY26_META.country,
-			FIELDDAY26_META.start_date,
-			FIELDDAY26_META.end_date,
-			FIELDDAY26_META.genres,
-			FIELDDAY26_META.status,
-			FIELDDAY26_META.public_key,
-		);
-
-		this.#upsertLineup(FIELDDAY26_ID, lineup);
 	}
 
 	/** Insert or replace stages, days, and sets for a festival. */
@@ -235,6 +190,7 @@ export class MainDO extends DurableObject {
 				endDate: row.end_date,
 				genres: JSON.parse(row.genres as string),
 				status: row.status,
+				clashfinderId: row.clashfinder_id ?? undefined,
 				publicKey: row.public_key ?? "",
 				updatedAt: row.updated_at,
 				stages: stages.map((s) => ({
@@ -272,6 +228,7 @@ export class MainDO extends DurableObject {
 			endDate: row.end_date,
 			genres: JSON.parse(row.genres as string),
 			status: row.status,
+			clashfinderId: row.clashfinder_id ?? undefined,
 			publicKey: row.public_key ?? "",
 			updatedAt: row.updated_at,
 			stages: stages.map((s) => ({
@@ -441,133 +398,94 @@ export class MainDO extends DurableObject {
 			return Response.json(festival);
 		}
 
-		// POST /festivals — create a new festival (admin-only).
-		// Accepts either:
-		//   1. Direct metadata: { id, name, startDate, endDate, ... }
-		//   2. ClashfinderSource: { source: { festivalId, clashfinderId, name, location, city, country, genres } }
-		//      → fetches lineup from Clashfinder API and stores it
+		// POST /festivals — create a new festival from Clashfinder (admin-only).
+		// Expects: { source: { festivalId, clashfinderId, name, location, city, country, genres } }
+		// Fetches lineup from Clashfinder API and stores it.
 		if (method === "POST" && path === "/festivals") {
 			const authResult = await this.#requireAdmin(request);
 			if (authResult instanceof Response) return authResult;
 
 			const body = (await request.json()) as {
-				// Direct creation
-				id?: string;
-				name?: string;
-				year?: number;
-				location?: string;
-				city?: string;
-				country?: string;
-				startDate?: string;
-				endDate?: string;
-				genres?: string[];
-				status?: string;
-				// ClashfinderSource creation
 				source?: ClashfinderSource;
 			};
 
-			if (body.source) {
-				const src = body.source;
-				if (!src.festivalId || !src.clashfinderId || !src.name) {
-					return new Response("source requires festivalId, clashfinderId, name", {
-						status: 400,
-					});
-				}
-
-				if (this.#getFestival(src.festivalId)) {
-					return new Response("Festival already exists", { status: 409 });
-				}
-
-				// Fetch lineup from Clashfinder API
-				const cfUsername = (env as Record<string, string>).CLASHFINDER_USERNAME;
-				const cfKey = (env as Record<string, string>).CLASHFINDER_PRIVATE_KEY;
-				if (!cfUsername || !cfKey) {
-					return new Response("Clashfinder credentials not configured", { status: 500 });
-				}
-
-				const apiResponse = await fetchClashfinder(src.clashfinderId, {
-					username: cfUsername,
-					privateKey: cfKey,
-				});
-				const lineup = parseClashfinderApi(src.festivalId, apiResponse, {
-					name: src.name,
-					location: src.location,
-				});
-
-				// Derive start/end dates from the lineup days
-				const dayNums = lineup.days.map((d) => d.num);
-				const minDay = Math.min(...dayNums);
-				const maxDay = Math.max(...dayNums);
-				// Best-effort date construction from day numbers + month
-				const month = lineup.days[0]?.month ?? "Jan";
-				const monthIdx = [
-					"Jan",
-					"Feb",
-					"Mar",
-					"Apr",
-					"May",
-					"Jun",
-					"Jul",
-					"Aug",
-					"Sep",
-					"Oct",
-					"Nov",
-					"Dec",
-				].indexOf(month);
-				const year = new Date().getFullYear();
-				const startDate = new Date(year, monthIdx, minDay).toISOString().split("T")[0];
-				const endDate = new Date(year, monthIdx, maxDay).toISOString().split("T")[0];
-
-				this.sql.exec(
-					`INSERT INTO festivals (id, name, year, location, city, country, start_date, end_date, genres, status)
-					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-					src.festivalId,
-					src.name,
-					year,
-					src.location ?? "",
-					src.city ?? "",
-					src.country ?? "",
-					startDate,
-					endDate,
-					JSON.stringify(src.genres ?? []),
-					"upcoming",
-				);
-
-				this.#upsertLineup(src.festivalId, lineup);
-
-				return Response.json(
-					{ festival: this.#getFestival(src.festivalId), lineup: this.#getLineup(src.festivalId) },
-					{ status: 201 },
-				);
+			if (!body.source) {
+				return new Response("source is required", { status: 400 });
 			}
 
-			// Direct creation
-			if (!body.id || !body.name || !body.startDate || !body.endDate) {
-				return new Response("id, name, startDate, endDate required (or provide source)", {
+			const src = body.source;
+			if (!src.festivalId || !src.clashfinderId || !src.name) {
+				return new Response("source requires festivalId, clashfinderId, name", {
 					status: 400,
 				});
 			}
 
-			if (this.#getFestival(body.id)) {
+			if (this.#getFestival(src.festivalId)) {
 				return new Response("Festival already exists", { status: 409 });
 			}
 
+			// Fetch lineup from Clashfinder API
+			const cfUsername = (env as Record<string, string>).CLASHFINDER_USERNAME;
+			const cfKey = (env as Record<string, string>).CLASHFINDER_PRIVATE_KEY;
+			if (!cfUsername || !cfKey) {
+				return new Response("Clashfinder credentials not configured", { status: 500 });
+			}
+
+			const apiResponse = await fetchClashfinder(src.clashfinderId, {
+				username: cfUsername,
+				privateKey: cfKey,
+			});
+			const lineup = parseClashfinderApi(src.festivalId, apiResponse, {
+				name: src.name,
+				location: src.location,
+			});
+
+			// Derive start/end dates from the lineup days
+			const dayNums = lineup.days.map((d) => d.num);
+			const minDay = Math.min(...dayNums);
+			const maxDay = Math.max(...dayNums);
+			// Best-effort date construction from day numbers + month
+			const month = lineup.days[0]?.month ?? "Jan";
+			const monthIdx = [
+				"Jan",
+				"Feb",
+				"Mar",
+				"Apr",
+				"May",
+				"Jun",
+				"Jul",
+				"Aug",
+				"Sep",
+				"Oct",
+				"Nov",
+				"Dec",
+			].indexOf(month);
+			const year = new Date().getFullYear();
+			const startDate = new Date(year, monthIdx, minDay).toISOString().split("T")[0];
+			const endDate = new Date(year, monthIdx, maxDay).toISOString().split("T")[0];
+
 			this.sql.exec(
-				`INSERT INTO festivals (id, name, year, location, city, country, start_date, end_date, genres, status)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				body.id,
-				body.name,
-				body.year ?? new Date(body.startDate).getFullYear(),
-				body.location ?? "",
-				body.city ?? "",
-				body.country ?? "",
-				body.startDate,
-				body.endDate,
-				JSON.stringify(body.genres ?? []),
-				body.status ?? "upcoming",
+				`INSERT INTO festivals (id, name, year, location, city, country, start_date, end_date, genres, status, clashfinder_id)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				src.festivalId,
+				src.name,
+				year,
+				src.location ?? "",
+				src.city ?? "",
+				src.country ?? "",
+				startDate,
+				endDate,
+				JSON.stringify(src.genres ?? []),
+				"upcoming",
+				src.clashfinderId,
 			);
 
-			return Response.json(this.#getFestival(body.id), { status: 201 });
+			this.#upsertLineup(src.festivalId, lineup);
+
+			return Response.json(
+				{ festival: this.#getFestival(src.festivalId), lineup: this.#getLineup(src.festivalId) },
+				{ status: 201 },
+			);
 		}
 
 		// PUT /festivals/:id — update festival metadata (admin-only)
@@ -614,31 +532,61 @@ export class MainDO extends DurableObject {
 			return Response.json(this.#getFestival(id));
 		}
 
-		// PUT /festivals/:id/lineup — replace the lineup (admin-only)
+		// DELETE /festivals/:id — delete a festival (admin-only)
+		const festivalDeleteMatch = path.match(/^\/festivals\/([^/]+)$/);
+		if (method === "DELETE" && festivalDeleteMatch) {
+			const authResult = await this.#requireAdmin(request);
+			if (authResult instanceof Response) return authResult;
+
+			const id = festivalDeleteMatch[1];
+			if (!this.#getFestival(id)) {
+				return new Response("Festival not found", { status: 404 });
+			}
+
+			// Delete lineup data first (foreign key constraints)
+			this.sql.exec("DELETE FROM festival_sets WHERE festival_id = ?", id);
+			this.sql.exec("DELETE FROM festival_days WHERE festival_id = ?", id);
+			this.sql.exec("DELETE FROM festival_stages WHERE festival_id = ?", id);
+			// Delete the festival
+			this.sql.exec("DELETE FROM festivals WHERE id = ?", id);
+
+			return new Response(null, { status: 204 });
+		}
+
+		// PUT /festivals/:id/lineup — refresh lineup from Clashfinder (admin-only)
 		const lineupPutMatch = path.match(/^\/festivals\/([^/]+)\/lineup$/);
 		if (method === "PUT" && lineupPutMatch) {
 			const authResult = await this.#requireAdmin(request);
 			if (authResult instanceof Response) return authResult;
 
 			const id = lineupPutMatch[1];
-			if (!this.#getFestival(id)) {
+			const festival = this.#getFestival(id);
+			if (!festival) {
 				return new Response("Festival not found", { status: 404 });
 			}
 
-			const body = (await request.json()) as {
-				/** Raw ClashfinderEvent[] to parse, OR a pre-parsed lineup */
-				events?: ClashfinderEvent[];
-				lineup?: Lineup;
-			};
-
-			let lineup: Lineup;
-			if (body.lineup) {
-				lineup = body.lineup;
-			} else if (body.events) {
-				lineup = parseClashfinder(id, body.events);
-			} else {
-				return new Response("events or lineup required", { status: 400 });
+			const clashfinderId = (festival as Record<string, unknown>).clashfinderId as
+				| string
+				| undefined;
+			if (!clashfinderId) {
+				return new Response("Festival has no clashfinder_id configured", { status: 400 });
 			}
+
+			// Fetch updated lineup from Clashfinder API
+			const cfUsername = (env as Record<string, string>).CLASHFINDER_USERNAME;
+			const cfKey = (env as Record<string, string>).CLASHFINDER_PRIVATE_KEY;
+			if (!cfUsername || !cfKey) {
+				return new Response("Clashfinder credentials not configured", { status: 500 });
+			}
+
+			const apiResponse = await fetchClashfinder(clashfinderId, {
+				username: cfUsername,
+				privateKey: cfKey,
+			});
+			const lineup = parseClashfinderApi(id, apiResponse, {
+				name: festival.name as string,
+				location: festival.location as string,
+			});
 
 			this.#upsertLineup(id, lineup);
 
@@ -690,11 +638,14 @@ export class MainDO extends DurableObject {
 			let result: Awaited<ReturnType<typeof verifyRegistration>>;
 			try {
 				result = await verifyRegistration(body.webauthnResponse, body.challenge, env);
-			} catch {
-				return new Response("Registration verification failed", { status: 400 });
+			} catch (err) {
+				console.error("Registration verification threw:", err);
+				console.error("RP_ID:", env.RP_ID, "Expected origins:", getExpectedOrigins(env));
+				return new Response(`Registration verification failed: ${err}`, { status: 400 });
 			}
 			if (!result.verified) {
-				return new Response("Registration verification failed", { status: 400 });
+				console.error("Registration verification returned verified=false");
+				return new Response("Registration verification failed: not verified", { status: 400 });
 			}
 
 			// Store WebAuthn credential with the Ed25519 public key
@@ -767,11 +718,14 @@ export class MainDO extends DurableObject {
 					},
 					env,
 				);
-			} catch {
-				return new Response("Authentication failed", { status: 400 });
+			} catch (err) {
+				console.error("Recovery authentication threw:", err);
+				console.error("RP_ID:", env.RP_ID, "Expected origins:", getExpectedOrigins(env));
+				return new Response(`Authentication failed: ${err}`, { status: 400 });
 			}
 			if (!result.verified) {
-				return new Response("Authentication failed", { status: 400 });
+				console.error("Recovery authentication returned verified=false");
+				return new Response("Authentication failed: not verified", { status: 400 });
 			}
 
 			// Verify the Ed25519 key matches what we stored at registration
@@ -831,11 +785,14 @@ export class MainDO extends DurableObject {
 					},
 					env,
 				);
-			} catch {
-				return new Response("Authentication failed", { status: 400 });
+			} catch (err) {
+				console.error("Refresh authentication threw:", err);
+				console.error("RP_ID:", env.RP_ID, "Expected origins:", getExpectedOrigins(env));
+				return new Response(`Authentication failed: ${err}`, { status: 400 });
 			}
 			if (!result.verified) {
-				return new Response("Authentication failed", { status: 400 });
+				console.error("Refresh authentication returned verified=false");
+				return new Response("Authentication failed: not verified", { status: 400 });
 			}
 
 			// Check key is registered and not revoked

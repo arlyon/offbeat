@@ -90,6 +90,12 @@ const double tapMin = 44.0; // minimum tap target
 const double bdDotWidth = 1.5;
 const double bdWidth = 1.0;
 
+// ── Motion ──────────────────────────────────────────────────
+const Duration durationFast = Duration(milliseconds: 150);
+const Duration durationMedium = Duration(milliseconds: 280);
+const Duration durationSlow = Duration(milliseconds: 380);
+const Cubic curveBrutalist = Cubic(0.2, 0.7, 0.2, 1.0);
+
 // ── Gantt layout constants ───────────────────────────────────
 const int ganttStartMin = 18 * 60; // 18:00
 const int ganttEndMin = 26 * 60; // 02:00+1

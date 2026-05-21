@@ -70,6 +70,12 @@ app.put("/festivals/:id", (c) => {
 	return forwardToMainDO(c.env, `/festivals/${id}`, c.req.raw);
 });
 
+// DELETE /festivals/:id — delete a festival (admin-only)
+app.delete("/festivals/:id", (c) => {
+	const id = c.req.param("id");
+	return forwardToMainDO(c.env, `/festivals/${id}`, c.req.raw);
+});
+
 // PUT /festivals/:id/lineup — replace lineup (admin-only)
 app.put("/festivals/:id/lineup", (c) => {
 	const id = c.req.param("id");
@@ -225,8 +231,8 @@ app.post("/festivals/:id/sign-update", async (c) => {
 	);
 });
 
-/** Ensure the Festival DO has its event window configured.
- *  Fetches start_date/end_date from MainDO and sets ±1 day. */
+/** Ensure the Festival DO has its event window configured and lineup seeded.
+ *  Fetches metadata + lineup from MainDO and seeds the genesis Yrs doc. */
 async function ensureFestivalConfig(env: Env["Bindings"], festivalId: string) {
 	const doId = env.FESTIVAL_DO.idFromName(festivalId);
 	const stub = env.FESTIVAL_DO.get(doId);
@@ -266,6 +272,16 @@ async function ensureFestivalConfig(env: Env["Bindings"], festivalId: string) {
 
 	// Sync global admins to the Festival DO
 	await syncAdminsToFestival(env, festivalId);
+
+	// Seed the Festival DO with the lineup as a genesis Yrs document
+	const lineupUrl = new URL(`http://internal/festivals/${festivalId}/lineup`);
+	const lineupResp = await mainStub.fetch(new Request(lineupUrl.toString()));
+	if (lineupResp.ok) {
+		const lineup = await lineupResp.json();
+		await (
+			stub as unknown as { seedLineup(festivalId: string, lineup: unknown): Promise<void> }
+		).seedLineup(festivalId, lineup);
+	}
 }
 
 /** Push global admin keys from MainDO into the Festival DO's admin table. */

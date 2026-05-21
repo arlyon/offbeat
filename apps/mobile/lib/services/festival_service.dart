@@ -19,4 +19,16 @@ class FestivalService {
     final list = jsonDecode(resp.body) as List<dynamic>;
     return list.map((j) => Festival.fromJson(j as Map<String, dynamic>)).toList();
   }
+
+  /// Fetch the Festival DO's Ed25519 public key (hex string).
+  /// Returns null if the festival or key is not available.
+  Future<String?> fetchFestivalPublicKey(String festivalId) async {
+    try {
+      final resp = await http.get(Uri.parse('$_baseUrl/festivals/$festivalId/public-key'));
+      if (resp.statusCode == 200 && resp.body.length == 64) {
+        return resp.body;
+      }
+    } catch (_) {}
+    return null;
+  }
 }

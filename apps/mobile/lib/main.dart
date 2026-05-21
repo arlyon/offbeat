@@ -1,9 +1,11 @@
 // OFFBEAT Mobile App — Entry point
 
 import 'dart:developer' as dev;
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
+import 'config.dart';
 import 'theme/app_theme.dart';
 import 'theme/tokens.dart';
 import 'shell/bottom_tab_bar.dart';
@@ -16,6 +18,7 @@ import 'screens/you/registration_screen.dart';
 import 'screens/you/you_screen.dart';
 import 'services/auth_service.dart';
 import 'services/admin_service.dart';
+import 'services/festival_admin_service.dart';
 import 'services/festival_service.dart';
 import 'src/rust/api.dart';
 import 'src/rust/frb_generated.dart';
@@ -53,9 +56,16 @@ class _OffbeatShell extends StatefulWidget {
   State<_OffbeatShell> createState() => _OffbeatShellState();
 }
 
-class _OffbeatShellState extends State<_OffbeatShell> {
-  AppTab _activeTab = AppTab.festivals;
+class _OffbeatShellState extends State<_OffbeatShell>
+    with SingleTickerProviderStateMixin {
+  // Navigation: null = lobby (festival list), non-null = inside festival
   Festival? _selectedFestival;
+  AppTab _activeTab = AppTab.schedule;
+
+  // Navigation animation
+  late final AnimationController _navController;
+  late final Animation<Offset> _slideIn;
+  late final Animation<Offset> _slideOut;
 
   // Rust bridge node
   AppNode? _node;
@@ -73,6 +83,12 @@ class _OffbeatShellState extends State<_OffbeatShell> {
   bool _festivalsLoading = false;
   String? _festivalsError;
 
+  // Lineup state
+  List<Stage>? _lineupStages;
+  List<Day>? _lineupDays;
+  List<FestSet>? _lineupSets;
+  bool _lineupLoading = false;
+
   // Admin state
   bool _isAdmin = false;
   List<String> _adminKeys = [];
@@ -81,13 +97,35 @@ class _OffbeatShellState extends State<_OffbeatShell> {
 
   final _authService = AuthService();
   final _adminService = AdminService();
+  final _festivalAdminService = FestivalAdminService();
   final _festivalService = FestivalService();
+
+  // Brutalist motion curve: cubic-bezier(0.2, 0.7, 0.2, 1.0)
+  static const _curve = Cubic(0.2, 0.7, 0.2, 1.0);
 
   @override
   void initState() {
     super.initState();
+    _navController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 280),
+    );
+    _slideIn = Tween<Offset>(
+      begin: const Offset(1.0, 0.0),
+      end: Offset.zero,
+    ).animate(CurvedAnimation(parent: _navController, curve: _curve));
+    _slideOut = Tween<Offset>(
+      begin: Offset.zero,
+      end: const Offset(-0.3, 0.0),
+    ).animate(CurvedAnimation(parent: _navController, curve: _curve));
     _initNode();
     _loadFestivals();
+  }
+
+  @override
+  void dispose() {
+    _navController.dispose();
+    super.dispose();
   }
 
   Future<void> _initNode() async {
@@ -110,7 +148,10 @@ class _OffbeatShellState extends State<_OffbeatShell> {
       try {
         admins = await _adminService.listAdmins();
         isAdmin = admins.contains(pubKeyHex);
-      } catch (_) {}
+        print('Loaded ${admins.length} admins, isAdmin=$isAdmin');
+      } catch (e) {
+        print('Failed to load admins: $e');
+      }
     }
 
     setState(() {
@@ -184,8 +225,46 @@ class _OffbeatShellState extends State<_OffbeatShell> {
     });
   }
 
+  Future<void> _handleLogout() async {
+    // Delete the database and recreate the node
+    final dir = await getApplicationDocumentsDirectory();
+    final dbPath = '${dir.path}/offbeat.db';
+    final dbFile = File(dbPath);
+    if (await dbFile.exists()) {
+      await dbFile.delete();
+    }
+
+    // Recreate a fresh node
+    final node = await AppNode.create(dbPath: dbPath);
+
+    setState(() {
+      _node = node;
+      _authState = 'unregistered';
+      _authExpiresAt = null;
+      _userId = '';
+      _publicKeyHex = '';
+      _displayName = null;
+      _isAdmin = false;
+      _adminKeys = [];
+      _pendingRequests = [];
+      _adminRequestStatus = '';
+      _selectedFestival = null;
+      _activeTab = AppTab.schedule;
+    });
+  }
+
   Future<void> _onFestivalTap(Festival fest) async {
-    setState(() => _selectedFestival = fest);
+    setState(() {
+      _selectedFestival = fest;
+      _lineupLoading = true;
+      _lineupStages = null;
+      _lineupDays = null;
+      _lineupSets = null;
+    });
+    _navController.forward(from: 0.0);
+
+    // Connect to the Festival DO WebSocket relay, subscribe, and load lineup
+    _connectAndLoadLineup(fest.id);
 
     // Check admin status if authenticated
     if (_authState != 'unregistered' && _publicKeyHex.isNotEmpty) {
@@ -227,10 +306,92 @@ class _OffbeatShellState extends State<_OffbeatShell> {
     }
   }
 
+  Future<void> _connectAndLoadLineup(String festivalId) async {
+    final node = _node;
+    if (node == null) return;
+
+    // Show local data immediately (from SQLite), then sync in background
+    await _loadLineup(festivalId);
+
+    // Connect and sync in the background
+    try {
+      // Fetch the festival DO's public key BEFORE connecting so the
+      // receive loop can verify signed updates in the catchup.
+      final pubKeyHex = await _festivalService.fetchFestivalPublicKey(festivalId);
+      if (pubKeyHex != null) {
+        await node.setFestivalPublicKey(festivalId: festivalId, hexKey: pubKeyHex);
+      }
+
+      // Connect WS relay to the Festival DO
+      final wsScheme = mainDoBaseUrl.startsWith('https') ? 'wss' : 'ws';
+      final authority = mainDoBaseUrl.replaceFirst(RegExp(r'^https?://'), '');
+      final wsUrl = '$wsScheme://$authority/festivals/$festivalId/ws';
+      await node.connectRelay(url: wsUrl, festivalId: festivalId);
+
+      // Subscribe to the state topic and request catchup from seq 0
+      await node.subscribeFestival(festivalId: festivalId);
+
+      // Reload after catchup delivers any new updates
+      await _loadLineup(festivalId);
+    } catch (e, st) {
+      print('relay error: $e\n$st');
+    }
+  }
+
+  Future<void> _loadLineup(String festivalId) async {
+    final node = _node;
+    if (node == null) return;
+
+    try {
+      final lineup = await node.getLineup(festivalId: festivalId);
+      if (!mounted) return;
+
+      if (lineup != null) {
+        final stages = lineup.stages.map((s) => Stage.fromJson({
+          'id': s.id,
+          'name': s.name,
+          'short': s.short,
+          'color': s.color,
+          'order': s.order,
+        })).toList();
+
+        final days = lineup.days.map((d) => Day.fromJson({
+          'id': d.id,
+          'label': d.label,
+          'num': d.num,
+          'month': d.month,
+        })).toList();
+
+        final sets = lineup.sets.map((s) => FestSet.fromJson({
+          'id': s.id,
+          'day': s.day,
+          'stage': s.stage,
+          'artist': s.artist,
+          'startMin': s.startMin,
+          'durationMin': s.durationMin,
+          'genre': s.genre,
+          'cancelled': s.cancelled,
+        })).toList();
+
+        setState(() {
+          _lineupStages = stages;
+          _lineupDays = days;
+          _lineupSets = sets;
+          _lineupLoading = false;
+        });
+      } else {
+        setState(() => _lineupLoading = false);
+      }
+    } catch (e) {
+      print('Failed to load lineup: $e');
+      if (mounted) setState(() => _lineupLoading = false);
+    }
+  }
+
   Future<void> _handleBecomeAdmin(String festivalId) async {
     if (_publicKeyHex.isEmpty) return;
 
-    await _adminService.registerFestivalAdmin(
+    await _festivalAdminService.registerFestivalAdmin(
       festivalId: festivalId,
       publicKeyHex: _publicKeyHex,
     );
@@ -308,8 +469,98 @@ class _OffbeatShellState extends State<_OffbeatShell> {
     } catch (_) {}
   }
 
+  Future<void> _refreshAdminStatus() async {
+    if (_publicKeyHex.isEmpty) return;
+    try {
+      final admins = await _adminService.listAdmins();
+      if (!mounted) return;
+      setState(() {
+        _adminKeys = admins;
+        _isAdmin = admins.contains(_publicKeyHex);
+        if (_isAdmin) _adminRequestStatus = 'already_admin';
+      });
+    } catch (e) {
+      print('Failed to refresh admins: $e');
+    }
+  }
+
+  void _showSettingsSheet() {
+    _refreshAdminStatus();
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: colorBg,
+      isScrollControlled: true,
+      builder: (_) => DraggableScrollableSheet(
+        initialChildSize: 0.85,
+        minChildSize: 0.5,
+        maxChildSize: 0.95,
+        expand: false,
+        builder: (context, scrollController) => Column(
+          children: [
+            // Handle bar
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              child: Container(
+                width: 32,
+                height: 3,
+                decoration: BoxDecoration(
+                  color: colorFg4,
+                  borderRadius: BorderRadius.circular(1.5),
+                ),
+              ),
+            ),
+            Expanded(child: _buildYouContent()),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildYouContent() {
+    if (_authState == 'unregistered') {
+      return RegistrationScreen(onRegister: _handleRegister);
+    }
+    return YouScreen(
+      userId: _userId,
+      publicKeyHex: _publicKeyHex,
+      displayName: _displayName,
+      authState: _authState,
+      expiresAt: _authExpiresAt,
+      isAdmin: _isAdmin,
+      adminRequestStatus: _adminRequestStatus,
+      adminKeys: _adminKeys,
+      onDisplayNameChanged: (name) async {
+        await _node?.setDisplayName(name: name);
+        setState(() => _displayName = name);
+      },
+      onRequestAdmin: _handleRequestAdmin,
+      onLogout: () async {
+        // Close the settings sheet if open, then log out
+        if (Navigator.of(context).canPop()) {
+          Navigator.of(context).pop();
+        }
+        await _handleLogout();
+      },
+    );
+  }
+
+  void _navigateBack() {
+    _navController.reverse().then((_) {
+      if (!mounted) return;
+      setState(() {
+        _selectedFestival = null;
+        _activeTab = AppTab.schedule;
+        _lineupStages = null;
+        _lineupDays = null;
+        _lineupSets = null;
+      });
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
+    final inFestival = _selectedFestival != null;
+
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: const SystemUiOverlayStyle(
         statusBarColor: Colors.transparent,
@@ -317,181 +568,242 @@ class _OffbeatShellState extends State<_OffbeatShell> {
         systemNavigationBarColor: colorBg,
         systemNavigationBarIconBrightness: Brightness.light,
       ),
-      child: Scaffold(
+      child: PopScope(
+        canPop: !inFestival,
+        onPopInvokedWithResult: (didPop, _) {
+          if (!didPop && inFestival) {
+            _navigateBack();
+          }
+        },
+        child: Scaffold(
         backgroundColor: colorBg,
         body: Column(
           children: [
-            Expanded(child: _buildBody()),
-            OffbeatTabBar(
-              activeTab: _activeTab,
-              onTabChanged: (tab) {
-                setState(() {
-                  _activeTab = tab;
-                  if (tab != AppTab.festivals) _selectedFestival = null;
-                });
+            // Shell-level TopNav with animation
+            TopNav(
+              festivalName: _selectedFestival?.name,
+              showBack: inFestival,
+              onBack: _navigateBack,
+              animation: _navController,
+              rightWidgets: [
+                // Crossfade between settings (lobby) and search+admin (festival)
+                AnimatedBuilder(
+                  animation: _navController,
+                  builder: (context, _) {
+                    final t = _navController.value;
+                    return Stack(
+                      children: [
+                        // Settings button (lobby)
+                        IgnorePointer(
+                          ignoring: t >= 0.5,
+                          child: Opacity(
+                            opacity: 1.0 - t,
+                            child: NavIconButton(
+                              icon: Icons.settings,
+                              onTap: _showSettingsSheet,
+                            ),
+                          ),
+                        ),
+                        // Search + Admin (festival)
+                        IgnorePointer(
+                          ignoring: t < 0.5,
+                          child: Opacity(
+                            opacity: t,
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                NavIconButton(icon: Icons.search),
+                                if (_isAdmin)
+                                  NavIconButton(
+                                    icon: Icons.shield,
+                                    color: colorAccent,
+                                    onTap: () => _showAdminPanel(context),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+              ],
+            ),
+            // Body with slide animation
+            Expanded(child: _buildAnimatedBody()),
+            // Bottom tab bar — slides up when entering festival
+            AnimatedBuilder(
+              animation: _navController,
+              builder: (context, child) {
+                final showBar = inFestival || _navController.isAnimating;
+                if (!showBar) return const SizedBox.shrink();
+                return SlideTransition(
+                  position: Tween<Offset>(
+                    begin: const Offset(0.0, 1.0),
+                    end: Offset.zero,
+                  ).animate(CurvedAnimation(
+                    parent: _navController,
+                    curve: _curve,
+                  )),
+                  child: child,
+                );
               },
+              child: OffbeatTabBar(
+                activeTab: _activeTab,
+                onTabChanged: (tab) => setState(() => _activeTab = tab),
+              ),
             ),
           ],
         ),
       ),
+      ),
     );
   }
 
-  Widget _buildBody() {
+  void _showAdminPanel(BuildContext context) {
+    final fest = _selectedFestival;
+    if (fest == null) return;
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (_) => AdminPanel(
+        festivalId: fest.id,
+        festivalName: fest.name,
+        adminKeys: _adminKeys,
+        userPublicKeyHex: _publicKeyHex,
+        pendingRequests: _pendingRequests,
+        onRefreshLineup: () => Navigator.pop(context),
+        onExportSigningKey: () => Navigator.pop(context),
+        onApproveRequest: (key) {
+          Navigator.pop(context);
+          _handleApproveRequest(key);
+        },
+        onDenyRequest: (key) {
+          Navigator.pop(context);
+          _handleDenyRequest(key);
+        },
+      ),
+    );
+  }
+
+  Widget _buildAnimatedBody() {
     if (!_nodeReady) {
       return const Center(
         child: CircularProgressIndicator(color: colorAccent, strokeWidth: 1.5),
       );
     }
 
-    switch (_activeTab) {
-      case AppTab.festivals:
-        if (_selectedFestival != null) {
-          return FestivalDetailScreen(
-            festival: _selectedFestival!,
-            onBack: () => setState(() => _selectedFestival = null),
-            isAdmin: _isAdmin,
-            adminKeys: _adminKeys,
-            userPublicKeyHex: _publicKeyHex,
-            pendingRequests: _pendingRequests,
-            onApproveRequest: _handleApproveRequest,
-            onDenyRequest: _handleDenyRequest,
-          );
-        }
-        return FestivalListScreen(
-          festivals: _festivals,
-          loading: _festivalsLoading,
-          error: _festivalsError,
-          onRefresh: _loadFestivals,
-          onFestivalTap: (fest) => _onFestivalTap(fest),
-        );
-      case AppTab.schedule:
-        return _PlaceholderTab(
-          label: 'SCHEDULE',
-          sublabel: 'Your saved sets across all festivals',
-        );
-      case AppTab.now:
-        return NowTabPlaceholder();
-      case AppTab.you:
-        if (_authState == 'unregistered') {
-          return RegistrationScreen(onRegister: _handleRegister);
-        }
-        return YouScreen(
-          userId: _userId,
-          publicKeyHex: _publicKeyHex,
-          displayName: _displayName,
-          authState: _authState,
-          expiresAt: _authExpiresAt,
-          isAdmin: _isAdmin,
-          adminRequestStatus: _adminRequestStatus,
-          adminKeys: _adminKeys,
-          onDisplayNameChanged: (name) async {
-            await _node?.setDisplayName(name: name);
-            setState(() => _displayName = name);
-          },
-          onRequestAdmin: _handleRequestAdmin,
-        );
+    final inFestival = _selectedFestival != null;
+    final isAnimating = _navController.isAnimating;
+
+    // Simple case: no animation, just show current view
+    if (!isAnimating && !inFestival) {
+      return FestivalListScreen(
+        festivals: _festivals,
+        loading: _festivalsLoading,
+        error: _festivalsError,
+        onRefresh: _loadFestivals,
+        onFestivalTap: (fest) => _onFestivalTap(fest),
+      );
     }
-  }
-}
 
-class _PlaceholderTab extends StatelessWidget {
-  final String label;
-  final String sublabel;
+    if (!isAnimating && inFestival) {
+      return _buildFestivalContent();
+    }
 
-  const _PlaceholderTab({required this.label, required this.sublabel});
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: [
-        TopNav(),
-        Expanded(
-          child: Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  label,
-                  style: const TextStyle(
-                    fontFamily: 'JetBrainsMono',
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 0.1 * 11,
-                    color: colorFg3,
-                    height: 1,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  sublabel.toUpperCase(),
-                  style: const TextStyle(
-                    fontFamily: 'JetBrainsMono',
-                    fontSize: 9,
-                    letterSpacing: 0.08 * 9,
-                    color: colorFg4,
-                    height: 1,
-                  ),
-                  textAlign: TextAlign.center,
-                ),
-              ],
+    // During animation: show both in a Stack
+    return AnimatedBuilder(
+      animation: _navController,
+      builder: (context, _) {
+        return Stack(
+          children: [
+            // Lobby (slides out to left)
+            SlideTransition(
+              position: _slideOut,
+              child: FestivalListScreen(
+                festivals: _festivals,
+                loading: _festivalsLoading,
+                error: _festivalsError,
+                onRefresh: _loadFestivals,
+                onFestivalTap: (fest) => _onFestivalTap(fest),
+              ),
             ),
-          ),
-        ),
-      ],
+            // Festival (slides in from right)
+            SlideTransition(
+              position: _slideIn,
+              child: Container(
+                color: colorBg,
+                child: _buildFestivalContent(),
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
+
+  Widget _buildFestivalContent() {
+    switch (_activeTab) {
+      case AppTab.schedule:
+        return FestivalDetailScreen(
+          festival: _selectedFestival!,
+          stages: _lineupStages,
+          days: _lineupDays,
+          sets: _lineupSets,
+          loading: _lineupLoading,
+        );
+      case AppTab.now:
+        return _NowTabContent(festivalName: _selectedFestival!.name);
+      case AppTab.you:
+        return _buildYouContent();
+    }
+  }
+
 }
 
-class NowTabPlaceholder extends StatelessWidget {
+class _NowTabContent extends StatelessWidget {
+  final String festivalName;
+  const _NowTabContent({required this.festivalName});
+
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        TopNav(
-          rightWidgets: [NavIconButton(icon: Icons.search)],
-        ),
-        Expanded(
-          child: Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 8,
-                  height: 8,
-                  decoration: const BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: colorAccent,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                const Text(
-                  'NOW',
-                  style: TextStyle(
-                    fontFamily: 'JetBrainsMono',
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 0.1 * 11,
-                    color: colorAccent,
-                    height: 1,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                const Text(
-                  'LIVE AT FIELD DAY',
-                  style: TextStyle(
-                    fontFamily: 'JetBrainsMono',
-                    fontSize: 9,
-                    letterSpacing: 0.08 * 9,
-                    color: colorFg4,
-                    height: 1,
-                  ),
-                ),
-              ],
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 8,
+            height: 8,
+            decoration: const BoxDecoration(
+              shape: BoxShape.circle,
+              color: colorAccent,
             ),
           ),
-        ),
-      ],
+          const SizedBox(height: 8),
+          const Text(
+            'NOW',
+            style: TextStyle(
+              fontFamily: 'JetBrainsMono',
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.1 * 11,
+              color: colorAccent,
+              height: 1,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'LIVE AT ${festivalName.toUpperCase()}',
+            style: const TextStyle(
+              fontFamily: 'JetBrainsMono',
+              fontSize: 9,
+              letterSpacing: 0.08 * 9,
+              color: colorFg4,
+              height: 1,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

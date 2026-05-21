@@ -39,7 +39,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1664551039;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -960371775;
 
 // Section: executor
 
@@ -201,6 +201,7 @@ fn wire__crate__api__AppNode_connect_relay_impl(
                 flutter_rust_bridge::for_generated::RustAutoOpaqueInner<AppNode>,
             >>::sse_decode(&mut deserializer);
             let api_url = <String>::sse_decode(&mut deserializer);
+            let api_festival_id = <String>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
@@ -222,9 +223,12 @@ fn wire__crate__api__AppNode_connect_relay_impl(
                             }
                         }
                         let mut api_that_guard = api_that_guard.unwrap();
-                        let output_ok =
-                            crate::api::AppNode::connect_relay(&mut *api_that_guard, api_url)
-                                .await?;
+                        let output_ok = crate::api::AppNode::connect_relay(
+                            &mut *api_that_guard,
+                            api_url,
+                            api_festival_id,
+                        )
+                        .await?;
                         Ok(output_ok)
                     })()
                     .await,
@@ -851,6 +855,65 @@ fn wire__crate__api__AppNode_get_identity_impl(
                         let output_ok = crate::api::AppNode::get_identity(&*api_that_guard)?;
                         Ok(output_ok)
                     })(),
+                )
+            }
+        },
+    )
+}
+fn wire__crate__api__AppNode_get_lineup_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "AppNode_get_lineup",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<AppNode>,
+            >>::sse_decode(&mut deserializer);
+            let api_festival_id = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, ()>(
+                    (move || async move {
+                        let mut api_that_guard = None;
+                        let decode_indices_ =
+                            flutter_rust_bridge::for_generated::lockable_compute_decode_order(
+                                vec![flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                    &api_that, 0, false,
+                                )],
+                            );
+                        for i in decode_indices_ {
+                            match i {
+                                0 => {
+                                    api_that_guard =
+                                        Some(api_that.lockable_decode_async_ref().await)
+                                }
+                                _ => unreachable!(),
+                            }
+                        }
+                        let api_that_guard = api_that_guard.unwrap();
+                        let output_ok = Result::<_, ()>::Ok(
+                            crate::api::AppNode::get_lineup(&*api_that_guard, api_festival_id)
+                                .await,
+                        )?;
+                        Ok(output_ok)
+                    })()
+                    .await,
                 )
             }
         },
@@ -2073,6 +2136,13 @@ impl SseDecode for crate::api::GroupStateDto {
     }
 }
 
+impl SseDecode for i32 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        deserializer.cursor.read_i32::<NativeEndian>().unwrap()
+    }
+}
+
 impl SseDecode for crate::api::IdentityDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -2081,6 +2151,78 @@ impl SseDecode for crate::api::IdentityDto {
         return crate::api::IdentityDto {
             user_id: var_userId,
             display_name: var_displayName,
+        };
+    }
+}
+
+impl SseDecode for crate::api::LineupDayDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_id = <String>::sse_decode(deserializer);
+        let mut var_label = <String>::sse_decode(deserializer);
+        let mut var_num = <i32>::sse_decode(deserializer);
+        let mut var_month = <String>::sse_decode(deserializer);
+        return crate::api::LineupDayDto {
+            id: var_id,
+            label: var_label,
+            num: var_num,
+            month: var_month,
+        };
+    }
+}
+
+impl SseDecode for crate::api::LineupDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_stages = <Vec<crate::api::LineupStageDto>>::sse_decode(deserializer);
+        let mut var_days = <Vec<crate::api::LineupDayDto>>::sse_decode(deserializer);
+        let mut var_sets = <Vec<crate::api::LineupSetDto>>::sse_decode(deserializer);
+        return crate::api::LineupDto {
+            stages: var_stages,
+            days: var_days,
+            sets: var_sets,
+        };
+    }
+}
+
+impl SseDecode for crate::api::LineupSetDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_id = <String>::sse_decode(deserializer);
+        let mut var_day = <String>::sse_decode(deserializer);
+        let mut var_stage = <String>::sse_decode(deserializer);
+        let mut var_artist = <String>::sse_decode(deserializer);
+        let mut var_startMin = <i32>::sse_decode(deserializer);
+        let mut var_durationMin = <i32>::sse_decode(deserializer);
+        let mut var_genre = <String>::sse_decode(deserializer);
+        let mut var_cancelled = <bool>::sse_decode(deserializer);
+        return crate::api::LineupSetDto {
+            id: var_id,
+            day: var_day,
+            stage: var_stage,
+            artist: var_artist,
+            start_min: var_startMin,
+            duration_min: var_durationMin,
+            genre: var_genre,
+            cancelled: var_cancelled,
+        };
+    }
+}
+
+impl SseDecode for crate::api::LineupStageDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_id = <String>::sse_decode(deserializer);
+        let mut var_name = <String>::sse_decode(deserializer);
+        let mut var_short = <String>::sse_decode(deserializer);
+        let mut var_color = <String>::sse_decode(deserializer);
+        let mut var_order = <i32>::sse_decode(deserializer);
+        return crate::api::LineupStageDto {
+            id: var_id,
+            name: var_name,
+            short: var_short,
+            color: var_color,
+            order: var_order,
         };
     }
 }
@@ -2145,6 +2287,42 @@ impl SseDecode for Vec<crate::api::GroupPinDto> {
     }
 }
 
+impl SseDecode for Vec<crate::api::LineupDayDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(<crate::api::LineupDayDto>::sse_decode(deserializer));
+        }
+        return ans_;
+    }
+}
+
+impl SseDecode for Vec<crate::api::LineupSetDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(<crate::api::LineupSetDto>::sse_decode(deserializer));
+        }
+        return ans_;
+    }
+}
+
+impl SseDecode for Vec<crate::api::LineupStageDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(<crate::api::LineupStageDto>::sse_decode(deserializer));
+        }
+        return ans_;
+    }
+}
+
 impl SseDecode for Vec<u8> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -2179,6 +2357,17 @@ impl SseDecode for Option<crate::api::AttestationDto> {
     }
 }
 
+impl SseDecode for Option<crate::api::LineupDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<crate::api::LineupDto>::sse_decode(deserializer));
+        } else {
+            return None;
+        }
+    }
+}
+
 impl SseDecode for u32 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -2202,13 +2391,6 @@ impl SseDecode for usize {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         deserializer.cursor.read_u64::<NativeEndian>().unwrap() as _
-    }
-}
-
-impl SseDecode for i32 {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
-        deserializer.cursor.read_i32::<NativeEndian>().unwrap()
     }
 }
 
@@ -2241,32 +2423,33 @@ fn pde_ffi_dispatcher_primary_impl(
         13 => wire__crate__api__AppNode_get_group_state_impl(port, ptr, rust_vec_len, data_len),
         14 => wire__crate__api__AppNode_get_groups_impl(port, ptr, rust_vec_len, data_len),
         15 => wire__crate__api__AppNode_get_identity_impl(port, ptr, rust_vec_len, data_len),
-        16 => wire__crate__api__AppNode_get_public_key_hex_impl(port, ptr, rust_vec_len, data_len),
-        17 => wire__crate__api__AppNode_get_stars_impl(port, ptr, rust_vec_len, data_len),
-        18 => wire__crate__api__AppNode_join_group_impl(port, ptr, rust_vec_len, data_len),
-        19 => wire__crate__api__AppNode_leave_group_impl(port, ptr, rust_vec_len, data_len),
-        20 => wire__crate__api__AppNode_publish_chat_impl(port, ptr, rust_vec_len, data_len),
-        21 => wire__crate__api__AppNode_save_group_impl(port, ptr, rust_vec_len, data_len),
-        22 => wire__crate__api__AppNode_send_festival_chat_impl(port, ptr, rust_vec_len, data_len),
-        23 => wire__crate__api__AppNode_send_group_chat_impl(port, ptr, rust_vec_len, data_len),
-        24 => wire__crate__api__AppNode_set_display_name_impl(port, ptr, rust_vec_len, data_len),
-        25 => wire__crate__api__AppNode_set_festival_public_key_impl(
+        16 => wire__crate__api__AppNode_get_lineup_impl(port, ptr, rust_vec_len, data_len),
+        17 => wire__crate__api__AppNode_get_public_key_hex_impl(port, ptr, rust_vec_len, data_len),
+        18 => wire__crate__api__AppNode_get_stars_impl(port, ptr, rust_vec_len, data_len),
+        19 => wire__crate__api__AppNode_join_group_impl(port, ptr, rust_vec_len, data_len),
+        20 => wire__crate__api__AppNode_leave_group_impl(port, ptr, rust_vec_len, data_len),
+        21 => wire__crate__api__AppNode_publish_chat_impl(port, ptr, rust_vec_len, data_len),
+        22 => wire__crate__api__AppNode_save_group_impl(port, ptr, rust_vec_len, data_len),
+        23 => wire__crate__api__AppNode_send_festival_chat_impl(port, ptr, rust_vec_len, data_len),
+        24 => wire__crate__api__AppNode_send_group_chat_impl(port, ptr, rust_vec_len, data_len),
+        25 => wire__crate__api__AppNode_set_display_name_impl(port, ptr, rust_vec_len, data_len),
+        26 => wire__crate__api__AppNode_set_festival_public_key_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        26 => wire__crate__api__AppNode_sign_message_impl(port, ptr, rust_vec_len, data_len),
-        27 => wire__crate__api__AppNode_store_attestation_impl(port, ptr, rust_vec_len, data_len),
-        28 => {
+        27 => wire__crate__api__AppNode_sign_message_impl(port, ptr, rust_vec_len, data_len),
+        28 => wire__crate__api__AppNode_store_attestation_impl(port, ptr, rust_vec_len, data_len),
+        29 => {
             wire__crate__api__AppNode_subscribe_chat_topics_impl(port, ptr, rust_vec_len, data_len)
         }
-        29 => wire__crate__api__AppNode_subscribe_festival_impl(port, ptr, rust_vec_len, data_len),
-        30 => wire__crate__api__AppNode_toggle_star_impl(port, ptr, rust_vec_len, data_len),
-        31 => wire__crate__api__AppNode_update_shared_stars_impl(port, ptr, rust_vec_len, data_len),
-        32 => wire__crate__api__generate_group_key_impl(port, ptr, rust_vec_len, data_len),
-        33 => wire__crate__api__group_id_from_key_impl(port, ptr, rust_vec_len, data_len),
-        34 => wire__crate__api__init_app_impl(port, ptr, rust_vec_len, data_len),
+        30 => wire__crate__api__AppNode_subscribe_festival_impl(port, ptr, rust_vec_len, data_len),
+        31 => wire__crate__api__AppNode_toggle_star_impl(port, ptr, rust_vec_len, data_len),
+        32 => wire__crate__api__AppNode_update_shared_stars_impl(port, ptr, rust_vec_len, data_len),
+        33 => wire__crate__api__generate_group_key_impl(port, ptr, rust_vec_len, data_len),
+        34 => wire__crate__api__group_id_from_key_impl(port, ptr, rust_vec_len, data_len),
+        35 => wire__crate__api__init_app_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -2478,6 +2661,82 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::IdentityDto> for crate::api::
         self
     }
 }
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::LineupDayDto {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.id.into_into_dart().into_dart(),
+            self.label.into_into_dart().into_dart(),
+            self.num.into_into_dart().into_dart(),
+            self.month.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::LineupDayDto {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::LineupDayDto> for crate::api::LineupDayDto {
+    fn into_into_dart(self) -> crate::api::LineupDayDto {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::LineupDto {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.stages.into_into_dart().into_dart(),
+            self.days.into_into_dart().into_dart(),
+            self.sets.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::LineupDto {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::LineupDto> for crate::api::LineupDto {
+    fn into_into_dart(self) -> crate::api::LineupDto {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::LineupSetDto {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.id.into_into_dart().into_dart(),
+            self.day.into_into_dart().into_dart(),
+            self.stage.into_into_dart().into_dart(),
+            self.artist.into_into_dart().into_dart(),
+            self.start_min.into_into_dart().into_dart(),
+            self.duration_min.into_into_dart().into_dart(),
+            self.genre.into_into_dart().into_dart(),
+            self.cancelled.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::LineupSetDto {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::LineupSetDto> for crate::api::LineupSetDto {
+    fn into_into_dart(self) -> crate::api::LineupSetDto {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::LineupStageDto {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.id.into_into_dart().into_dart(),
+            self.name.into_into_dart().into_dart(),
+            self.short.into_into_dart().into_dart(),
+            self.color.into_into_dart().into_dart(),
+            self.order.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::LineupStageDto {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::LineupStageDto> for crate::api::LineupStageDto {
+    fn into_into_dart(self) -> crate::api::LineupStageDto {
+        self
+    }
+}
 
 impl SseEncode for flutter_rust_bridge::for_generated::anyhow::Error {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -2599,11 +2858,62 @@ impl SseEncode for crate::api::GroupStateDto {
     }
 }
 
+impl SseEncode for i32 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        serializer.cursor.write_i32::<NativeEndian>(self).unwrap();
+    }
+}
+
 impl SseEncode for crate::api::IdentityDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.user_id, serializer);
         <Option<String>>::sse_encode(self.display_name, serializer);
+    }
+}
+
+impl SseEncode for crate::api::LineupDayDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.id, serializer);
+        <String>::sse_encode(self.label, serializer);
+        <i32>::sse_encode(self.num, serializer);
+        <String>::sse_encode(self.month, serializer);
+    }
+}
+
+impl SseEncode for crate::api::LineupDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <Vec<crate::api::LineupStageDto>>::sse_encode(self.stages, serializer);
+        <Vec<crate::api::LineupDayDto>>::sse_encode(self.days, serializer);
+        <Vec<crate::api::LineupSetDto>>::sse_encode(self.sets, serializer);
+    }
+}
+
+impl SseEncode for crate::api::LineupSetDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.id, serializer);
+        <String>::sse_encode(self.day, serializer);
+        <String>::sse_encode(self.stage, serializer);
+        <String>::sse_encode(self.artist, serializer);
+        <i32>::sse_encode(self.start_min, serializer);
+        <i32>::sse_encode(self.duration_min, serializer);
+        <String>::sse_encode(self.genre, serializer);
+        <bool>::sse_encode(self.cancelled, serializer);
+    }
+}
+
+impl SseEncode for crate::api::LineupStageDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.id, serializer);
+        <String>::sse_encode(self.name, serializer);
+        <String>::sse_encode(self.short, serializer);
+        <String>::sse_encode(self.color, serializer);
+        <i32>::sse_encode(self.order, serializer);
     }
 }
 
@@ -2657,6 +2967,36 @@ impl SseEncode for Vec<crate::api::GroupPinDto> {
     }
 }
 
+impl SseEncode for Vec<crate::api::LineupDayDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::api::LineupDayDto>::sse_encode(item, serializer);
+        }
+    }
+}
+
+impl SseEncode for Vec<crate::api::LineupSetDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::api::LineupSetDto>::sse_encode(item, serializer);
+        }
+    }
+}
+
+impl SseEncode for Vec<crate::api::LineupStageDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::api::LineupStageDto>::sse_encode(item, serializer);
+        }
+    }
+}
+
 impl SseEncode for Vec<u8> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -2687,6 +3027,16 @@ impl SseEncode for Option<crate::api::AttestationDto> {
     }
 }
 
+impl SseEncode for Option<crate::api::LineupDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <crate::api::LineupDto>::sse_encode(value, serializer);
+        }
+    }
+}
+
 impl SseEncode for u32 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -2713,13 +3063,6 @@ impl SseEncode for usize {
             .cursor
             .write_u64::<NativeEndian>(self as _)
             .unwrap();
-    }
-}
-
-impl SseEncode for i32 {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
-        serializer.cursor.write_i32::<NativeEndian>(self).unwrap();
     }
 }
 

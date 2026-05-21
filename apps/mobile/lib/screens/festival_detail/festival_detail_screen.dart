@@ -5,12 +5,8 @@
 
 import 'package:flutter/material.dart';
 import '../../data/mock_data.dart';
-import '../../theme/tokens.dart';
-import '../../shell/top_nav.dart';
 import '../../widgets/dotted_border.dart';
 import '../../widgets/chip.dart';
-import 'admin_panel.dart';
-import '../../services/admin_service.dart';
 import 'gantt_view.dart';
 import 'day_tabs_view.dart';
 import 'stage_tabs_view.dart';
@@ -22,24 +18,18 @@ enum FestDetailView { gantt, dayTabs, stageTabs, filters, clashRadar, nowStrip }
 
 class FestivalDetailScreen extends StatefulWidget {
   final Festival festival;
-  final VoidCallback onBack;
-  final bool isAdmin;
-  final List<String> adminKeys;
-  final String userPublicKeyHex;
-  final List<AdminRequest> pendingRequests;
-  final ValueChanged<String>? onApproveRequest;
-  final ValueChanged<String>? onDenyRequest;
+  final List<Stage>? stages;
+  final List<Day>? days;
+  final List<FestSet>? sets;
+  final bool loading;
 
   const FestivalDetailScreen({
     super.key,
     required this.festival,
-    required this.onBack,
-    this.isAdmin = false,
-    this.adminKeys = const [],
-    this.userPublicKeyHex = '',
-    this.pendingRequests = const [],
-    this.onApproveRequest,
-    this.onDenyRequest,
+    this.stages,
+    this.days,
+    this.sets,
+    this.loading = false,
   });
 
   @override
@@ -49,89 +39,66 @@ class FestivalDetailScreen extends StatefulWidget {
 class _FestivalDetailScreenState extends State<FestivalDetailScreen> {
   FestDetailView _view = FestDetailView.gantt;
 
-  // Build the sets for this festival (using Field Day mock data)
-  late final List<FestSet> _sets = buildSets();
-
-  void _showAdminPanel(BuildContext context) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      builder: (_) => AdminPanel(
-        festivalId: widget.festival.id,
-        festivalName: widget.festival.name,
-        adminKeys: widget.adminKeys,
-        userPublicKeyHex: widget.userPublicKeyHex,
-        pendingRequests: widget.pendingRequests,
-        onRefreshLineup: () {
-          Navigator.pop(context);
-          // TODO: Call admin service to refresh lineup
-        },
-        onExportSigningKey: () {
-          Navigator.pop(context);
-          // TODO: Call admin service to export signing key
-        },
-        onApproveRequest: (key) {
-          Navigator.pop(context);
-          widget.onApproveRequest?.call(key);
-        },
-        onDenyRequest: (key) {
-          Navigator.pop(context);
-          widget.onDenyRequest?.call(key);
-        },
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
+    if (widget.loading) {
+      return const Center(
+        child: CircularProgressIndicator(color: Color(0xFFFF2D8F), strokeWidth: 1.5),
+      );
+    }
+
+    final stages = widget.stages;
+    final days = widget.days;
+    final sets = widget.sets;
+
+    if (stages == null || days == null || sets == null || sets.isEmpty) {
+      return const Center(
+        child: Text(
+          'NO LINEUP DATA',
+          style: TextStyle(
+            fontFamily: 'JetBrainsMono',
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.1 * 11,
+            color: Color(0xFF555555),
+            height: 1,
+          ),
+        ),
+      );
+    }
+
     return Column(
       children: [
-        // Top nav with back chevron
-        TopNav(
-          festivalName: widget.festival.name.toUpperCase(),
-          showBack: true,
-          onBack: widget.onBack,
-          rightWidgets: [
-            NavIconButton(icon: Icons.search),
-            NavIconButton(icon: Icons.tune),
-            if (widget.isAdmin)
-              NavIconButton(
-                icon: Icons.shield,
-                color: colorAccent,
-                onTap: () => _showAdminPanel(context),
-              ),
-          ],
-        ),
         // View mode selector
         _ViewSelector(
           active: _view,
           onChanged: (v) => setState(() => _view = v),
         ),
         // Content
-        Expanded(child: _buildView()),
+        Expanded(child: _buildView(stages, days, sets)),
       ],
     );
   }
 
-  Widget _buildView() {
+  Widget _buildView(List<Stage> stages, List<Day> days, List<FestSet> sets) {
     switch (_view) {
       case FestDetailView.gantt:
-        return GanttView(sets: _sets, stages: kStages, days: kDays);
+        return GanttView(sets: sets, stages: stages, days: days);
       case FestDetailView.dayTabs:
         return DayTabsView(
-          sets: _sets,
-          stages: kStages,
-          days: kDays,
-          festivalWhere: 'Brockwell Park · London',
+          sets: sets,
+          stages: stages,
+          days: days,
+          festivalWhere: widget.festival.where,
         );
       case FestDetailView.stageTabs:
-        return StageTabsView(sets: _sets, stages: kStages, days: kDays);
+        return StageTabsView(sets: sets, stages: stages, days: days);
       case FestDetailView.filters:
-        return FilterView(sets: _sets, stages: kStages);
+        return FilterView(sets: sets, stages: stages, days: days);
       case FestDetailView.clashRadar:
-        return ClashRadarView(sets: _sets, stages: kStages);
+        return ClashRadarView(sets: sets, stages: stages, days: days);
       case FestDetailView.nowStrip:
-        return NowStripView(sets: _sets, stages: kStages);
+        return NowStripView(sets: sets, stages: stages);
     }
   }
 }

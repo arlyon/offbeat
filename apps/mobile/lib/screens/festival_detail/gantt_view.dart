@@ -1,15 +1,15 @@
 // OFFBEAT GanttView — V1 Gantt-Scroll (THE signature view)
-// Time on X axis (18:00-02:00), 6 stage rows on Y
-// Content width: 480min × 3px/min = 1440px
+// Continuous timeline across all days; day chips jump to day start
 // Stage labels (46px) sticky on left
-// CRITICAL INTERACTION: User scrolls sentinel vertically → maps to horizontal pan
-// Time axis: hour ticks + half-hour marks, centered-time badge top-right
+// INTERACTION: scroll right side → horizontal time pan (haptic every 10min)
+//              scroll left side → vertical stage row snap (haptic on snap)
 // Set blocks: absolute positioned, 3px colored left border per stage
 // Starred sets: accent-wash bg. Live sets: accent border glow
 // NOW line: 2px accent vertical, 8px dot at top
 // Bottom HUD: scrubber bar + "scroll ↓" hint with bob animation
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../../data/mock_data.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/live_dot.dart';
@@ -32,91 +32,290 @@ class GanttView extends StatefulWidget {
 }
 
 class _GanttViewState extends State<GanttView> {
-  String _day = 'fri';
-  double _progress = 0.0;
   double _viewportInnerW = 0.0;
 
-  final ScrollController _scrollController = ScrollController();
-  static const double _sentinelHeight = 1500.0;
+  // Horizontal scroll (right side sentinel — 1:1 mapping, 1px scroll = 1px pan)
+  final ScrollController _hScrollController = ScrollController();
+
+  // Vertical row scroll (left side sentinel)
+  final ScrollController _vScrollController = ScrollController();
+  static const double _minRowHeight = 64.0;
+  static const double _timeAxisH = 36.0;
+  static const double _hudPad = 44.0;
+
+  // Haptic tracking for horizontal 10-min ticks
+  int _lastHapticBucket = -1;
+
+  // ── Cached data (recomputed only when widget.sets/days change) ──
+
+  late Map<String, int> _dayOffsets;
+  late List<FestSet> _absoluteSets;
+  late int _startMin;
+  late int _endMin;
+  late double _contentW;
+  late List<int> _axisHours;
+  late int _absoluteNowMin; // kNowT mapped to absolute timeline
+  late double _nowX;
+  late bool _nowInRange;
+
+  /// Step graph: list of (startFrac, endFrac, normalizedHeight) for the
+  /// scrubber activity overlay. Fractions are 0.0–1.0 across the full timeline.
+  late List<(double, double, double)> _activitySteps;
+
+  void _recomputeData() {
+    // Day offsets
+    _dayOffsets = {
+      for (int i = 0; i < widget.days.length; i++)
+        widget.days[i].id: i * 24 * 60,
+    };
+
+    // Absolute-time sets
+    _absoluteSets = widget.sets.map((s) {
+      final offset = _dayOffsets[s.day] ?? 0;
+      return s.copyWith(t: s.t + offset);
+    }).toList();
+
+    // Time range
+    if (_absoluteSets.isEmpty) {
+      _startMin = 0;
+      _endMin = 24 * 60;
+    } else {
+      _startMin = (_absoluteSets.map((s) => s.t).reduce((a, b) => a < b ? a : b) ~/ 60) * 60;
+      _endMin = ((_absoluteSets.map((s) => s.t + s.dur).reduce((a, b) => a > b ? a : b) + 59) ~/ 60) * 60;
+    }
+
+    _contentW = (_endMin - _startMin) * ganttPxPerMin;
+
+    // Absolute "now" — map kNowDay + kNowT into the multi-day timeline
+    _absoluteNowMin = (_dayOffsets[kNowDay] ?? 0) + kNowT;
+    _nowInRange = _absoluteNowMin >= _startMin && _absoluteNowMin <= _endMin;
+    _nowX = (_absoluteNowMin - _startMin) * ganttPxPerMin;
+
+    // Axis hours
+    _axisHours = [for (int m = _startMin; m <= _endMin; m += 60) m];
+
+    // Activity step graph — sweep line over set start/end events
+    _activitySteps = _buildActivitySteps();
+  }
+
+  List<(double, double, double)> _buildActivitySteps() {
+    final range = _endMin - _startMin;
+    if (range <= 0 || _absoluteSets.isEmpty) return const [];
+
+    // Build sorted events: +1 at start, -1 at end
+    final events = <(int, int)>[];
+    for (final s in _absoluteSets) {
+      events.add((s.t, 1));
+      events.add((s.t + s.dur, -1));
+    }
+    events.sort((a, b) => a.$1 != b.$1 ? a.$1.compareTo(b.$1) : a.$2.compareTo(b.$2));
+
+    // Walk events to build step function
+    final steps = <(int, int, int)>[]; // (startMin, endMin, count)
+    int count = 0;
+    int prevT = events.first.$1;
+    int maxCount = 0;
+
+    for (final (t, delta) in events) {
+      if (t != prevT && count > 0) {
+        steps.add((prevT, t, count));
+      }
+      count += delta;
+      if (count > maxCount) maxCount = count;
+      prevT = t;
+    }
+
+    if (maxCount == 0) return const [];
+
+    // Normalize to fractions
+    return steps.map((s) {
+      final (start, end, c) = s;
+      return (
+        (start - _startMin) / range,
+        (end - _startMin) / range,
+        c / maxCount,
+      );
+    }).toList();
+  }
+
+  // ── Scroll-derived values (cheap math, fine per frame) ─────
 
   double get _maxTx =>
-      (ganttContentW - _viewportInnerW).clamp(0.0, double.infinity);
-  double get _tx => _progress * _maxTx;
+      (_contentW - _viewportInnerW).clamp(0.0, double.infinity);
+  double get _tx =>
+      _hScrollController.hasClients ? _hScrollController.offset.clamp(0.0, _maxTx) : 0.0;
+  double get _progress => _maxTx > 0 ? _tx / _maxTx : 0.0;
 
-  // What time is centered?
   String get _centerTimeStr {
     final centerMin =
-        ganttStartMin + (_tx + _viewportInnerW / 2) / ganttPxPerMin;
+        _startMin + (_tx + _viewportInnerW / 2) / ganttPxPerMin;
     final h = (centerMin ~/ 60) % 24;
     final m = centerMin ~/ 1 % 60;
     return '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}';
   }
 
-  // Now line x position (relative to inner content before translate)
-  double get _nowX => (kNowT - ganttStartMin) * ganttPxPerMin;
-
-  List<int> get _axisHours {
-    final arr = <int>[];
-    for (int m = ganttStartMin; m <= ganttEndMin; m += 60) {
-      arr.add(m);
+  String get _activeDay {
+    final centerMin =
+        _startMin + (_tx + _viewportInnerW / 2) / ganttPxPerMin;
+    String active = widget.days.first.id;
+    for (final day in widget.days) {
+      if (centerMin >= _dayOffsets[day.id]!) active = day.id;
     }
-    return arr;
+    return active;
   }
+
+  // ── Vertical row layout ────────────────────────────────────
+
+  double _usableH(double stageAreaH) => stageAreaH - _hudPad;
+
+  double _rowHeight(double stageAreaH) {
+    final natural = _usableH(stageAreaH) / widget.stages.length;
+    return natural < _minRowHeight ? _minRowHeight : natural;
+  }
+
+  bool _needsVertScroll(double stageAreaH) =>
+      widget.stages.length * _minRowHeight > _usableH(stageAreaH);
+
+  double _totalStagesHeight(double stageAreaH) =>
+      widget.stages.length * _rowHeight(stageAreaH) + _hudPad;
+
+  // ── Lifecycle ──────────────────────────────────────────────
 
   @override
   void initState() {
     super.initState();
-    _scrollController.addListener(_onScroll);
+    _recomputeData();
+    _hScrollController.addListener(_onHScroll);
+    _vScrollController.addListener(_onVScroll);
+  }
+
+  @override
+  void didUpdateWidget(GanttView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.sets != widget.sets || oldWidget.days != widget.days) {
+      _recomputeData();
+    }
   }
 
   @override
   void dispose() {
-    _scrollController.removeListener(_onScroll);
-    _scrollController.dispose();
+    _hScrollController.removeListener(_onHScroll);
+    _hScrollController.dispose();
+    _vScrollController.removeListener(_onVScroll);
+    _vScrollController.dispose();
     super.dispose();
   }
 
-  void _onScroll() {
-    final el = _scrollController;
-    final maxScroll = el.position.maxScrollExtent;
-    if (maxScroll <= 0) {
-      setState(() => _progress = 0);
-      return;
+  void _onHScroll() {
+    // No setState — ListenableBuilder on _hScrollController handles repaints.
+    // Just fire haptics.
+    final centerMin =
+        _startMin + (_tx + _viewportInnerW / 2) / ganttPxPerMin;
+    final bucket = (centerMin / 15).floor();
+    if (bucket != _lastHapticBucket && _lastHapticBucket != -1) {
+      bool crossedDay = false;
+      if (widget.days.length > 1) {
+        final lo = bucket < _lastHapticBucket ? bucket : _lastHapticBucket;
+        final hi = bucket > _lastHapticBucket ? bucket : _lastHapticBucket;
+        for (final day in widget.days) {
+          final dayBucket = (_dayOffsets[day.id]! / 15).floor();
+          if (dayBucket > lo && dayBucket <= hi) {
+            crossedDay = true;
+            break;
+          }
+        }
+      }
+      if (crossedDay) {
+        HapticFeedback.heavyImpact();
+      } else {
+        HapticFeedback.lightImpact();
+      }
     }
-    final p = (el.offset / maxScroll).clamp(0.0, 1.0);
-    setState(() => _progress = p);
+    _lastHapticBucket = bucket;
+  }
+
+  // No setState for vertical scroll either — ListenableBuilder handles it.
+  void _onVScroll() {}
+
+  void _snapVertical(double stageAreaH) {
+    if (!_needsVertScroll(stageAreaH)) return;
+    final rh = _rowHeight(stageAreaH);
+    final offset = _vScrollController.offset;
+    final nearestRow = (offset / rh).round() * rh;
+    final clamped = nearestRow.clamp(
+      0.0,
+      _vScrollController.position.maxScrollExtent,
+    );
+    if ((clamped - offset).abs() > 0.5) {
+      _vScrollController.animateTo(
+        clamped,
+        duration: const Duration(milliseconds: 120),
+        curve: Curves.easeOut,
+      );
+      HapticFeedback.mediumImpact();
+    }
+  }
+
+  void _jumpToDay(String dayId) {
+    if (!_hScrollController.hasClients) return;
+    final offsets = _dayOffsets;
+    final dayOffset = offsets[dayId] ?? 0;
+
+    // Jump to the earliest set on that day
+    final daySets = _absoluteSets.where((s) => s.day == dayId);
+    final dayStart = daySets.isEmpty
+        ? dayOffset
+        : daySets.map((s) => s.t).reduce((a, b) => a < b ? a : b);
+
+    final target =
+        ((dayStart - _startMin) * ganttPxPerMin).clamp(0.0, _maxTx);
+    _hScrollController.animateTo(
+      target,
+      duration: const Duration(milliseconds: 300),
+      curve: curveBrutalist,
+    );
+    HapticFeedback.mediumImpact();
   }
 
   void _centerOnNow() {
-    if (_viewportInnerW <= 0) return;
-    final nowX = (kNowT - ganttStartMin) * ganttPxPerMin;
-    final targetTx = (nowX - _viewportInnerW / 2).clamp(0.0, _maxTx);
-    final targetP = _maxTx > 0 ? targetTx / _maxTx : 0.0;
-    final maxScroll = _scrollController.position.maxScrollExtent;
-    _scrollController.jumpTo(targetP * maxScroll);
+    if (_viewportInnerW <= 0 || !_hScrollController.hasClients) return;
+    final nowX = (kNowT - _startMin) * ganttPxPerMin;
+    final target = (nowX - _viewportInnerW / 2).clamp(0.0, _maxTx);
+    _hScrollController.jumpTo(target);
   }
+
+  // ── Build ──────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
-    final daySets = widget.sets.where((s) => s.day == _day).toList();
+    final allSets = _absoluteSets;
 
     return Column(
       children: [
-        // Meta strip: now time + day picker
-        _MetaStrip(
-          day: _day,
-          days: widget.days,
-          onDayChanged: (d) => setState(() {
-            _day = d;
-            // Reset scroll when day changes
-            WidgetsBinding.instance.addPostFrameCallback((_) => _centerOnNow());
-          }),
+        // Meta strip: now time + scrollable day jump chips
+        ListenableBuilder(
+          listenable: _hScrollController,
+          builder: (context, _) => _MetaStrip(
+            activeDay: _activeDay,
+            days: widget.days,
+            showDayPicker: widget.days.length > 1,
+            onDayTap: _jumpToDay,
+            nowInRange: _nowInRange,
+            absoluteNowMin: _absoluteNowMin,
+            startMin: _startMin,
+            endMin: _endMin,
+          ),
         ),
         // Gantt viewport
         Expanded(
           child: LayoutBuilder(
             builder: (context, constraints) {
               final vw = constraints.maxWidth - ganttStageLabelW;
+              final stageAreaH = constraints.maxHeight - _timeAxisH;
+              final rh = _rowHeight(stageAreaH);
+              final needsVScroll = _needsVertScroll(stageAreaH);
+              final totalStagesH = _totalStagesHeight(stageAreaH);
+
               if (_viewportInnerW != vw) {
                 WidgetsBinding.instance.addPostFrameCallback((_) {
                   setState(() => _viewportInnerW = vw);
@@ -126,39 +325,83 @@ class _GanttViewState extends State<GanttView> {
 
               return Stack(
                 children: [
-                  // Gantt content rendered first (below the sentinel)
+                  // Gantt content — rebuilds only when a scroll controller fires,
+                  // not the entire _GanttViewState tree.
                   Positioned.fill(
                     child: IgnorePointer(
-                      child: _GanttContent(
-                        tx: _tx,
-                        progress: _progress,
-                        viewportInnerW: _viewportInnerW,
-                        daySets: daySets,
-                        stages: widget.stages,
-                        axisHours: _axisHours,
-                        nowX: _nowX,
-                        centerTimeStr: _centerTimeStr,
-                        currentDay: _day,
+                      child: RepaintBoundary(
+                        child: ListenableBuilder(
+                          listenable: Listenable.merge([_hScrollController, _vScrollController]),
+                          builder: (context, _) => _GanttContent(
+                            tx: _tx,
+                            progress: _progress,
+                            viewportInnerW: _viewportInnerW,
+                            allSets: allSets,
+                            stages: widget.stages,
+                            days: widget.days,
+                            dayOffsets: _dayOffsets,
+                            axisHours: _axisHours,
+                            nowX: _nowX,
+                            centerTimeStr: _centerTimeStr,
+                            startMin: _startMin,
+                            vertOffset: _vScrollController.hasClients
+                                ? _vScrollController.offset
+                                : 0.0,
+                            rowHeight: rh,
+                          ),
+                        ),
                       ),
                     ),
                   ),
-                  // Scroll sentinel on top (captures all scroll events)
+                  // Horizontal scroll sentinel (full area, 1:1 mapping)
                   Positioned.fill(
                     child: SingleChildScrollView(
-                      controller: _scrollController,
-                      child: const SizedBox(width: 1, height: _sentinelHeight),
+                      controller: _hScrollController,
+                      child: SizedBox(
+                        width: 1,
+                        height: _maxTx + constraints.maxHeight,
+                      ),
                     ),
                   ),
-                  // Bottom HUD — always on top
+                  // Vertical row scroll sentinel (left side, overlays horizontal)
+                  if (needsVScroll)
+                    Positioned(
+                      left: 0,
+                      width: ganttStageLabelW,
+                      top: _timeAxisH,
+                      bottom: 0,
+                      child: NotificationListener<ScrollEndNotification>(
+                        onNotification: (_) {
+                          _snapVertical(stageAreaH);
+                          return false;
+                        },
+                        child: SingleChildScrollView(
+                          controller: _vScrollController,
+                          child: SizedBox(
+                            width: ganttStageLabelW,
+                            height: totalStagesH,
+                          ),
+                        ),
+                      ),
+                    ),
+                  // Bottom HUD (scrubber is draggable)
                   Positioned(
                     left: 0,
                     right: 0,
                     bottom: 0,
-                    child: IgnorePointer(
-                      child: _GanttHUD(
+                    child: ListenableBuilder(
+                      listenable: _hScrollController,
+                      builder: (context, _) => _GanttHUD(
                         progress: _progress,
                         tx: _tx,
                         viewportInnerW: _viewportInnerW,
+                        startMin: _startMin,
+                        maxTx: _maxTx,
+                        activitySteps: _activitySteps,
+                        onScrub: (p) {
+                          final target = (p * _maxTx).clamp(0.0, _maxTx);
+                          _hScrollController.jumpTo(target);
+                        },
                       ),
                     ),
                   ),
@@ -172,16 +415,39 @@ class _GanttViewState extends State<GanttView> {
   }
 }
 
+// ── Meta strip ─────────────────────────────────────────────────
+
 class _MetaStrip extends StatelessWidget {
-  final String day;
+  final String activeDay;
   final List<Day> days;
-  final ValueChanged<String> onDayChanged;
+  final bool showDayPicker;
+  final ValueChanged<String> onDayTap;
+  final bool nowInRange;
+  final int absoluteNowMin;
+  final int startMin;
+  final int endMin;
 
   const _MetaStrip({
-    required this.day,
+    required this.activeDay,
     required this.days,
-    required this.onDayChanged,
+    required this.onDayTap,
+    required this.nowInRange,
+    required this.absoluteNowMin,
+    required this.startMin,
+    required this.endMin,
+    this.showDayPicker = true,
   });
+
+  String get _nowLabel {
+    if (nowInRange) return '// NOW';
+    if (absoluteNowMin < startMin) {
+      final diff = startMin - absoluteNowMin;
+      final h = diff ~/ 60;
+      final m = diff % 60;
+      return h > 0 ? '// STARTS IN ${h}H${m > 0 ? ' ${m}M' : ''}' : '// STARTS IN ${m}M';
+    }
+    return '// ENDED';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -196,71 +462,85 @@ class _MetaStrip extends StatelessWidget {
               children: [
                 Row(
                   children: [
-                    const Text(
-                      '// NOW',
+                    Text(
+                      _nowLabel,
                       style: TextStyle(
                         fontFamily: 'JetBrainsMono',
                         fontSize: 9,
                         fontWeight: FontWeight.w700,
                         letterSpacing: 0.1 * 9,
-                        color: colorFg3,
+                        color: nowInRange ? colorFg3 : colorFg4,
                         height: 1,
                       ),
                     ),
-                    const SizedBox(width: 6),
-                    const LiveDot(size: 6),
+                    if (nowInRange) ...[
+                      const SizedBox(width: 6),
+                      const LiveDot(size: 6),
+                    ],
                   ],
                 ),
                 const SizedBox(height: 2),
                 Text(
                   fmtTime(kNowT),
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontFamily: 'JetBrainsMono',
                     fontSize: 12,
-                    color: colorFg,
+                    color: nowInRange ? colorFg : colorFg4,
                     height: 1,
                   ),
                 ),
               ],
             ),
-            const Spacer(),
-            // Day pill buttons
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: days.map((d) {
-                final isActive = d.id == day;
-                return Padding(
-                  padding: const EdgeInsets.only(left: 4),
-                  child: GestureDetector(
-                    onTap: () => onDayChanged(d.id),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 6,
-                      ),
-                      decoration: BoxDecoration(
-                        color: isActive ? colorFg : Colors.transparent,
-                        border: Border.all(
-                          color: isActive ? colorFg : colorDotted,
-                          width: 1.5,
-                        ),
-                      ),
-                      child: Text(
-                        '${d.label} ${d.num}',
-                        style: TextStyle(
-                          fontFamily: 'JetBrainsMono',
-                          fontSize: 10,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: 0.08 * 10,
-                          color: isActive ? colorBg : colorFg2,
-                          height: 1,
-                        ),
-                      ),
+            const SizedBox(width: 14),
+            // Scrollable day jump chips
+            if (showDayPicker)
+              Expanded(
+                child: SizedBox(
+                  height: 28,
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: days.map((d) {
+                        final isActive = d.id == activeDay;
+                        return Padding(
+                          padding: const EdgeInsets.only(right: 4),
+                          child: GestureDetector(
+                            onTap: () => onDayTap(d.id),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 6,
+                              ),
+                              decoration: BoxDecoration(
+                                color:
+                                    isActive ? colorFg : Colors.transparent,
+                                border: Border.all(
+                                  color: isActive ? colorFg : colorDotted,
+                                  width: 1.5,
+                                ),
+                              ),
+                              child: Text(
+                                '${d.label} ${d.num}',
+                                style: TextStyle(
+                                  fontFamily: 'JetBrainsMono',
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w700,
+                                  letterSpacing: 0.08 * 10,
+                                  color: isActive ? colorBg : colorFg2,
+                                  height: 1,
+                                ),
+                              ),
+                            ),
+                          ),
+                        );
+                      }).toList(),
                     ),
                   ),
-                );
-              }).toList(),
-            ),
+                ),
+              )
+            else
+              const Spacer(),
           ],
         ),
       ),
@@ -268,43 +548,79 @@ class _MetaStrip extends StatelessWidget {
   }
 }
 
+// ── Gantt content ──────────────────────────────────────────────
+
 class _GanttContent extends StatelessWidget {
   final double tx;
   final double progress;
   final double viewportInnerW;
-  final List<FestSet> daySets;
+  final List<FestSet> allSets;
   final List<Stage> stages;
+  final List<Day> days;
+  final Map<String, int> dayOffsets;
   final List<int> axisHours;
   final double nowX;
   final String centerTimeStr;
-  final String currentDay;
+  final int startMin;
+  final double vertOffset;
+  final double rowHeight;
 
   const _GanttContent({
     required this.tx,
     required this.progress,
     required this.viewportInnerW,
-    required this.daySets,
+    required this.allSets,
     required this.stages,
+    required this.days,
+    required this.dayOffsets,
     required this.axisHours,
     required this.nowX,
     required this.centerTimeStr,
-    required this.currentDay,
+    required this.startMin,
+    required this.vertOffset,
+    required this.rowHeight,
   });
 
   @override
   Widget build(BuildContext context) {
+    // Visible time window in minutes (with padding for partially visible blocks)
+    final visMinStart = startMin + (tx - 200) / ganttPxPerMin;
+    final visMinEnd = startMin + (tx + viewportInnerW + 200) / ganttPxPerMin;
+
+    // Pre-bucket sets by stage, filtered to visible viewport only
+    final setsByStage = <String, List<FestSet>>{};
+    for (final s in allSets) {
+      final setEnd = s.t + s.dur;
+      if (setEnd < visMinStart || s.t > visMinEnd) continue;
+      (setsByStage[s.stage] ??= []).add(s);
+    }
+
+    // Filter axis hours to visible range
+    const tickW = 60.0 * ganttPxPerMin;
+    final visibleHours = axisHours.where((m) {
+      final x = (m - startMin) * ganttPxPerMin + ganttStageLabelW - tx;
+      return x + tickW > 0 && x < viewportInnerW + ganttStageLabelW;
+    }).toList();
+
     return Column(
       children: [
-        // Time axis
-        _TimeAxis(tx: tx, axisHours: axisHours, centerTimeStr: centerTimeStr),
-        // Stage rows
+        _TimeAxis(
+          tx: tx,
+          visibleHours: visibleHours,
+          centerTimeStr: centerTimeStr,
+          startMin: startMin,
+          days: days,
+          dayOffsets: dayOffsets,
+        ),
         Expanded(
           child: _StageRows(
             tx: tx,
-            daySets: daySets,
+            setsByStage: setsByStage,
             stages: stages,
             nowX: nowX,
-            currentDay: currentDay,
+            startMin: startMin,
+            vertOffset: vertOffset,
+            rowHeight: rowHeight,
           ),
         ),
       ],
@@ -312,20 +628,38 @@ class _GanttContent extends StatelessWidget {
   }
 }
 
+// ── Time axis ──────────────────────────────────────────────────
+
 class _TimeAxis extends StatelessWidget {
   final double tx;
-  final List<int> axisHours;
+  final List<int> visibleHours;
   final String centerTimeStr;
+  final int startMin;
+  final List<Day> days;
+  final Map<String, int> dayOffsets;
 
   const _TimeAxis({
     required this.tx,
-    required this.axisHours,
+    required this.visibleHours,
     required this.centerTimeStr,
+    required this.startMin,
+    required this.days,
+    required this.dayOffsets,
   });
+
+  // Pre-compute day boundary set for O(1) lookup
+  Set<int> get _dayBoundaryHours {
+    if (days.length <= 1) return const {};
+    return {
+      for (final off in dayOffsets.values)
+        if ((off ~/ 60) * 60 > startMin) (off ~/ 60) * 60,
+    };
+  }
 
   @override
   Widget build(BuildContext context) {
-    const tickW = 60.0 * ganttPxPerMin; // 180px per hour
+    const tickW = 60.0 * ganttPxPerMin;
+    final dayBounds = _dayBoundaryHours;
 
     return DottedBorder.bottom(
       child: SizedBox(
@@ -333,59 +667,63 @@ class _TimeAxis extends StatelessWidget {
         child: Stack(
           clipBehavior: Clip.hardEdge,
           children: [
-            // Hour ticks
-            Positioned(
-              left: 0,
-              top: 0,
-              bottom: 0,
-              child: Transform.translate(
-                offset: Offset(ganttStageLabelW - tx, 0),
-                child: Row(
-                  children: axisHours.map((m) {
-                    return SizedBox(
-                      width: tickW,
-                      child: Stack(
-                        children: [
-                          // Hour label
-                          Padding(
-                            padding: const EdgeInsets.only(left: 10, top: 8),
-                            child: Text(
-                              fmtTime(m),
-                              style: const TextStyle(
-                                fontFamily: 'JetBrainsMono',
-                                fontSize: 11,
-                                color: colorFg2,
-                                height: 1,
-                              ),
-                            ),
+            // Only render visible hour ticks, absolutely positioned
+            for (final m in visibleHours)
+              () {
+                final x = (m - startMin) * ganttPxPerMin + ganttStageLabelW - tx;
+                final isDayStart = dayBounds.contains(m);
+                return Positioned(
+                  left: x,
+                  top: 0,
+                  bottom: 0,
+                  width: tickW,
+                  child: Stack(
+                    children: [
+                      if (isDayStart)
+                        Positioned(
+                          left: 0,
+                          top: 0,
+                          bottom: 0,
+                          child: Container(width: 2, color: colorFg3),
+                        ),
+                      Padding(
+                        padding: const EdgeInsets.only(left: 10, top: 8),
+                        child: Text(
+                          fmtTime(m),
+                          style: TextStyle(
+                            fontFamily: 'JetBrainsMono',
+                            fontSize: 11,
+                            color: isDayStart ? colorFg : colorFg2,
+                            fontWeight: isDayStart
+                                ? FontWeight.w700
+                                : FontWeight.normal,
+                            height: 1,
                           ),
-                          // Right border (hour tick)
-                          Positioned(
-                            right: 0,
-                            top: 0,
-                            bottom: 0,
-                            child: Container(width: 1, color: colorDotted),
-                          ),
-                          // Half-hour mark
-                          Positioned(
-                            left: tickW / 2,
-                            top: 0,
-                            bottom: 0,
-                            child: Container(width: 1, color: colorHairline),
-                          ),
-                        ],
+                        ),
                       ),
-                    );
-                  }).toList(),
-                ),
-              ),
-            ),
+                      Positioned(
+                        right: 0,
+                        top: 0,
+                        bottom: 0,
+                        child: Container(width: 1, color: colorDotted),
+                      ),
+                      Positioned(
+                        left: tickW / 2,
+                        top: 0,
+                        bottom: 0,
+                        child: Container(width: 1, color: colorHairline),
+                      ),
+                    ],
+                  ),
+                );
+              }(),
             // Centered time badge
             Positioned(
               right: 8,
               top: 8,
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                 decoration: BoxDecoration(
                   color: colorBg,
                   border: Border.all(color: colorAccent, width: 1.5),
@@ -410,19 +748,25 @@ class _TimeAxis extends StatelessWidget {
   }
 }
 
+// ── Stage rows ─────────────────────────────────────────────────
+
 class _StageRows extends StatelessWidget {
   final double tx;
-  final List<FestSet> daySets;
+  final Map<String, List<FestSet>> setsByStage;
   final List<Stage> stages;
   final double nowX;
-  final String currentDay;
+  final int startMin;
+  final double vertOffset;
+  final double rowHeight;
 
   const _StageRows({
     required this.tx,
-    required this.daySets,
+    required this.setsByStage,
     required this.stages,
     required this.nowX,
-    required this.currentDay,
+    required this.startMin,
+    required this.vertOffset,
+    required this.rowHeight,
   });
 
   @override
@@ -430,65 +774,82 @@ class _StageRows extends StatelessWidget {
     return Stack(
       clipBehavior: Clip.hardEdge,
       children: [
-        // Stage rows container (translates horizontally)
-        Column(
-          children: stages.asMap().entries.map((entry) {
-            final i = entry.key;
-            final stage = entry.value;
-            final stageSets = daySets
-                .where((s) => s.stage == stage.id)
-                .toList();
-            return Expanded(
-              child: _SingleStageRow(
-                stage: stage,
-                sets: stageSets,
-                tx: tx,
-                isLast: i == stages.length - 1,
-              ),
-            );
-          }).toList(),
-        ),
-        // NOW line
-        if (currentDay == kNowDay)
-          Positioned(
-            left: ganttStageLabelW + nowX - tx,
-            top: 0,
-            bottom: 0,
-            child: Stack(
-              clipBehavior: Clip.none,
-              children: [
-                Container(width: 2, color: colorAccent),
-                Positioned(
-                  top: -4,
-                  left: -3,
-                  child: Container(
-                    width: 8,
-                    height: 8,
-                    decoration: const BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: colorAccent,
-                    ),
-                  ),
+        // Stage rows (clipped, translated vertically)
+        Positioned.fill(
+          child: ClipRect(
+            child: OverflowBox(
+              alignment: Alignment.topLeft,
+              maxHeight: double.infinity,
+              child: Transform.translate(
+                offset: Offset(0, -vertOffset),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    ...stages.asMap().entries.map((entry) {
+                      final i = entry.key;
+                      final stage = entry.value;
+                      return SizedBox(
+                        height: rowHeight,
+                        child: _SingleStageRow(
+                          stage: stage,
+                          sets: setsByStage[stage.id] ?? const [],
+                          tx: tx,
+                          isLast: i == stages.length - 1,
+                          startMin: startMin,
+                        ),
+                      );
+                    }),
+                    SizedBox(height: _GanttViewState._hudPad),
+                  ],
                 ),
-              ],
+              ),
             ),
           ),
+        ),
+        // NOW line
+        Positioned(
+          left: ganttStageLabelW + nowX - tx,
+          top: 0,
+          bottom: 0,
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Container(width: 2, color: colorAccent),
+              Positioned(
+                top: -4,
+                left: -3,
+                child: Container(
+                  width: 8,
+                  height: 8,
+                  decoration: const BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: colorAccent,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
       ],
     );
   }
 }
+
+// ── Single stage row ───────────────────────────────────────────
 
 class _SingleStageRow extends StatelessWidget {
   final Stage stage;
   final List<FestSet> sets;
   final double tx;
   final bool isLast;
+  final int startMin;
 
   const _SingleStageRow({
     required this.stage,
     required this.sets,
     required this.tx,
     required this.isLast,
+    required this.startMin,
   });
 
   @override
@@ -497,9 +858,9 @@ class _SingleStageRow extends StatelessWidget {
     return Stack(
       clipBehavior: Clip.hardEdge,
       children: [
-        // Bottom dotted border
         if (!isLast)
-          Positioned(bottom: 0, left: 0, right: 0, child: const DottedRule()),
+          Positioned(
+              bottom: 0, left: 0, right: 0, child: const DottedRule()),
         // Stage label (sticky left)
         Positioned(
           left: 0,
@@ -537,25 +898,21 @@ class _SingleStageRow extends StatelessWidget {
             ),
           ),
         ),
-        // Set blocks
-        ...sets.map((s) {
-          final left =
-              (s.t - ganttStartMin) * ganttPxPerMin + ganttStageLabelW - tx;
-          final width = s.dur * ganttPxPerMin;
-          if (left + width < 0 || left > 2000) return const SizedBox.shrink();
-
-          return Positioned(
-            left: left,
+        // Set blocks (already filtered to visible viewport)
+        for (final s in sets)
+          Positioned(
+            left: (s.t - startMin) * ganttPxPerMin + ganttStageLabelW - tx,
             top: 6,
             bottom: 6,
-            width: width,
+            width: s.dur * ganttPxPerMin,
             child: _SetBlock(set: s, stageColor: stageColor),
-          );
-        }),
+          ),
       ],
     );
   }
 }
+
+// ── Set block ──────────────────────────────────────────────────
 
 class _SetBlock extends StatelessWidget {
   final FestSet set;
@@ -565,9 +922,8 @@ class _SetBlock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    Color bg = colorSurface1;
     BoxDecoration decoration = BoxDecoration(
-      color: bg,
+      color: colorSurface1,
       border: Border(left: BorderSide(color: stageColor, width: 3)),
     );
 
@@ -601,7 +957,8 @@ class _SetBlock extends StatelessWidget {
               if (set.starred)
                 const Text(
                   '★ ',
-                  style: TextStyle(color: colorAccent, fontSize: 10, height: 1),
+                  style:
+                      TextStyle(color: colorAccent, fontSize: 10, height: 1),
                 ),
               if (set.live)
                 const Padding(
@@ -641,15 +998,25 @@ class _SetBlock extends StatelessWidget {
   }
 }
 
+// ── Bottom HUD ─────────────────────────────────────────────────
+
 class _GanttHUD extends StatefulWidget {
   final double progress;
   final double tx;
   final double viewportInnerW;
+  final int startMin;
+  final double maxTx;
+  final List<(double, double, double)> activitySteps;
+  final ValueChanged<double> onScrub;
 
   const _GanttHUD({
     required this.progress,
     required this.tx,
     required this.viewportInnerW,
+    required this.startMin,
+    required this.maxTx,
+    required this.activitySteps,
+    required this.onScrub,
   });
 
   @override
@@ -668,10 +1035,9 @@ class _GanttHUDState extends State<_GanttHUD>
       vsync: this,
       duration: const Duration(milliseconds: 1600),
     )..repeat(reverse: true);
-    _bobAnim = Tween<double>(
-      begin: 0.0,
-      end: 3.0,
-    ).animate(CurvedAnimation(parent: _bobController, curve: Curves.easeInOut));
+    _bobAnim = Tween<double>(begin: 0.0, end: 3.0).animate(
+      CurvedAnimation(parent: _bobController, curve: Curves.easeInOut),
+    );
   }
 
   @override
@@ -682,9 +1048,10 @@ class _GanttHUDState extends State<_GanttHUD>
 
   @override
   Widget build(BuildContext context) {
-    final startMin = (ganttStartMin + widget.tx / ganttPxPerMin).round();
+    final startMin = (widget.startMin + widget.tx / ganttPxPerMin).round();
     final endMin =
-        (ganttStartMin + (widget.tx + widget.viewportInnerW) / ganttPxPerMin)
+        (widget.startMin +
+                (widget.tx + widget.viewportInnerW) / ganttPxPerMin)
             .round();
 
     return Container(
@@ -699,67 +1066,75 @@ class _GanttHUDState extends State<_GanttHUD>
       padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
       child: Row(
         children: [
-          // Scrubber
           Expanded(
             child: LayoutBuilder(
               builder: (context, constraints) {
                 final scrubberW = constraints.maxWidth;
-                return Container(
-                  height: 22,
-                  decoration: BoxDecoration(
-                    color: colorSurface1,
-                    border: Border.all(color: colorDotted, width: 1.5),
-                  ),
-                  child: Stack(
-                    clipBehavior: Clip.hardEdge,
-                    children: [
-                      // Fill
-                      Positioned(
-                        left: 0,
-                        top: 0,
-                        bottom: 0,
-                        width: widget.progress * scrubberW,
-                        child: Container(
-                          color: colorAccent.withValues(alpha: 0.18),
+                return GestureDetector(
+                  onTapDown: (d) =>
+                      widget.onScrub((d.localPosition.dx / scrubberW).clamp(0.0, 1.0)),
+                  onHorizontalDragUpdate: (d) =>
+                      widget.onScrub((d.localPosition.dx / scrubberW).clamp(0.0, 1.0)),
+                  child: Container(
+                    height: 22,
+                    decoration: BoxDecoration(
+                      color: colorSurface1,
+                      border: Border.all(color: colorDotted, width: 1.5),
+                    ),
+                    child: Stack(
+                      clipBehavior: Clip.hardEdge,
+                      children: [
+                        // Activity step graph
+                        Positioned.fill(
+                          child: CustomPaint(
+                            painter: _ActivityPainter(widget.activitySteps),
+                          ),
                         ),
-                      ),
-                      // Head
-                      Positioned(
-                        left: (widget.progress * scrubberW - 1.5).clamp(
-                          0.0,
-                          scrubberW - 3,
+                        // Progress fill
+                        Positioned(
+                          left: 0,
+                          top: 0,
+                          bottom: 0,
+                          width: widget.progress * scrubberW,
+                          child: Container(
+                            color: colorAccent.withValues(alpha: 0.18),
+                          ),
                         ),
-                        top: -3,
-                        bottom: -3,
-                        width: 3,
-                        child: Container(color: colorAccent),
-                      ),
-                      // Label
-                      Positioned(
-                        left: 8,
-                        top: 0,
-                        bottom: 0,
-                        right: 8,
-                        child: Center(
-                          child: Text(
-                            '${fmtTime(startMin)} → ${fmtTime(endMin)}',
-                            style: const TextStyle(
-                              fontFamily: 'JetBrainsMono',
-                              fontSize: 10,
-                              color: colorFg2,
-                              height: 1,
+                        Positioned(
+                          left: (widget.progress * scrubberW - 1.5).clamp(
+                            0.0,
+                            scrubberW - 3,
+                          ),
+                          top: -3,
+                          bottom: -3,
+                          width: 3,
+                          child: Container(color: colorAccent),
+                        ),
+                        Positioned(
+                          left: 8,
+                          top: 0,
+                          bottom: 0,
+                          right: 8,
+                          child: Center(
+                            child: Text(
+                              '${fmtTime(startMin)} → ${fmtTime(endMin)}',
+                              style: const TextStyle(
+                                fontFamily: 'JetBrainsMono',
+                                fontSize: 10,
+                                color: colorFg2,
+                                height: 1,
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 );
               },
             ),
           ),
           const SizedBox(width: 12),
-          // Hint
           AnimatedBuilder(
             animation: _bobAnim,
             builder: (context, _) => Transform.translate(
@@ -781,4 +1156,25 @@ class _GanttHUDState extends State<_GanttHUD>
       ),
     );
   }
+}
+
+class _ActivityPainter extends CustomPainter {
+  final List<(double, double, double)> steps;
+
+  _ActivityPainter(this.steps);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (steps.isEmpty) return;
+    final paint = Paint()..color = colorFg3.withValues(alpha: 0.18);
+    for (final (startFrac, endFrac, height) in steps) {
+      final x = startFrac * size.width;
+      final w = (endFrac - startFrac) * size.width;
+      final h = height * size.height;
+      canvas.drawRect(Rect.fromLTWH(x, size.height - h, w, h), paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_ActivityPainter old) => old.steps != steps;
 }

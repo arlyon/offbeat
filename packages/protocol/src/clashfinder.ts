@@ -176,11 +176,19 @@ export function parseClashfinderApi(
 	response: ClashfinderApiResponse,
 	meta?: { name?: string; location?: string },
 ): Lineup {
+	// Handle both array and object formats for locations
+	const locationsArray = Array.isArray(response.locations)
+		? response.locations
+		: Object.entries(response.locations).map(([name, data]) => ({
+				name,
+				events: (data as { events?: ClashfinderEvent[] }).events ?? [],
+			}));
+
 	// Build stages from locations in order
-	const stages: Stage[] = response.locations.map((loc, idx) => ({
+	const stages: Stage[] = locationsArray.map((loc, idx) => ({
 		id: stableId(`stage/${loc.name}`),
-		name: loc.name,
-		short: loc.name.slice(0, 3).toUpperCase(),
+		name: String(loc.name),
+		short: String(loc.name).slice(0, 3).toUpperCase(),
 		color: STAGE_COLORS[idx % STAGE_COLORS.length],
 		order: idx,
 	}));

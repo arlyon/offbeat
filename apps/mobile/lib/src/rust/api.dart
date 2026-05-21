@@ -6,6 +6,8 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
+// These functions are ignored because they are not marked as `pub`: `parse_json_array`
+
 /// Generate a fresh random 32-byte group key.
 Future<Uint8List> generateGroupKey() =>
     RustLib.instance.api.crateApiGenerateGroupKey();
@@ -31,7 +33,10 @@ abstract class AppNode implements RustOpaqueInterface {
   });
 
   /// Connect this node to the Festival Durable Object relay at `url`.
-  Future<void> connectRelay({required String url});
+  ///
+  /// `festival_id` is used to look up the cached Ed25519 public key for
+  /// verifying signed updates. Call `set_festival_public_key` first.
+  Future<void> connectRelay({required String url, required String festivalId});
 
   /// Open (or create) the node database at `db_path`.
   static Future<AppNode> create({required String dbPath}) =>
@@ -82,6 +87,15 @@ abstract class AppNode implements RustOpaqueInterface {
 
   /// Return the local identity (user_id + optional display_name).
   Future<IdentityDto> getIdentity();
+
+  /// Read the lineup from the local Yrs doc for a festival.
+  ///
+  /// The Yrs doc at `festival/{id}/state` has separate root-map keys:
+  /// `"stages"`, `"days"`, `"sets"` — each a JSON array string that
+  /// arrives via signed gossip updates and merges independently.
+  ///
+  /// Returns `None` if no lineup data has synced yet.
+  Future<LineupDto?> getLineup({required String festivalId});
 
   /// Get the hex-encoded Ed25519 public key of the local identity.
   Future<String> getPublicKeyHex();
@@ -152,7 +166,8 @@ abstract class AppNode implements RustOpaqueInterface {
     required List<String> stageIds,
   });
 
-  /// Subscribe to the gossip topic for a festival.
+  /// Subscribe to the festival state topic and request catchup from the
+  /// relay to receive the genesis lineup and any subsequent updates.
   Future<void> subscribeFestival({required String festivalId});
 
   /// Toggle a star on a set. Returns the new starred state (`true` = now starred).
@@ -408,4 +423,138 @@ class IdentityDto {
           runtimeType == other.runtimeType &&
           userId == other.userId &&
           displayName == other.displayName;
+}
+
+class LineupDayDto {
+  final String id;
+  final String label;
+  final int num;
+  final String month;
+
+  const LineupDayDto({
+    required this.id,
+    required this.label,
+    required this.num,
+    required this.month,
+  });
+
+  @override
+  int get hashCode =>
+      id.hashCode ^ label.hashCode ^ num.hashCode ^ month.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is LineupDayDto &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          label == other.label &&
+          num == other.num &&
+          month == other.month;
+}
+
+class LineupDto {
+  final List<LineupStageDto> stages;
+  final List<LineupDayDto> days;
+  final List<LineupSetDto> sets;
+
+  const LineupDto({
+    required this.stages,
+    required this.days,
+    required this.sets,
+  });
+
+  @override
+  int get hashCode => stages.hashCode ^ days.hashCode ^ sets.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is LineupDto &&
+          runtimeType == other.runtimeType &&
+          stages == other.stages &&
+          days == other.days &&
+          sets == other.sets;
+}
+
+class LineupSetDto {
+  final String id;
+  final String day;
+  final String stage;
+  final String artist;
+  final int startMin;
+  final int durationMin;
+  final String genre;
+  final bool cancelled;
+
+  const LineupSetDto({
+    required this.id,
+    required this.day,
+    required this.stage,
+    required this.artist,
+    required this.startMin,
+    required this.durationMin,
+    required this.genre,
+    required this.cancelled,
+  });
+
+  @override
+  int get hashCode =>
+      id.hashCode ^
+      day.hashCode ^
+      stage.hashCode ^
+      artist.hashCode ^
+      startMin.hashCode ^
+      durationMin.hashCode ^
+      genre.hashCode ^
+      cancelled.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is LineupSetDto &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          day == other.day &&
+          stage == other.stage &&
+          artist == other.artist &&
+          startMin == other.startMin &&
+          durationMin == other.durationMin &&
+          genre == other.genre &&
+          cancelled == other.cancelled;
+}
+
+class LineupStageDto {
+  final String id;
+  final String name;
+  final String short;
+  final String color;
+  final int order;
+
+  const LineupStageDto({
+    required this.id,
+    required this.name,
+    required this.short,
+    required this.color,
+    required this.order,
+  });
+
+  @override
+  int get hashCode =>
+      id.hashCode ^
+      name.hashCode ^
+      short.hashCode ^
+      color.hashCode ^
+      order.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is LineupStageDto &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          name == other.name &&
+          short == other.short &&
+          color == other.color &&
+          order == other.order;
 }

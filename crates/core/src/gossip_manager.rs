@@ -89,16 +89,14 @@ pub fn dispatch_message(
     doc_manager: &mut DocManager,
     db: &Database,
     msg: GossipMessage,
-    festival_public_key: Option<&[u8; 32]>,
+    festival_public_key: &[u8; 32],
 ) -> anyhow::Result<()> {
     match msg {
         GossipMessage::FestivalUpdate {
             doc_id,
             signed_update,
         } => {
-            let pk = festival_public_key
-                .ok_or_else(|| anyhow::anyhow!("no festival public key provided"))?;
-            doc_manager.apply_signed_update(&doc_id, &signed_update, pk)?;
+            doc_manager.apply_signed_update(&doc_id, &signed_update, festival_public_key)?;
         }
 
         GossipMessage::GroupUpdate {
@@ -161,15 +159,22 @@ pub struct GossipManager {
     subscriptions: HashMap<TopicId, iroh_gossip::api::GossipSender>,
     doc_manager: Arc<Mutex<DocManager>>,
     db: Arc<Database>,
+    festival_public_key: [u8; 32],
 }
 
 impl GossipManager {
-    pub fn new(gossip: Gossip, doc_manager: Arc<Mutex<DocManager>>, db: Arc<Database>) -> Self {
+    pub fn new(
+        gossip: Gossip,
+        doc_manager: Arc<Mutex<DocManager>>,
+        db: Arc<Database>,
+        festival_public_key: [u8; 32],
+    ) -> Self {
         Self {
             gossip,
             subscriptions: HashMap::new(),
             doc_manager,
             db,
+            festival_public_key,
         }
     }
 
@@ -188,12 +193,13 @@ impl GossipManager {
         // Spawn a background task that drains events for this topic.
         let doc_manager = Arc::clone(&self.doc_manager);
         let db = Arc::clone(&self.db);
+        let festival_pk = self.festival_public_key;
         tokio::spawn(async move {
             while let Some(event) = receiver.next().await {
                 match event {
                     Ok(Event::Received(msg)) => {
                         if let Err(e) =
-                            handle_wire_bytes(&msg.content, &doc_manager, &db, None).await
+                            handle_wire_bytes(&msg.content, &doc_manager, &db, festival_pk).await
                         {
                             tracing::warn!("gossip dispatch error: {e}");
                         }
@@ -366,7 +372,7 @@ pub async fn handle_wire_bytes_pub(
     raw: &[u8],
     doc_manager: &Arc<Mutex<DocManager>>,
     db: &Arc<Database>,
-    festival_public_key: Option<[u8; 32]>,
+    festival_public_key: [u8; 32],
 ) -> anyhow::Result<()> {
     handle_wire_bytes(raw, doc_manager, db, festival_public_key).await
 }
@@ -381,7 +387,7 @@ async fn handle_wire_bytes(
     raw: &[u8],
     doc_manager: &Arc<Mutex<DocManager>>,
     db: &Arc<Database>,
-    festival_public_key: Option<[u8; 32]>,
+    festival_public_key: [u8; 32],
 ) -> anyhow::Result<()> {
     let wire: GossipWireMessage = serde_json::from_slice(raw)
         .map_err(|e| anyhow::anyhow!("deserialise wire message: {e}"))?;
@@ -393,7 +399,7 @@ async fn handle_wire_bytes(
     };
 
     let mut dm = doc_manager.lock().await;
-    dispatch_message(&mut dm, db, gossip_msg, festival_public_key.as_ref())
+    dispatch_message(&mut dm, db, gossip_msg, &festival_public_key)
 }
 
 /// Decode a wire message into a GossipMessage, performing DB key lookups
@@ -519,11 +525,12 @@ mod tests {
             writer_seq: 0,
         };
 
+        let dummy_pk = [0u8; 32];
         dispatch_message(
             &mut doc_mgr,
             &db_arc,
             GossipMessage::Chat(msg.clone()),
-            None,
+            &dummy_pk,
         )
         .unwrap();
 
@@ -566,7 +573,7 @@ mod tests {
                 doc_id: "fest-doc".to_string(),
                 signed_update: signed,
             },
-            Some(&public_key),
+            &public_key,
         )
         .unwrap();
 
@@ -594,6 +601,7 @@ mod tests {
 
         let encrypted = crypto::encrypt(&group_key, &update_bytes).unwrap();
 
+        let dummy_pk = [0u8; 32];
         dispatch_message(
             &mut doc_mgr,
             &db_arc,
@@ -602,7 +610,7 @@ mod tests {
                 encrypted,
                 group_key,
             },
-            None,
+            &dummy_pk,
         )
         .unwrap();
 

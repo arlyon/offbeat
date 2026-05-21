@@ -66,7 +66,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => 1664551039;
+  int get rustContentHash => -960371775;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -95,6 +95,7 @@ abstract class RustLibApi extends BaseApi {
   Future<void> crateApiAppNodeConnectRelay({
     required AppNode that,
     required String url,
+    required String festivalId,
   });
 
   Future<AppNode> crateApiAppNodeCreate({required String dbPath});
@@ -149,6 +150,11 @@ abstract class RustLibApi extends BaseApi {
   });
 
   Future<IdentityDto> crateApiAppNodeGetIdentity({required AppNode that});
+
+  Future<LineupDto?> crateApiAppNodeGetLineup({
+    required AppNode that,
+    required String festivalId,
+  });
 
   Future<String> crateApiAppNodeGetPublicKeyHex({required AppNode that});
 
@@ -348,6 +354,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   Future<void> crateApiAppNodeConnectRelay({
     required AppNode that,
     required String url,
+    required String festivalId,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -358,6 +365,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             serializer,
           );
           sse_encode_String(url, serializer);
+          sse_encode_String(festivalId, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -370,7 +378,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_AnyhowException,
         ),
         constMeta: kCrateApiAppNodeConnectRelayConstMeta,
-        argValues: [that, url],
+        argValues: [that, url, festivalId],
         apiImpl: this,
       ),
     );
@@ -379,7 +387,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiAppNodeConnectRelayConstMeta =>
       const TaskConstMeta(
         debugName: "AppNode_connect_relay",
-        argNames: ["that", "url"],
+        argNames: ["that", "url", "festivalId"],
       );
 
   @override
@@ -818,6 +826,43 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   );
 
   @override
+  Future<LineupDto?> crateApiAppNodeGetLineup({
+    required AppNode that,
+    required String festivalId,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerAppNode(
+            that,
+            serializer,
+          );
+          sse_encode_String(festivalId, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 16,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_opt_box_autoadd_lineup_dto,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiAppNodeGetLineupConstMeta,
+        argValues: [that, festivalId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiAppNodeGetLineupConstMeta => const TaskConstMeta(
+    debugName: "AppNode_get_lineup",
+    argNames: ["that", "festivalId"],
+  );
+
+  @override
   Future<String> crateApiAppNodeGetPublicKeyHex({required AppNode that}) {
     return handler.executeNormal(
       NormalTask(
@@ -830,7 +875,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 16,
+            funcId: 17,
             port: port_,
           );
         },
@@ -868,7 +913,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 17,
+            funcId: 18,
             port: port_,
           );
         },
@@ -907,7 +952,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 18,
+            funcId: 19,
             port: port_,
           );
         },
@@ -944,7 +989,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 19,
+            funcId: 20,
             port: port_,
           );
         },
@@ -983,7 +1028,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 20,
+            funcId: 21,
             port: port_,
           );
         },
@@ -1026,7 +1071,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 21,
+            funcId: 22,
             port: port_,
           );
         },
@@ -1067,7 +1112,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 22,
+            funcId: 23,
             port: port_,
           );
         },
@@ -1107,7 +1152,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 23,
+            funcId: 24,
             port: port_,
           );
         },
@@ -1145,7 +1190,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 24,
+            funcId: 25,
             port: port_,
           );
         },
@@ -1185,7 +1230,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 25,
+            funcId: 26,
             port: port_,
           );
         },
@@ -1223,7 +1268,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 26,
+            funcId: 27,
             port: port_,
           );
         },
@@ -1264,7 +1309,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 27,
+            funcId: 28,
             port: port_,
           );
         },
@@ -1304,7 +1349,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 28,
+            funcId: 29,
             port: port_,
           );
         },
@@ -1342,7 +1387,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 29,
+            funcId: 30,
             port: port_,
           );
         },
@@ -1382,7 +1427,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 30,
+            funcId: 31,
             port: port_,
           );
         },
@@ -1421,7 +1466,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 31,
+            funcId: 32,
             port: port_,
           );
         },
@@ -1451,7 +1496,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 32,
+            funcId: 33,
             port: port_,
           );
         },
@@ -1479,7 +1524,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 33,
+            funcId: 34,
             port: port_,
           );
         },
@@ -1506,7 +1551,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 34,
+            funcId: 35,
             port: port_,
           );
         },
@@ -1624,6 +1669,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  LineupDto dco_decode_box_autoadd_lineup_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_lineup_dto(raw);
+  }
+
+  @protected
   ChatMessageDto dco_decode_chat_message_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
@@ -1716,6 +1767,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  int dco_decode_i_32(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as int;
+  }
+
+  @protected
   IdentityDto dco_decode_identity_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
@@ -1724,6 +1781,66 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     return IdentityDto(
       userId: dco_decode_String(arr[0]),
       displayName: dco_decode_opt_String(arr[1]),
+    );
+  }
+
+  @protected
+  LineupDayDto dco_decode_lineup_day_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 4)
+      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    return LineupDayDto(
+      id: dco_decode_String(arr[0]),
+      label: dco_decode_String(arr[1]),
+      num: dco_decode_i_32(arr[2]),
+      month: dco_decode_String(arr[3]),
+    );
+  }
+
+  @protected
+  LineupDto dco_decode_lineup_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 3)
+      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    return LineupDto(
+      stages: dco_decode_list_lineup_stage_dto(arr[0]),
+      days: dco_decode_list_lineup_day_dto(arr[1]),
+      sets: dco_decode_list_lineup_set_dto(arr[2]),
+    );
+  }
+
+  @protected
+  LineupSetDto dco_decode_lineup_set_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 8)
+      throw Exception('unexpected arr length: expect 8 but see ${arr.length}');
+    return LineupSetDto(
+      id: dco_decode_String(arr[0]),
+      day: dco_decode_String(arr[1]),
+      stage: dco_decode_String(arr[2]),
+      artist: dco_decode_String(arr[3]),
+      startMin: dco_decode_i_32(arr[4]),
+      durationMin: dco_decode_i_32(arr[5]),
+      genre: dco_decode_String(arr[6]),
+      cancelled: dco_decode_bool(arr[7]),
+    );
+  }
+
+  @protected
+  LineupStageDto dco_decode_lineup_stage_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 5)
+      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
+    return LineupStageDto(
+      id: dco_decode_String(arr[0]),
+      name: dco_decode_String(arr[1]),
+      short: dco_decode_String(arr[2]),
+      color: dco_decode_String(arr[3]),
+      order: dco_decode_i_32(arr[4]),
     );
   }
 
@@ -1758,6 +1875,24 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<LineupDayDto> dco_decode_list_lineup_day_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_lineup_day_dto).toList();
+  }
+
+  @protected
+  List<LineupSetDto> dco_decode_list_lineup_set_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_lineup_set_dto).toList();
+  }
+
+  @protected
+  List<LineupStageDto> dco_decode_list_lineup_stage_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_lineup_stage_dto).toList();
+  }
+
+  @protected
   List<int> dco_decode_list_prim_u_8_loose(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as List<int>;
@@ -1779,6 +1914,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   AttestationDto? dco_decode_opt_box_autoadd_attestation_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_box_autoadd_attestation_dto(raw);
+  }
+
+  @protected
+  LineupDto? dco_decode_opt_box_autoadd_lineup_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null ? null : dco_decode_box_autoadd_lineup_dto(raw);
   }
 
   @protected
@@ -1911,6 +2052,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  LineupDto sse_decode_box_autoadd_lineup_dto(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_lineup_dto(deserializer));
+  }
+
+  @protected
   ChatMessageDto sse_decode_chat_message_dto(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_id = sse_decode_String(deserializer);
@@ -2003,11 +2150,81 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  int sse_decode_i_32(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return deserializer.buffer.getInt32();
+  }
+
+  @protected
   IdentityDto sse_decode_identity_dto(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_userId = sse_decode_String(deserializer);
     var var_displayName = sse_decode_opt_String(deserializer);
     return IdentityDto(userId: var_userId, displayName: var_displayName);
+  }
+
+  @protected
+  LineupDayDto sse_decode_lineup_day_dto(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_id = sse_decode_String(deserializer);
+    var var_label = sse_decode_String(deserializer);
+    var var_num = sse_decode_i_32(deserializer);
+    var var_month = sse_decode_String(deserializer);
+    return LineupDayDto(
+      id: var_id,
+      label: var_label,
+      num: var_num,
+      month: var_month,
+    );
+  }
+
+  @protected
+  LineupDto sse_decode_lineup_dto(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_stages = sse_decode_list_lineup_stage_dto(deserializer);
+    var var_days = sse_decode_list_lineup_day_dto(deserializer);
+    var var_sets = sse_decode_list_lineup_set_dto(deserializer);
+    return LineupDto(stages: var_stages, days: var_days, sets: var_sets);
+  }
+
+  @protected
+  LineupSetDto sse_decode_lineup_set_dto(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_id = sse_decode_String(deserializer);
+    var var_day = sse_decode_String(deserializer);
+    var var_stage = sse_decode_String(deserializer);
+    var var_artist = sse_decode_String(deserializer);
+    var var_startMin = sse_decode_i_32(deserializer);
+    var var_durationMin = sse_decode_i_32(deserializer);
+    var var_genre = sse_decode_String(deserializer);
+    var var_cancelled = sse_decode_bool(deserializer);
+    return LineupSetDto(
+      id: var_id,
+      day: var_day,
+      stage: var_stage,
+      artist: var_artist,
+      startMin: var_startMin,
+      durationMin: var_durationMin,
+      genre: var_genre,
+      cancelled: var_cancelled,
+    );
+  }
+
+  @protected
+  LineupStageDto sse_decode_lineup_stage_dto(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_id = sse_decode_String(deserializer);
+    var var_name = sse_decode_String(deserializer);
+    var var_short = sse_decode_String(deserializer);
+    var var_color = sse_decode_String(deserializer);
+    var var_order = sse_decode_i_32(deserializer);
+    return LineupStageDto(
+      id: var_id,
+      name: var_name,
+      short: var_short,
+      color: var_color,
+      order: var_order,
+    );
   }
 
   @protected
@@ -2077,6 +2294,48 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<LineupDayDto> sse_decode_list_lineup_day_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <LineupDayDto>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_lineup_day_dto(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
+  List<LineupSetDto> sse_decode_list_lineup_set_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <LineupSetDto>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_lineup_set_dto(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
+  List<LineupStageDto> sse_decode_list_lineup_stage_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <LineupStageDto>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_lineup_stage_dto(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
   List<int> sse_decode_list_prim_u_8_loose(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var len_ = sse_decode_i_32(deserializer);
@@ -2115,6 +2374,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  LineupDto? sse_decode_opt_box_autoadd_lineup_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_box_autoadd_lineup_dto(deserializer));
+    } else {
+      return null;
+    }
+  }
+
+  @protected
   int sse_decode_u_32(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return deserializer.buffer.getUint32();
@@ -2135,12 +2407,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   BigInt sse_decode_usize(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return deserializer.buffer.getBigUint64();
-  }
-
-  @protected
-  int sse_decode_i_32(SseDeserializer deserializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    return deserializer.buffer.getInt32();
   }
 
   @protected
@@ -2253,6 +2519,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_box_autoadd_lineup_dto(
+    LineupDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_lineup_dto(self, serializer);
+  }
+
+  @protected
   void sse_encode_chat_message_dto(
     ChatMessageDto self,
     SseSerializer serializer,
@@ -2327,10 +2602,59 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_i_32(int self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    serializer.buffer.putInt32(self);
+  }
+
+  @protected
   void sse_encode_identity_dto(IdentityDto self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.userId, serializer);
     sse_encode_opt_String(self.displayName, serializer);
+  }
+
+  @protected
+  void sse_encode_lineup_day_dto(LineupDayDto self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.id, serializer);
+    sse_encode_String(self.label, serializer);
+    sse_encode_i_32(self.num, serializer);
+    sse_encode_String(self.month, serializer);
+  }
+
+  @protected
+  void sse_encode_lineup_dto(LineupDto self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_list_lineup_stage_dto(self.stages, serializer);
+    sse_encode_list_lineup_day_dto(self.days, serializer);
+    sse_encode_list_lineup_set_dto(self.sets, serializer);
+  }
+
+  @protected
+  void sse_encode_lineup_set_dto(LineupSetDto self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.id, serializer);
+    sse_encode_String(self.day, serializer);
+    sse_encode_String(self.stage, serializer);
+    sse_encode_String(self.artist, serializer);
+    sse_encode_i_32(self.startMin, serializer);
+    sse_encode_i_32(self.durationMin, serializer);
+    sse_encode_String(self.genre, serializer);
+    sse_encode_bool(self.cancelled, serializer);
+  }
+
+  @protected
+  void sse_encode_lineup_stage_dto(
+    LineupStageDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.id, serializer);
+    sse_encode_String(self.name, serializer);
+    sse_encode_String(self.short, serializer);
+    sse_encode_String(self.color, serializer);
+    sse_encode_i_32(self.order, serializer);
   }
 
   @protected
@@ -2391,6 +2715,42 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_list_lineup_day_dto(
+    List<LineupDayDto> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_lineup_day_dto(item, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_list_lineup_set_dto(
+    List<LineupSetDto> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_lineup_set_dto(item, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_list_lineup_stage_dto(
+    List<LineupStageDto> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_lineup_stage_dto(item, serializer);
+    }
+  }
+
+  @protected
   void sse_encode_list_prim_u_8_loose(
     List<int> self,
     SseSerializer serializer,
@@ -2436,6 +2796,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_opt_box_autoadd_lineup_dto(
+    LineupDto? self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_box_autoadd_lineup_dto(self, serializer);
+    }
+  }
+
+  @protected
   void sse_encode_u_32(int self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putUint32(self);
@@ -2456,12 +2829,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   void sse_encode_usize(BigInt self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putBigUint64(self);
-  }
-
-  @protected
-  void sse_encode_i_32(int self, SseSerializer serializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    serializer.buffer.putInt32(self);
   }
 }
 
@@ -2509,8 +2876,17 @@ class AppNodeImpl extends RustOpaque implements AppNode {
   );
 
   /// Connect this node to the Festival Durable Object relay at `url`.
-  Future<void> connectRelay({required String url}) =>
-      RustLib.instance.api.crateApiAppNodeConnectRelay(that: this, url: url);
+  ///
+  /// `festival_id` is used to look up the cached Ed25519 public key for
+  /// verifying signed updates. Call `set_festival_public_key` first.
+  Future<void> connectRelay({
+    required String url,
+    required String festivalId,
+  }) => RustLib.instance.api.crateApiAppNodeConnectRelay(
+    that: this,
+    url: url,
+    festivalId: festivalId,
+  );
 
   /// Create a new group and return its ID + shareable invite payload.
   Future<GroupCreateResultDto> createGroup({
@@ -2582,6 +2958,18 @@ class AppNodeImpl extends RustOpaque implements AppNode {
   /// Return the local identity (user_id + optional display_name).
   Future<IdentityDto> getIdentity() =>
       RustLib.instance.api.crateApiAppNodeGetIdentity(that: this);
+
+  /// Read the lineup from the local Yrs doc for a festival.
+  ///
+  /// The Yrs doc at `festival/{id}/state` has separate root-map keys:
+  /// `"stages"`, `"days"`, `"sets"` — each a JSON array string that
+  /// arrives via signed gossip updates and merges independently.
+  ///
+  /// Returns `None` if no lineup data has synced yet.
+  Future<LineupDto?> getLineup({required String festivalId}) => RustLib
+      .instance
+      .api
+      .crateApiAppNodeGetLineup(that: this, festivalId: festivalId);
 
   /// Get the hex-encoded Ed25519 public key of the local identity.
   Future<String> getPublicKeyHex() =>
@@ -2695,7 +3083,8 @@ class AppNodeImpl extends RustOpaque implements AppNode {
     stageIds: stageIds,
   );
 
-  /// Subscribe to the gossip topic for a festival.
+  /// Subscribe to the festival state topic and request catchup from the
+  /// relay to receive the genesis lineup and any subsequent updates.
   Future<void> subscribeFestival({required String festivalId}) => RustLib
       .instance
       .api

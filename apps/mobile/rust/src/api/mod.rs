@@ -71,6 +71,38 @@ pub struct AttestationDto {
     pub issuer: String,
 }
 
+pub struct LineupStageDto {
+    pub id: String,
+    pub name: String,
+    pub short: String,
+    pub color: String,
+    pub order: i32,
+}
+
+pub struct LineupDayDto {
+    pub id: String,
+    pub label: String,
+    pub num: i32,
+    pub month: String,
+}
+
+pub struct LineupSetDto {
+    pub id: String,
+    pub day: String,
+    pub stage: String,
+    pub artist: String,
+    pub start_min: i32,
+    pub duration_min: i32,
+    pub genre: String,
+    pub cancelled: bool,
+}
+
+pub struct LineupDto {
+    pub stages: Vec<LineupStageDto>,
+    pub days: Vec<LineupDayDto>,
+    pub sets: Vec<LineupSetDto>,
+}
+
 // ---------------------------------------------------------------------------
 // Opaque node handle
 // ---------------------------------------------------------------------------
@@ -103,6 +135,57 @@ impl AppNode {
     /// Toggle a star on a set. Returns the new starred state (`true` = now starred).
     pub fn toggle_star(&self, festival_id: String, set_id: String) -> anyhow::Result<bool> {
         self.inner.db.toggle_star(&festival_id, &set_id)
+    }
+
+    /// Read the lineup from the local Yrs doc for a festival.
+    ///
+    /// The Yrs doc at `festival/{id}/state` has separate root-map keys:
+    /// `"stages"`, `"days"`, `"sets"` — each a JSON array string that
+    /// arrives via signed gossip updates and merges independently.
+    ///
+    /// Returns `None` if no lineup data has synced yet.
+    pub async fn get_lineup(&self, festival_id: String) -> Option<LineupDto> {
+        let doc_id = format!("festival/{festival_id}/state");
+        let mut dm = self.inner.doc_manager.lock().await;
+
+        let stages = parse_json_array(dm.read_map_value(&doc_id, "stages"), |s| {
+            Some(LineupStageDto {
+                id: s.get("id")?.as_str()?.to_string(),
+                name: s.get("name")?.as_str()?.to_string(),
+                short: s.get("short")?.as_str()?.to_string(),
+                color: s.get("color")?.as_str()?.to_string(),
+                order: s.get("order")?.as_i64()? as i32,
+            })
+        });
+
+        let days = parse_json_array(dm.read_map_value(&doc_id, "days"), |d| {
+            Some(LineupDayDto {
+                id: d.get("id")?.as_str()?.to_string(),
+                label: d.get("label")?.as_str()?.to_string(),
+                num: d.get("num")?.as_i64()? as i32,
+                month: d.get("month")?.as_str()?.to_string(),
+            })
+        });
+
+        let sets = parse_json_array(dm.read_map_value(&doc_id, "sets"), |s| {
+            Some(LineupSetDto {
+                id: s.get("id")?.as_str()?.to_string(),
+                day: s.get("day")?.as_str()?.to_string(),
+                stage: s.get("stage")?.as_str()?.to_string(),
+                artist: s.get("artist")?.as_str()?.to_string(),
+                start_min: s.get("startMin")?.as_i64()? as i32,
+                duration_min: s.get("durationMin")?.as_i64()? as i32,
+                genre: s.get("genre")?.as_str()?.to_string(),
+                cancelled: s.get("cancelled")?.as_bool().unwrap_or(false),
+            })
+        });
+
+        // Return None only if we have no data at all
+        if stages.is_empty() && days.is_empty() && sets.is_empty() {
+            return None;
+        }
+
+        Some(LineupDto { stages, days, sets })
     }
 
     /// Persist a group record for a festival.
@@ -316,18 +399,25 @@ impl AppNode {
     // -----------------------------------------------------------------------
 
     /// Connect this node to the Festival Durable Object relay at `url`.
-    pub async fn connect_relay(&mut self, url: String) -> anyhow::Result<()> {
+    ///
+    /// `festival_id` is used to look up the cached Ed25519 public key for
+    /// verifying signed updates. Call `set_festival_public_key` first.
+    pub async fn connect_relay(&mut self, url: String, festival_id: String) -> anyhow::Result<()> {
         use offbeat_core::{auth, ws_relay};
         use std::sync::Arc;
 
         let doc_manager = Arc::clone(&self.inner.doc_manager);
         let db = Arc::clone(&self.inner.db);
+        let festival_pk = self.inner.festival_public_keys.get(&festival_id).copied()
+            .ok_or_else(|| anyhow::anyhow!(
+                "no public key for festival {festival_id} — call set_festival_public_key first"
+            ))?;
 
         let (sink, receive_loop) = ws_relay::connect(
             &url,
             doc_manager,
             db,
-            None,
+            festival_pk,
         )
         .await?;
 
@@ -354,13 +444,8 @@ impl AppNode {
     /// Subscribe to the gossip topic for a festival and perform a state vector
     /// exchange with the DO so we only receive updates we don't already have.
     pub async fn subscribe_festival(&mut self, festival_id: String) -> anyhow::Result<()> {
-        let topic_id = offbeat_core::topics::festival_topic(&festival_id, "state");
         let topic_str = format!("festival/{festival_id}/state");
         let doc_id = topic_str.clone();
-
-        if let Some(gm) = &self.inner.gossip_manager {
-            gm.lock().await.subscribe(topic_id, vec![]).await?;
-        }
 
         if let Some(ws) = &self.inner.ws_relay {
             ws.subscribe(vec![topic_str]).await?;
@@ -726,6 +811,22 @@ impl AppNode {
                 .collect(),
         })
     }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Parse a JSON array string from a Yrs map value, mapping each element with `f`.
+fn parse_json_array<T>(
+    raw: Option<String>,
+    f: impl Fn(&serde_json::Value) -> Option<T>,
+) -> Vec<T> {
+    let Some(s) = raw else { return vec![] };
+    let Ok(arr) = serde_json::from_str::<Vec<serde_json::Value>>(&s) else {
+        return vec![];
+    };
+    arr.iter().filter_map(f).collect()
 }
 
 // ---------------------------------------------------------------------------

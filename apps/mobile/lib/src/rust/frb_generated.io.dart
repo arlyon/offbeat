@@ -68,6 +68,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ChatMessageDto dco_decode_box_autoadd_chat_message_dto(dynamic raw);
 
   @protected
+  LineupDto dco_decode_box_autoadd_lineup_dto(dynamic raw);
+
+  @protected
   ChatMessageDto dco_decode_chat_message_dto(dynamic raw);
 
   @protected
@@ -89,7 +92,22 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   GroupStateDto dco_decode_group_state_dto(dynamic raw);
 
   @protected
+  int dco_decode_i_32(dynamic raw);
+
+  @protected
   IdentityDto dco_decode_identity_dto(dynamic raw);
+
+  @protected
+  LineupDayDto dco_decode_lineup_day_dto(dynamic raw);
+
+  @protected
+  LineupDto dco_decode_lineup_dto(dynamic raw);
+
+  @protected
+  LineupSetDto dco_decode_lineup_set_dto(dynamic raw);
+
+  @protected
+  LineupStageDto dco_decode_lineup_stage_dto(dynamic raw);
 
   @protected
   List<String> dco_decode_list_String(dynamic raw);
@@ -107,6 +125,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<GroupPinDto> dco_decode_list_group_pin_dto(dynamic raw);
 
   @protected
+  List<LineupDayDto> dco_decode_list_lineup_day_dto(dynamic raw);
+
+  @protected
+  List<LineupSetDto> dco_decode_list_lineup_set_dto(dynamic raw);
+
+  @protected
+  List<LineupStageDto> dco_decode_list_lineup_stage_dto(dynamic raw);
+
+  @protected
   List<int> dco_decode_list_prim_u_8_loose(dynamic raw);
 
   @protected
@@ -117,6 +144,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   AttestationDto? dco_decode_opt_box_autoadd_attestation_dto(dynamic raw);
+
+  @protected
+  LineupDto? dco_decode_opt_box_autoadd_lineup_dto(dynamic raw);
 
   @protected
   int dco_decode_u_32(dynamic raw);
@@ -180,6 +210,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  LineupDto sse_decode_box_autoadd_lineup_dto(SseDeserializer deserializer);
+
+  @protected
   ChatMessageDto sse_decode_chat_message_dto(SseDeserializer deserializer);
 
   @protected
@@ -205,7 +238,22 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   GroupStateDto sse_decode_group_state_dto(SseDeserializer deserializer);
 
   @protected
+  int sse_decode_i_32(SseDeserializer deserializer);
+
+  @protected
   IdentityDto sse_decode_identity_dto(SseDeserializer deserializer);
+
+  @protected
+  LineupDayDto sse_decode_lineup_day_dto(SseDeserializer deserializer);
+
+  @protected
+  LineupDto sse_decode_lineup_dto(SseDeserializer deserializer);
+
+  @protected
+  LineupSetDto sse_decode_lineup_set_dto(SseDeserializer deserializer);
+
+  @protected
+  LineupStageDto sse_decode_lineup_stage_dto(SseDeserializer deserializer);
 
   @protected
   List<String> sse_decode_list_String(SseDeserializer deserializer);
@@ -227,6 +275,21 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<GroupPinDto> sse_decode_list_group_pin_dto(SseDeserializer deserializer);
 
   @protected
+  List<LineupDayDto> sse_decode_list_lineup_day_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<LineupSetDto> sse_decode_list_lineup_set_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<LineupStageDto> sse_decode_list_lineup_stage_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   List<int> sse_decode_list_prim_u_8_loose(SseDeserializer deserializer);
 
   @protected
@@ -241,6 +304,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  LineupDto? sse_decode_opt_box_autoadd_lineup_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   int sse_decode_u_32(SseDeserializer deserializer);
 
   @protected
@@ -251,9 +319,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   BigInt sse_decode_usize(SseDeserializer deserializer);
-
-  @protected
-  int sse_decode_i_32(SseDeserializer deserializer);
 
   @protected
   void sse_encode_AnyhowException(
@@ -317,6 +382,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_box_autoadd_lineup_dto(
+    LineupDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_chat_message_dto(
     ChatMessageDto self,
     SseSerializer serializer,
@@ -350,7 +421,25 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_group_state_dto(GroupStateDto self, SseSerializer serializer);
 
   @protected
+  void sse_encode_i_32(int self, SseSerializer serializer);
+
+  @protected
   void sse_encode_identity_dto(IdentityDto self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_lineup_day_dto(LineupDayDto self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_lineup_dto(LineupDto self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_lineup_set_dto(LineupSetDto self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_lineup_stage_dto(
+    LineupStageDto self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_list_String(List<String> self, SseSerializer serializer);
@@ -380,6 +469,24 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_lineup_day_dto(
+    List<LineupDayDto> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_lineup_set_dto(
+    List<LineupSetDto> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_lineup_stage_dto(
+    List<LineupStageDto> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_prim_u_8_loose(List<int> self, SseSerializer serializer);
 
   @protected
@@ -398,6 +505,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_opt_box_autoadd_lineup_dto(
+    LineupDto? self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_u_32(int self, SseSerializer serializer);
 
   @protected
@@ -408,9 +521,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_usize(BigInt self, SseSerializer serializer);
-
-  @protected
-  void sse_encode_i_32(int self, SseSerializer serializer);
 }
 
 // Section: wire_class

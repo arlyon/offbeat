@@ -57,22 +57,29 @@ class FilterState {
 class FilterView extends StatefulWidget {
   final List<FestSet> sets;
   final List<Stage> stages;
+  final List<Day> days;
 
-  const FilterView({super.key, required this.sets, required this.stages});
+  const FilterView({
+    super.key,
+    required this.sets,
+    required this.stages,
+    required this.days,
+  });
 
   @override
   State<FilterView> createState() => _FilterViewState();
 }
 
 class _FilterViewState extends State<FilterView> {
-  FilterState _filter = FilterState(
-    genres: {'TECHNO', 'ELECTRONIC'},
-    stages: {'s1', 's3'},
-    timeRange: [20 * 60, 26 * 60],
-    hideClashes: true,
-  );
+  FilterState _filter = const FilterState();
   bool _panelOpen = true;
-  final String _day = 'fri';
+  late String _day;
+
+  @override
+  void initState() {
+    super.initState();
+    _day = widget.days.first.id;
+  }
 
   Map<String, Stage> get _stageById => {for (final s in widget.stages) s.id: s};
 
@@ -137,7 +144,7 @@ class _FilterViewState extends State<FilterView> {
                       vertical: 10,
                     ),
                     child: Text(
-                      '${filtered.length} SETS // ${_day.toUpperCase()} 22',
+                      '${filtered.length} SETS // ${widget.days.firstWhere((d) => d.id == _day).label} ${widget.days.firstWhere((d) => d.id == _day).num}',
                       style: const TextStyle(
                         fontFamily: 'JetBrainsMono',
                         fontSize: 10,

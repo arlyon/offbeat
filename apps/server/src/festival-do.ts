@@ -328,11 +328,15 @@ export class FestivalDO extends DurableObject {
 		this.ctx.acceptWebSocket(server, [sessionId]);
 
 		this.#sessions.set(server, { topics: new Set(), authenticated: false, publicKey: null });
+		console.log(`[ws] new connection: ${sessionId}, total sessions: ${this.#sessions.size}`);
 
 		return new Response(null, { status: 101, webSocket: client });
 	}
 
 	async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+		const raw = typeof message === "string" ? message : new TextDecoder().decode(message);
+		console.log(`[ws] recv: ${raw.slice(0, 200)}`);
+
 		let parsed: {
 			type: string;
 			topics?: string[];
@@ -342,9 +346,7 @@ export class FestivalDO extends DurableObject {
 		};
 
 		try {
-			parsed = JSON.parse(
-				typeof message === "string" ? message : new TextDecoder().decode(message),
-			);
+			parsed = JSON.parse(raw);
 		} catch {
 			ws.send(JSON.stringify({ type: "error", error: "Invalid JSON" }));
 			return;
@@ -438,6 +440,7 @@ export class FestivalDO extends DurableObject {
 						publicKey: sess.publicKey,
 					}),
 				);
+				console.log(`[ws] subscribed to: ${[...sess.topics].join(", ")}`);
 				ws.send(JSON.stringify({ type: "subscribed", topics: [...sess.topics] }));
 				break;
 			}
@@ -522,6 +525,9 @@ export class FestivalDO extends DurableObject {
 					timestamp: r.timestamp,
 				}));
 
+				console.log(
+					`[ws] catchup: topic=${parsed.topic} sinceSeq=${sinceSeq} sending ${messages.length} messages`,
+				);
 				ws.send(
 					JSON.stringify({
 						type: "catchup",

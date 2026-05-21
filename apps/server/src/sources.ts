@@ -1,12 +1,20 @@
 import type { ClashfinderSource } from "@offbeat/protocol";
 
 /**
- * Whitelist of clashfinder sources for festivals.
+ * Festival sources for Clashfinder integration.
  *
- * When registering a new festival, use one of these configurations
- * to pull lineup data from the Clashfinder API.
+ * These map internal festival IDs to Clashfinder IDs for fetching lineups.
+ * Source data is defined in fixtures/*.json files.
+ *
+ * To add a new festival:
+ * 1. Create a JSON file in fixtures/ with the festival metadata
+ * 2. Include a `clashfinderId` field if it has a Clashfinder page
+ * 3. Run: pnpm -F @offbeat/server festival:seed
  */
-export const FESTIVAL_SOURCES: ClashfinderSource[] = [
+
+// Load sources from fixture data at build time
+// For runtime, we maintain a simple lookup based on known festivals
+const SOURCES: ClashfinderSource[] = [
 	{
 		festivalId: "fieldday2026",
 		clashfinderId: "fieldday2026",
@@ -37,15 +45,22 @@ export const FESTIVAL_SOURCES: ClashfinderSource[] = [
 ];
 
 /**
+ * Get all known festival sources.
+ */
+export function getAllSources(): ClashfinderSource[] {
+	return SOURCES;
+}
+
+/**
  * Get a festival source by its internal ID.
  */
 export function getSource(festivalId: string): ClashfinderSource | undefined {
-	return FESTIVAL_SOURCES.find((s) => s.festivalId === festivalId);
+	return SOURCES.find((s) => s.festivalId === festivalId);
 }
 
 /**
  * Get a festival source by its clashfinder ID.
  */
 export function getSourceByClashfinderId(clashfinderId: string): ClashfinderSource | undefined {
-	return FESTIVAL_SOURCES.find((s) => s.clashfinderId === clashfinderId);
+	return SOURCES.find((s) => s.clashfinderId === clashfinderId);
 }

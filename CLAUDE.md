@@ -178,6 +178,16 @@ See `apps/mobile/lib/theme/tokens.dart` for full token definitions.
 
 ## Key Architectural Patterns
 
+### Data Fetching — iroh-gossip Only
+
+**All festival/lineup data flows through iroh-gossip and the Rust core. The Flutter
+UI never fetches lineup data via REST.** The Rust node connects to the Festival DO's
+WebSocket relay, subscribes to gossip topics, receives Yrs CRDT updates, persists
+them to local SQLite, and exposes them to Flutter via FRB. The only REST calls from
+Flutter are: festival list discovery (`GET /festivals`), auth endpoints, and admin
+endpoints. Never add REST-based lineup/data fetching as a workaround — fix the
+gossip pipeline instead.
+
 ### CRDTs for State
 
 All shared state uses Yrs documents:

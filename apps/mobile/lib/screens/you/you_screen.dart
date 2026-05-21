@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import '../../theme/tokens.dart';
-import '../../shell/top_nav.dart';
 import '../../widgets/dotted_border.dart';
 
 /// Profile screen shown when the user is registered.
@@ -16,6 +17,7 @@ class YouScreen extends StatelessWidget {
   final List<String> adminKeys;
   final ValueChanged<String> onDisplayNameChanged;
   final VoidCallback? onRequestAdmin;
+  final VoidCallback? onLogout;
 
   const YouScreen({
     super.key,
@@ -29,17 +31,14 @@ class YouScreen extends StatelessWidget {
     this.adminKeys = const [],
     required this.onDisplayNameChanged,
     this.onRequestAdmin,
+    this.onLogout,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        const TopNav(),
-        Expanded(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24),
-            child: ListView(
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24),
+      child: ListView(
               children: [
                 const SizedBox(height: 32),
                 // Identity header
@@ -75,7 +74,10 @@ class YouScreen extends StatelessWidget {
                 ),
                 const SizedBox(height: 32),
                 // Info rows
-                _InfoRow(label: 'USER ID', value: userId),
+                GestureDetector(
+                  onTap: () => _showIdDialog(context),
+                  child: _InfoRow(label: 'USER ID', value: userId),
+                ),
                 const SizedBox(height: 12),
                 _InfoRow(
                   label: 'PUBLIC KEY',
@@ -240,11 +242,48 @@ class YouScreen extends StatelessWidget {
                     ),
                   ),
                 ],
+                // Logout button
+                if (onLogout != null) ...[
+                  const SizedBox(height: 48),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 44,
+                    child: DottedBorder(
+                      color: colorErr,
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: onLogout,
+                          child: const Center(
+                            child: Text(
+                              'LOG OUT',
+                              style: TextStyle(
+                                fontFamily: 'JetBrainsMono',
+                                fontSize: 9,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 0.08 * 9,
+                                color: colorErr,
+                                height: 1,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ],
             ),
-          ),
-        ),
-      ],
+    );
+  }
+
+  void _showIdDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (_) => _IdQrDialog(
+        userId: userId,
+        publicKeyHex: publicKeyHex,
+      ),
     );
   }
 
@@ -360,6 +399,118 @@ class _DisplayNameFieldState extends State<_DisplayNameField> {
         ),
       ),
       onSubmitted: widget.onChanged,
+    );
+  }
+}
+
+class _IdQrDialog extends StatefulWidget {
+  final String userId;
+  final String publicKeyHex;
+  const _IdQrDialog({required this.userId, required this.publicKeyHex});
+
+  @override
+  State<_IdQrDialog> createState() => _IdQrDialogState();
+}
+
+class _IdQrDialogState extends State<_IdQrDialog> {
+  bool _copied = false;
+
+  void _copy(String value) {
+    Clipboard.setData(ClipboardData(text: value));
+    setState(() => _copied = true);
+    Future.delayed(const Duration(seconds: 2), () {
+      if (mounted) setState(() => _copied = false);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: colorBg,
+      shape: const RoundedRectangleBorder(),
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'YOUR IDENTITY',
+              style: TextStyle(
+                fontFamily: 'JetBrainsMono',
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.08 * 11,
+                color: colorFg,
+                height: 1,
+              ),
+            ),
+            const SizedBox(height: 20),
+            // QR code
+            Container(
+              padding: const EdgeInsets.all(12),
+              color: Colors.white,
+              child: QrImageView(
+                data: widget.publicKeyHex,
+                version: QrVersions.auto,
+                size: 180,
+                backgroundColor: Colors.white,
+              ),
+            ),
+            const SizedBox(height: 16),
+            // Public key
+            const Text(
+              'PUBLIC KEY',
+              style: TextStyle(
+                fontFamily: 'JetBrainsMono',
+                fontSize: 9,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.08 * 9,
+                color: colorFg4,
+                height: 1,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              '${widget.publicKeyHex.substring(0, 32)}\n${widget.publicKeyHex.substring(32)}',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontFamily: 'JetBrainsMono',
+                fontSize: 9,
+                color: colorFg3,
+                height: 1.4,
+              ),
+            ),
+            const SizedBox(height: 20),
+            // Copy button
+            SizedBox(
+              width: double.infinity,
+              height: 44,
+              child: DottedBorder(
+                color: _copied ? colorOk : colorDotted,
+                child: Material(
+                  color: _copied ? colorSurface2 : colorSurface1,
+                  child: InkWell(
+                    onTap: () => _copy(widget.publicKeyHex),
+                    child: Center(
+                      child: Text(
+                        _copied ? 'COPIED' : 'COPY PUBLIC KEY',
+                        style: TextStyle(
+                          fontFamily: 'JetBrainsMono',
+                          fontSize: 9,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.08 * 9,
+                          color: _copied ? colorOk : colorFg2,
+                          height: 1,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

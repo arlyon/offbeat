@@ -41,6 +41,7 @@ dependencies:
   path_provider: ^2.1.0
   offbeat_bridge:
     path: rust_builder
+  qr_flutter: ^4.1.0
 dev_dependencies:
   flutter_test:
     sdk: flutter

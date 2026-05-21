@@ -5,7 +5,13 @@
 		"dev": "wrangler dev",
 		"check": "tsc --noEmit && biome check src/",
 		"test:e2e": "vitest run",
-		"test:e2e:watch": "vitest"
+		"test:e2e:watch": "vitest",
+		"admin:bootstrap": "npx tsx scripts/bootstrap-admin.ts",
+		"admin:add": "npx tsx scripts/add-admin.ts",
+		"admin:keygen": "npx tsx scripts/generate-admin-key.ts",
+		"festival:register": "npx tsx scripts/register-festival.ts",
+		"festival:seed": "npx tsx scripts/seed-festivals.ts",
+		"festival:delete": "npx tsx scripts/delete-festival.ts"
 	},
 	"dependencies": {
 		"@noble/curves": "^2.2.0",
@@ -17,6 +23,7 @@
 	},
 	"devDependencies": {
 		"@cloudflare/workers-types": "^4.20260520.1",
+		"tsx": "^4.19.0",
 		"vitest": "^3.2.0",
 		"wrangler": "^4.93.0"
 	}

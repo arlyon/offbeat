@@ -14,7 +14,7 @@ class AppShell extends StatefulWidget {
 }
 
 class _AppShellState extends State<AppShell> {
-  AppTab _activeTab = AppTab.festivals;
+  AppTab _activeTab = AppTab.schedule;
 
   @override
   Widget build(BuildContext context) {
@@ -50,9 +50,6 @@ class _AppShellState extends State<AppShell> {
 
   Widget _tabBody(AppTab tab) {
     switch (tab) {
-      case AppTab.festivals:
-        // Imported dynamically to avoid circular deps
-        return const _FestivalsTabPlaceholder();
       case AppTab.schedule:
         return const _PlaceholderBody(label: 'SCHEDULE');
       case AppTab.now:
@@ -60,25 +57,6 @@ class _AppShellState extends State<AppShell> {
       case AppTab.you:
         return const _PlaceholderBody(label: 'YOU');
     }
-  }
-}
-
-class _FestivalsTabPlaceholder extends StatelessWidget {
-  const _FestivalsTabPlaceholder();
-
-  @override
-  Widget build(BuildContext context) {
-    // The actual FestivalListScreen is wired in main.dart via Navigator
-    return const Center(
-      child: Text(
-        'FESTIVALS',
-        style: TextStyle(
-          fontFamily: 'JetBrainsMono',
-          color: colorFg3,
-          fontSize: 11,
-        ),
-      ),
-    );
   }
 }
 

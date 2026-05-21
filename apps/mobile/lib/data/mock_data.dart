@@ -132,6 +132,18 @@ class Stage {
     required this.short,
     required this.color,
   });
+
+  factory Stage.fromJson(Map<String, dynamic> j) {
+    final colorStr = j['color'] as String? ?? '#FF2D8F';
+    final hex = colorStr.replaceFirst('#', '');
+    final colorInt = int.parse('FF$hex', radix: 16);
+    return Stage(
+      id: j['id'] as String,
+      name: j['name'] as String,
+      short: j['short'] as String,
+      color: colorInt,
+    );
+  }
 }
 
 class Day {
@@ -146,6 +158,15 @@ class Day {
     required this.num,
     required this.month,
   });
+
+  factory Day.fromJson(Map<String, dynamic> j) {
+    return Day(
+      id: j['id'] as String,
+      label: j['label'] as String,
+      num: (j['num']).toString(),
+      month: j['month'] as String,
+    );
+  }
 }
 
 class FestSet {
@@ -173,12 +194,28 @@ class FestSet {
     this.clashes = const [],
   });
 
-  FestSet copyWith({bool? starred}) => FestSet(
+  factory FestSet.fromJson(Map<String, dynamic> j) {
+    final idStr = j['id'] as String;
+    return FestSet(
+      id: idStr.hashCode,
+      day: j['day'] as String,
+      stage: j['stage'] as String,
+      artist: j['artist'] as String,
+      t: (j['startMin'] as num).toInt(),
+      dur: (j['durationMin'] as num).toInt(),
+      genre: (j['genre'] as String?) ?? '',
+      starred: false,
+      live: false,
+      clashes: const [],
+    );
+  }
+
+  FestSet copyWith({bool? starred, int? t}) => FestSet(
     id: id,
     day: day,
     stage: stage,
     artist: artist,
-    t: t,
+    t: t ?? this.t,
     dur: dur,
     genre: genre,
     starred: starred ?? this.starred,

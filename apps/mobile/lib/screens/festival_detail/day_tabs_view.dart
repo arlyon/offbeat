@@ -30,12 +30,13 @@ class DayTabsView extends StatefulWidget {
 }
 
 class _DayTabsViewState extends State<DayTabsView> {
-  String _day = 'fri';
+  late String _day;
   late List<FestSet> _sets;
 
   @override
   void initState() {
     super.initState();
+    _day = widget.days.first.id;
     _sets = List.from(widget.sets);
   }
 
@@ -98,13 +99,14 @@ class _DayTabsViewState extends State<DayTabsView> {
             ),
           ),
         ),
-        // Day ticket-stub strip
-        _DayTabStrip(
-          days: widget.days,
-          sets: _sets,
-          activeDay: _day,
-          onDayChanged: (d) => setState(() => _day = d),
-        ),
+        // Day ticket-stub strip (hidden for single-day festivals)
+        if (widget.days.length > 1)
+          _DayTabStrip(
+            days: widget.days,
+            sets: _sets,
+            activeDay: _day,
+            onDayChanged: (d) => setState(() => _day = d),
+          ),
         // Set list
         Expanded(
           child: ListView(

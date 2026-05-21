@@ -282,12 +282,19 @@ pub async fn connect(
     url: &str,
     doc_manager: Arc<Mutex<DocManager>>,
     db: Arc<Database>,
-    festival_public_key: Option<[u8; 32]>,
+    festival_public_key: [u8; 32],
 ) -> anyhow::Result<(
     WsRelaySink,
     std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>>,
 )> {
-    let (ws_stream, _response) = connect_async(url).await?;
+    tracing::info!("ws_relay: connecting to {url}");
+    let (ws_stream, _response) = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        connect_async(url),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("ws connect timed out after 10s"))??;
+    tracing::info!("ws_relay: connected, splitting stream");
     let (sink, stream) = ws_stream.split();
 
     let relay_sink = WsRelaySink {
@@ -317,7 +324,7 @@ pub async fn connect_with_retry(
     max_retries: u32,
     doc_manager: Arc<Mutex<DocManager>>,
     db: Arc<Database>,
-    festival_public_key: Option<[u8; 32]>,
+    festival_public_key: [u8; 32],
 ) -> anyhow::Result<(
     WsRelaySink,
     std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>>,
@@ -351,7 +358,7 @@ async fn run_receive_loop_with_reconnect(
     url: String,
     doc_manager: Arc<Mutex<DocManager>>,
     db: Arc<Database>,
-    festival_public_key: Option<[u8; 32]>,
+    festival_public_key: [u8; 32],
 ) -> anyhow::Result<()> {
     use rand::RngExt;
     const MAX_DELAY_MS: u64 = 30_000;
@@ -389,8 +396,11 @@ async fn run_receive_loop_with_reconnect(
             );
             tokio::time::sleep(std::time::Duration::from_millis(jitter)).await;
 
-            match connect_async(&url).await {
-                Ok((ws_stream, _)) => {
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                connect_async(&url),
+            ).await {
+                Ok(Ok((ws_stream, _))) => {
                     let (new_sink, new_stream) = ws_stream.split();
                     sink.swap_sink(new_sink).await;
                     stream = new_stream;
@@ -420,9 +430,16 @@ async fn run_receive_loop_with_reconnect(
                     tracing::info!("ws_relay: reconnected successfully");
                     break;
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     tracing::warn!(
                         "ws_relay: reconnect attempt {} failed: {e}",
+                        reconnect_attempt + 1,
+                    );
+                    reconnect_attempt = reconnect_attempt.saturating_add(1);
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        "ws_relay: reconnect attempt {} timed out",
                         reconnect_attempt + 1,
                     );
                     reconnect_attempt = reconnect_attempt.saturating_add(1);
@@ -437,11 +454,15 @@ async fn run_receive_loop(
     stream: &mut WsStream,
     doc_manager: &Arc<Mutex<DocManager>>,
     db: &Arc<Database>,
-    festival_public_key: Option<[u8; 32]>,
+    festival_public_key: [u8; 32],
 ) -> anyhow::Result<()> {
     while let Some(msg) = stream.next().await {
         match msg {
             Ok(Message::Text(text)) => {
+                tracing::info!("ws_relay: recv {} bytes: {}",
+                    text.len(),
+                    if text.len() > 200 { &text[..200] } else { &text }
+                );
                 match serde_json::from_str::<WsServerMessage>(&text) {
                     Ok(server_msg) => {
                         if let Err(e) = handle_server_message(
@@ -484,7 +505,7 @@ async fn handle_server_message(
     sink: &WsRelaySink,
     doc_manager: &Arc<Mutex<DocManager>>,
     db: &Arc<Database>,
-    festival_public_key: Option<[u8; 32]>,
+    festival_public_key: [u8; 32],
 ) -> anyhow::Result<()> {
     match msg {
         WsServerMessage::AuthOk {
@@ -504,7 +525,7 @@ async fn handle_server_message(
             // Track last seen seq for catchup on reconnect
             {
                 let mut seqs = sink.last_seen_seq.lock().await;
-                let entry = seqs.entry(topic).or_insert(0);
+                let entry = seqs.entry(topic.clone()).or_insert(0);
                 if seq > *entry {
                     *entry = seq;
                 }

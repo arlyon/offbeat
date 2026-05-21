@@ -1,7 +1,6 @@
 import 'dart:developer' as dev;
 import 'package:flutter/material.dart';
 import '../../theme/tokens.dart';
-import '../../shell/top_nav.dart';
 import '../../widgets/dotted_border.dart';
 
 /// Shown when the user has not yet registered a passkey.
@@ -36,14 +35,10 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        const TopNav(),
-        Expanded(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 // Identity icon
                 Container(
@@ -135,9 +130,6 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                 ],
               ],
             ),
-          ),
-        ),
-      ],
     );
   }
 }

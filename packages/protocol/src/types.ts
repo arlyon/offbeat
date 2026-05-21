@@ -10,6 +10,7 @@ export interface Festival {
 	stages: Stage[];
 	genres: string[];
 	status: "upcoming" | "live" | "past";
+	clashfinderId?: string; // Clashfinder event ID for lineup refresh
 	publicKey: string;
 	updatedAt: string; // ISO string
 }

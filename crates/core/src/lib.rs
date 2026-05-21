@@ -91,7 +91,7 @@ impl OffbeatNode {
     ///
     /// This binds an iroh `Endpoint`, spawns the gossip actor (using the
     /// standard `GOSSIP_ALPN`), and wires up a `GossipManager`.
-    pub async fn new_with_networking(db_path: &Path) -> anyhow::Result<Self> {
+    pub async fn new_with_networking(db_path: &Path, festival_public_key: [u8; 32]) -> anyhow::Result<Self> {
         let db = Arc::new(Database::new(db_path)?);
         let doc_manager = Arc::new(Mutex::new(DocManager::new(db.clone())));
         let group_manager = Arc::new(GroupManager::new(db.clone(), doc_manager.clone()));
@@ -110,6 +110,7 @@ impl OffbeatNode {
             gossip.clone(),
             Arc::clone(&doc_manager),
             Arc::clone(&db),
+            festival_public_key,
         )));
 
         Ok(Self {

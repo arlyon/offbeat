@@ -8,7 +8,6 @@
 import 'package:flutter/material.dart';
 import '../../data/mock_data.dart';
 import '../../theme/tokens.dart';
-import '../../shell/top_nav.dart';
 import '../../widgets/dotted_border.dart';
 import 'festival_row.dart';
 
@@ -67,13 +66,6 @@ class _FestivalListScreenState extends State<FestivalListScreen> {
 
     return Column(
       children: [
-        // Top nav
-        TopNav(
-          rightWidgets: [
-            NavIconButton(icon: Icons.wifi_off),
-            NavIconButton(icon: Icons.settings),
-          ],
-        ),
         // Scrollable body
         Expanded(
           child: widget.loading && widget.festivals.isEmpty
