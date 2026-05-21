@@ -1,0 +1,208 @@
+{
+  "project_id": "offbeat-reactive-resource-layer",
+  "title": "Reactive Resource Layer",
+  "description": "Formalize the data sync lifecycle into a unified resource abstraction with reactive FRB streams, state vector exchange for CRDTs, high-water mark sync for chat, and an iroh custom transport replacing the WebSocket relay.",
+  "technical_context": {
+    "stack": [
+      "Rust (edition 2024)",
+      "Flutter/Dart",
+      "iroh 1.0.0-rc.0 (unstable-custom-transports)",
+      "iroh-gossip 0.99.0",
+      "Yrs (yrs crate)",
+      "rusqlite",
+      "flutter_rust_bridge v2",
+      "Cloudflare Workers + Durable Objects (TypeScript)"
+    ],
+    "entry_points": [
+      "crates/core/src/lib.rs",
+      "crates/core/src/gossip_manager.rs",
+      "crates/core/src/ws_relay.rs",
+      "crates/core/src/db/mod.rs",
+      "crates/core/src/db/schema.sql",
+      "crates/core/src/chat.rs",
+      "crates/core/src/groups.rs",
+      "crates/core/src/doc_manager.rs",
+      "crates/core/src/topics.rs",
+      "crates/core/src/types.rs",
+      "apps/mobile/rust/src/api/mod.rs",
+      "apps/server/src/festival-do.ts"
+    ]
+  },
+  "phases": [
+    {
+      "id": "phase_1",
+      "task_name": "Resource trait and registry",
+      "description": "Define the Resource trait, ResourceKind, Visibility, Priority, and concrete implementations for all four resource types. Create ResourceRegistry. Refactor topics.rs to derive from Resource impls.",
+      "files_impacted": [
+        "crates/core/src/resource.rs (NEW)",
+        "crates/core/src/lib.rs",
+        "crates/core/src/topics.rs",
+        "crates/core/src/types.rs"
+      ],
+      "definition_of_done": "cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings",
+      "dependencies": [],
+      "acceptance_criteria": [
+        "Resource trait defined with id(), kind(), visibility(), topic(), topic_string(), priority()",
+        "FestivalState, GroupState, GroupChat, StageChat implement Resource",
+        "ResourceRegistry can register/deregister/sort by priority",
+        "Existing topic derivation functions still produce the same TopicIds",
+        "All existing tests pass unchanged"
+      ]
+    },
+    {
+      "id": "phase_2",
+      "task_name": "CRDT sync protocol — state vector exchange",
+      "description": "Replace gossip_log-based catchup for CRDT resources with Yrs state vector exchange. Add sv_exchange WS message type to DO. Delete client-side gossip_log and topic_sync_state for CRDT resources.",
+      "files_impacted": [
+        "crates/core/src/sync.rs (NEW)",
+        "crates/core/src/db/mod.rs",
+        "crates/core/src/db/schema.sql",
+        "crates/core/src/gossip_manager.rs",
+        "crates/core/src/ws_relay.rs",
+        "apps/server/src/festival-do.ts"
+      ],
+      "definition_of_done": "pnpm turbo check --ui stream --output-logs errors-only",
+      "dependencies": ["phase_1"],
+      "acceptance_criteria": [
+        "DO holds Yrs docs in yrs_docs table, computes diffs on sv_exchange request",
+        "Client sends state vector on connect, receives single diff blob",
+        "subscribe-first-then-exchange ordering: no gap, dupes are Yrs no-ops",
+        "topic_sync_state table deleted from client schema",
+        "gossip_log no longer used for CRDT resources (still used for chat)",
+        "Two-node integration test: D1 modifies festival state offline, D2 catches up via SV exchange"
+      ]
+    },
+    {
+      "id": "phase_3",
+      "task_name": "Chat sync protocol — high-water mark",
+      "description": "Add writer_seq to chat messages. Implement ChatStateVector-based catchup. Add chat_catchup WS message type to DO. Replace sinceSeq-based catchup for chat.",
+      "files_impacted": [
+        "crates/core/src/chat.rs",
+        "crates/core/src/sync.rs",
+        "crates/core/src/db/mod.rs",
+        "crates/core/src/db/schema.sql",
+        "crates/core/src/types.rs",
+        "apps/server/src/festival-do.ts"
+      ],
+      "definition_of_done": "pnpm turbo check --ui stream --output-logs errors-only",
+      "dependencies": ["phase_2"],
+      "acceptance_criteria": [
+        "ChatMessage type has writer_seq field (monotonic per user per topic)",
+        "ChatStateVector = HashMap<UserId, u64> computed from local SQLite",
+        "DO responds to chat_catchup with messages not covered by client's ChatStateVector, newest first",
+        "INSERT OR IGNORE handles duplicates from HWM overlap",
+        "sinceSeq-based catchup removed from ws_relay.rs",
+        "gossip_log table deleted from client schema (no longer needed for any resource)"
+      ]
+    },
+    {
+      "id": "phase_4",
+      "task_name": "Sync orchestrator",
+      "description": "Implement SyncOrchestrator that runs subscribe→catch-up→live for all registered resources in priority order. Wire into OffbeatNode. Simplify gossip_manager to just subscribe/broadcast.",
+      "files_impacted": [
+        "crates/core/src/sync.rs",
+        "crates/core/src/gossip_manager.rs",
+        "crates/core/src/lib.rs",
+        "crates/core/src/ws_relay.rs"
+      ],
+      "definition_of_done": "pnpm turbo check --ui stream --output-logs errors-only",
+      "dependencies": ["phase_3"],
+      "acceptance_criteria": [
+        "SyncOrchestrator processes resources in priority order on peer connect",
+        "gossip_manager.rs stripped to: subscribe, unsubscribe, broadcast (< 100 lines of non-test code)",
+        "GossipMessage enum removed (raw Yrs diffs + encrypted chat messages only)",
+        "GossipWireMessage, encode_gossip_message, decode_wire_message deleted",
+        "dispatch_message replaced by Resource-driven dispatch",
+        "All existing functionality preserved (two-device manual test)"
+      ]
+    },
+    {
+      "id": "phase_5",
+      "task_name": "Reactive FRB streams",
+      "description": "Replace pull-based bridge API with Stream<T> per resource. Dart gets typed streams. Writes mutate locally and queue for gossip. Delete per-entity DTO boilerplate where possible.",
+      "files_impacted": [
+        "apps/mobile/rust/src/api/mod.rs",
+        "crates/core/src/lib.rs",
+        "crates/core/src/doc_manager.rs"
+      ],
+      "definition_of_done": "pnpm turbo check --ui stream --output-logs errors-only",
+      "dependencies": ["phase_4"],
+      "acceptance_criteria": [
+        "watch_lineup(festival_id) returns Stream<LineupDto>",
+        "watch_group_state(group_id) returns Stream<GroupStateDto>",
+        "watch_chat(topic, last_n) returns Stream<Vec<ChatMessageDto>>",
+        "watch_sync_status() returns Stream<SyncStatusDto>",
+        "Write commands (check_in, toggle_star, send_chat) mutate locally and emit on stream before gossip delivery",
+        "Bridge mod.rs reduced from ~840 lines to < 400",
+        "FRB codegen succeeds"
+      ]
+    },
+    {
+      "id": "phase_6",
+      "task_name": "Dart UI rewire to streams",
+      "description": "Replace all pull-based data fetching in Flutter with StreamBuilder subscriptions. Remove manual refresh patterns. Services become thin wrappers.",
+      "files_impacted": [
+        "apps/mobile/lib/screens/festival_detail/gantt_view.dart",
+        "apps/mobile/lib/screens/festival_detail/stage_tabs_view.dart",
+        "apps/mobile/lib/screens/festival_detail/day_tabs_view.dart",
+        "apps/mobile/lib/screens/festival_detail/clash_radar_view.dart",
+        "apps/mobile/lib/screens/festival_detail/festival_detail_screen.dart",
+        "apps/mobile/lib/screens/festival_list/festival_list_screen.dart",
+        "apps/mobile/lib/services/festival_service.dart",
+        "apps/mobile/lib/services/festival_admin_service.dart"
+      ],
+      "definition_of_done": "pnpm turbo check --ui stream --output-logs errors-only",
+      "dependencies": ["phase_5"],
+      "acceptance_criteria": [
+        "Zero pull-based data fetching in Flutter screens",
+        "All screens use StreamBuilder or equivalent reactive pattern",
+        "UI updates within one frame of local state change",
+        "Flutter analyze passes with no errors"
+      ]
+    },
+    {
+      "id": "phase_7",
+      "task_name": "WS relay → iroh custom transport",
+      "description": "Replace ws_relay.rs with an iroh custom transport that speaks WebSocket to the DO. The DO becomes a peer in iroh's transport hierarchy. Delete manual reconnect and seq tracking.",
+      "files_impacted": [
+        "crates/core/src/ws_relay.rs (DELETE)",
+        "crates/core/src/ws_transport.rs (NEW)",
+        "crates/core/src/lib.rs",
+        "crates/core/Cargo.toml"
+      ],
+      "definition_of_done": "pnpm turbo check --ui stream --output-logs errors-only",
+      "dependencies": ["phase_6"],
+      "acceptance_criteria": [
+        "ws_relay.rs deleted",
+        "New ws_transport.rs implements iroh custom transport traits",
+        "WebSocket frames carry iroh datagrams",
+        "iroh handles reconnect (no manual backoff/jitter code)",
+        "DO reachable as a peer via Endpoint with custom transport",
+        "Two-device sync works end-to-end via DO relay"
+      ]
+    },
+    {
+      "id": "phase_8",
+      "task_name": "Cleanup and test consolidation",
+      "description": "Delete dead code, consolidate boilerplate tests into tests against the Resource abstraction, verify all metrics.",
+      "files_impacted": [
+        "crates/core/src/gossip_manager.rs",
+        "crates/core/src/db/mod.rs",
+        "crates/core/src/chat.rs",
+        "crates/core/src/groups.rs",
+        "apps/mobile/rust/src/api/mod.rs",
+        "apps/mobile/test/widget_test.dart"
+      ],
+      "definition_of_done": "pnpm turbo check --ui stream --output-logs errors-only",
+      "dependencies": ["phase_7"],
+      "acceptance_criteria": [
+        "gossip_manager.rs < 100 lines of non-test code",
+        "db/mod.rs < 300 lines",
+        "Bridge mod.rs < 400 lines",
+        "No dead code warnings from clippy",
+        "All tests pass",
+        "Test count reduced but coverage maintained"
+      ]
+    }
+  ]
+}
