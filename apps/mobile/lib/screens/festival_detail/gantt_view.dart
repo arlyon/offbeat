@@ -19,12 +19,14 @@ class GanttView extends StatefulWidget {
   final List<FestSet> sets;
   final List<Stage> stages;
   final List<Day> days;
+  final DateTime now;
 
   const GanttView({
     super.key,
     required this.sets,
     required this.stages,
     required this.days,
+    required this.now,
   });
 
   @override
@@ -40,7 +42,7 @@ class _GanttViewState extends State<GanttView> {
   // Vertical row scroll (left side sentinel)
   final ScrollController _vScrollController = ScrollController();
   static const double _minRowHeight = 64.0;
-  static const double _timeAxisH = 36.0;
+  static const double _timeAxisH = 26.0;
   static const double _hudPad = 44.0;
 
   // Haptic tracking for horizontal 10-min ticks
@@ -54,7 +56,7 @@ class _GanttViewState extends State<GanttView> {
   late int _endMin;
   late double _contentW;
   late List<int> _axisHours;
-  late int _absoluteNowMin; // kNowT mapped to absolute timeline
+  late int _absoluteNowMin;
   late double _nowX;
   late bool _nowInRange;
 
@@ -86,8 +88,8 @@ class _GanttViewState extends State<GanttView> {
 
     _contentW = (_endMin - _startMin) * ganttPxPerMin;
 
-    // Absolute "now" — map kNowDay + kNowT into the multi-day timeline
-    _absoluteNowMin = (_dayOffsets[kNowDay] ?? 0) + kNowT;
+    // Absolute "now" — map real DateTime into the multi-day timeline
+    _absoluteNowMin = _resolveNowMin(widget.now, widget.days, _dayOffsets);
     _nowInRange = _absoluteNowMin >= _startMin && _absoluteNowMin <= _endMin;
     _nowX = (_absoluteNowMin - _startMin) * ganttPxPerMin;
 
@@ -146,14 +148,6 @@ class _GanttViewState extends State<GanttView> {
       _hScrollController.hasClients ? _hScrollController.offset.clamp(0.0, _maxTx) : 0.0;
   double get _progress => _maxTx > 0 ? _tx / _maxTx : 0.0;
 
-  String get _centerTimeStr {
-    final centerMin =
-        _startMin + (_tx + _viewportInnerW / 2) / ganttPxPerMin;
-    final h = (centerMin ~/ 60) % 24;
-    final m = centerMin ~/ 1 % 60;
-    return '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}';
-  }
-
   String get _activeDay {
     final centerMin =
         _startMin + (_tx + _viewportInnerW / 2) / ganttPxPerMin;
@@ -192,7 +186,7 @@ class _GanttViewState extends State<GanttView> {
   @override
   void didUpdateWidget(GanttView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.sets != widget.sets || oldWidget.days != widget.days) {
+    if (oldWidget.sets != widget.sets || oldWidget.days != widget.days || oldWidget.now != widget.now) {
       _recomputeData();
     }
   }
@@ -301,6 +295,7 @@ class _GanttViewState extends State<GanttView> {
             onDayTap: _jumpToDay,
             nowInRange: _nowInRange,
             absoluteNowMin: _absoluteNowMin,
+            nowMinOfDay: widget.now.hour * 60 + widget.now.minute,
             startMin: _startMin,
             endMin: _endMin,
           ),
@@ -342,7 +337,6 @@ class _GanttViewState extends State<GanttView> {
                             axisHours: _axisHours,
                             nowX: _nowX,
                             nowInRange: _nowInRange,
-                            centerTimeStr: _centerTimeStr,
                             startMin: _startMin,
                             vertOffset: _vScrollController.hasClients
                                 ? _vScrollController.offset
@@ -424,6 +418,7 @@ class _MetaStrip extends StatelessWidget {
   final ValueChanged<String> onDayTap;
   final bool nowInRange;
   final int absoluteNowMin;
+  final int nowMinOfDay;
   final int startMin;
   final int endMin;
 
@@ -433,6 +428,7 @@ class _MetaStrip extends StatelessWidget {
     required this.onDayTap,
     required this.nowInRange,
     required this.absoluteNowMin,
+    required this.nowMinOfDay,
     required this.startMin,
     required this.endMin,
     this.showDayPicker = true,
@@ -481,7 +477,7 @@ class _MetaStrip extends StatelessWidget {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  fmtTime(kNowT),
+                  fmtTime(nowMinOfDay),
                   style: TextStyle(
                     fontFamily: 'JetBrainsMono',
                     fontSize: 12,
@@ -561,7 +557,6 @@ class _GanttContent extends StatelessWidget {
   final List<int> axisHours;
   final double nowX;
   final bool nowInRange;
-  final String centerTimeStr;
   final int startMin;
   final double vertOffset;
   final double rowHeight;
@@ -577,7 +572,6 @@ class _GanttContent extends StatelessWidget {
     required this.axisHours,
     required this.nowX,
     required this.nowInRange,
-    required this.centerTimeStr,
     required this.startMin,
     required this.vertOffset,
     required this.rowHeight,
@@ -609,7 +603,6 @@ class _GanttContent extends StatelessWidget {
         _TimeAxis(
           tx: tx,
           visibleHours: visibleHours,
-          centerTimeStr: centerTimeStr,
           startMin: startMin,
           days: days,
           dayOffsets: dayOffsets,
@@ -636,7 +629,6 @@ class _GanttContent extends StatelessWidget {
 class _TimeAxis extends StatelessWidget {
   final double tx;
   final List<int> visibleHours;
-  final String centerTimeStr;
   final int startMin;
   final List<Day> days;
   final Map<String, int> dayOffsets;
@@ -644,7 +636,6 @@ class _TimeAxis extends StatelessWidget {
   const _TimeAxis({
     required this.tx,
     required this.visibleHours,
-    required this.centerTimeStr,
     required this.startMin,
     required this.days,
     required this.dayOffsets,
@@ -666,7 +657,7 @@ class _TimeAxis extends StatelessWidget {
 
     return DottedBorder.bottom(
       child: SizedBox(
-        height: 36,
+        height: 26,
         child: Stack(
           clipBehavior: Clip.hardEdge,
           children: [
@@ -690,7 +681,7 @@ class _TimeAxis extends StatelessWidget {
                           child: Container(width: 2, color: colorFg3),
                         ),
                       Padding(
-                        padding: const EdgeInsets.only(left: 10, top: 8),
+                        padding: const EdgeInsets.only(left: 10, top: 6),
                         child: Text(
                           fmtTime(m),
                           style: TextStyle(
@@ -720,30 +711,6 @@ class _TimeAxis extends StatelessWidget {
                   ),
                 );
               }(),
-            // Centered time badge
-            Positioned(
-              right: 8,
-              top: 8,
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: colorBg,
-                  border: Border.all(color: colorAccent, width: 1.5),
-                ),
-                child: Text(
-                  centerTimeStr,
-                  style: const TextStyle(
-                    fontFamily: 'JetBrainsMono',
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                    color: colorAccent,
-                    letterSpacing: -0.02 * 11,
-                    height: 1,
-                  ),
-                ),
-              ),
-            ),
           ],
         ),
       ),
@@ -1162,6 +1129,27 @@ class _GanttHUDState extends State<_GanttHUD>
       ),
     );
   }
+}
+
+/// Map a real [DateTime] into the Gantt timeline's absolute-minute space.
+///
+/// Matches [now] against [days] by day-of-month + month abbreviation.
+/// Returns minutes-since-midnight offset by the matching day's position.
+int _resolveNowMin(DateTime now, List<Day> days, Map<String, int> dayOffsets) {
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  final nowMonth = months[now.month - 1];
+  final nowDay = now.day.toString();
+  final nowMinOfDay = now.hour * 60 + now.minute;
+
+  for (final d in days) {
+    if (d.num == nowDay && d.month == nowMonth) {
+      return (dayOffsets[d.id] ?? 0) + nowMinOfDay;
+    }
+  }
+
+  // Not on a festival day — place before or after based on date comparison
+  if (days.isEmpty) return nowMinOfDay;
+  return (dayOffsets[days.last.id] ?? 0) + 24 * 60 + nowMinOfDay;
 }
 
 class _ActivityPainter extends CustomPainter {

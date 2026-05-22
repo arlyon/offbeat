@@ -1,4 +1,12 @@
 import { DurableObject } from "cloudflare:workers";
+import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
+import {
+	ErrorCode,
+	GossipEnvelopeSchema,
+	type RelayClientMessage,
+	RelayClientMessageSchema,
+	RelayServerMessageSchema,
+} from "@offbeat/protocol";
 import * as Y from "yjs";
 import { generateKeypair, sign, verify } from "./signing";
 
@@ -8,29 +16,15 @@ interface Session {
 	publicKey: string | null;
 }
 
-/**
- * GossipWireMessage — the unified wire format used by both iroh-gossip
- * and the WS relay. All messages flowing through the DO use this shape.
- */
-interface GossipWireMessage {
-	kind: string;
-	doc_id?: string;
-	payload: string;
-	group_key_id?: string;
-}
-
-interface CatchupEntry {
-	seq: number;
-	message: GossipWireMessage;
-	timestamp: string;
-}
-
 export class FestivalDO extends DurableObject {
 	#sessions = new Map<WebSocket, Session>();
 	#publicKey: Uint8Array | null = null;
 	#secretKey: Uint8Array | null = null;
 	#opensAt: string | null = null; // ISO date string
 	#closesAt: string | null = null; // ISO date string
+	#festivalId: string | null = null;
+	#lat: number | null = null;
+	#lon: number | null = null;
 
 	get sql() {
 		return this.ctx.storage.sql;
@@ -42,7 +36,7 @@ export class FestivalDO extends DurableObject {
 		this.ctx.blockConcurrencyWhile(async () => {
 			this.#initSchema();
 			await this.#initKeypair();
-			await this.#loadWindow();
+			await this.#loadConfig();
 		});
 	}
 
@@ -51,7 +45,7 @@ export class FestivalDO extends DurableObject {
 			CREATE TABLE IF NOT EXISTS gossip_log (
 				seq INTEGER PRIMARY KEY AUTOINCREMENT,
 				topic TEXT NOT NULL,
-				message TEXT NOT NULL,
+				message BLOB NOT NULL,
 				timestamp TEXT NOT NULL DEFAULT (datetime('now'))
 			);
 
@@ -85,9 +79,12 @@ export class FestivalDO extends DurableObject {
 		}
 	}
 
-	async #loadWindow() {
+	async #loadConfig() {
 		this.#opensAt = ((await this.ctx.storage.get("opens_at")) as string) ?? null;
 		this.#closesAt = ((await this.ctx.storage.get("closes_at")) as string) ?? null;
+		this.#festivalId = ((await this.ctx.storage.get("festival_id")) as string) ?? null;
+		this.#lat = ((await this.ctx.storage.get("lat")) as number) ?? null;
+		this.#lon = ((await this.ctx.storage.get("lon")) as number) ?? null;
 	}
 
 	/** Returns true if the current time is within the [opensAt, closesAt] window.
@@ -98,6 +95,21 @@ export class FestivalDO extends DurableObject {
 		return now >= this.#opensAt && now <= this.#closesAt;
 	}
 
+	/** Send a binary RelayServerMessage to a WebSocket. */
+	#sendServerMsg(
+		ws: WebSocket,
+		msg: Parameters<typeof create<typeof RelayServerMessageSchema>>[1],
+	) {
+		const serverMsg = create(RelayServerMessageSchema, msg);
+		const bytes = toBinary(RelayServerMessageSchema, serverMsg);
+		ws.send(bytes);
+	}
+
+	/** Send an error RelayServerMessage to a WebSocket. */
+	#sendError(ws: WebSocket, error: string, code: ErrorCode = ErrorCode.UNSPECIFIED) {
+		this.#sendServerMsg(ws, { msg: { case: "error", value: { error, code } } });
+	}
+
 	async fetch(request: Request): Promise<Response> {
 		const url = new URL(request.url);
 
@@ -106,19 +118,19 @@ export class FestivalDO extends DurableObject {
 			if (!this.#publicKey) {
 				return new Response("Key not initialized", { status: 500 });
 			}
-			const hex = Array.from(this.#publicKey)
-				.map((b) => b.toString(16).padStart(2, "0"))
-				.join("");
-			return new Response(hex, {
+			return new Response(bytesToHex(this.#publicKey), {
 				headers: { "Content-Type": "text/plain" },
 			});
 		}
 
-		// PUT /config — set the event window (opens_at, closes_at)
+		// PUT /config — set the event window and location
 		if (request.method === "PUT" && url.pathname === "/config") {
 			const body = (await request.json()) as {
 				opensAt?: string;
 				closesAt?: string;
+				festivalId?: string;
+				lat?: number;
+				lon?: number;
 			};
 			if (body.opensAt) {
 				this.#opensAt = body.opensAt;
@@ -128,17 +140,35 @@ export class FestivalDO extends DurableObject {
 				this.#closesAt = body.closesAt;
 				await this.ctx.storage.put("closes_at", body.closesAt);
 			}
+			if (body.festivalId) {
+				this.#festivalId = body.festivalId;
+				await this.ctx.storage.put("festival_id", body.festivalId);
+			}
+			if (body.lat !== undefined) {
+				this.#lat = body.lat;
+				await this.ctx.storage.put("lat", body.lat);
+			}
+			if (body.lon !== undefined) {
+				this.#lon = body.lon;
+				await this.ctx.storage.put("lon", body.lon);
+			}
 			return Response.json({
 				opensAt: this.#opensAt,
 				closesAt: this.#closesAt,
+				festivalId: this.#festivalId,
+				lat: this.#lat,
+				lon: this.#lon,
 			});
 		}
 
-		// GET /config — read the current event window
+		// GET /config — read the current config
 		if (request.method === "GET" && url.pathname === "/config") {
 			return Response.json({
 				opensAt: this.#opensAt,
 				closesAt: this.#closesAt,
+				festivalId: this.#festivalId,
+				lat: this.#lat,
+				lon: this.#lon,
 			});
 		}
 
@@ -222,10 +252,7 @@ export class FestivalDO extends DurableObject {
 				return new Response("Keypair not initialized", { status: 500 });
 			}
 
-			const hex = Array.from(this.#secretKey)
-				.map((b) => b.toString(16).padStart(2, "0"))
-				.join("");
-			return new Response(hex, {
+			return new Response(bytesToHex(this.#secretKey), {
 				headers: { "Content-Type": "text/plain" },
 			});
 		}
@@ -291,48 +318,57 @@ export class FestivalDO extends DurableObject {
 			const updateBytes = base64ToBytes(body.update);
 			const doSignature = await sign(this.#secretKey, updateBytes);
 
-			const signedUpdate = {
-				update: body.update,
-				author: "festival-do",
-				signature: bytesToBase64(doSignature),
-			};
+			// Build the GossipEnvelope as protobuf
+			const envelope = create(GossipEnvelopeSchema, {
+				payload: {
+					case: "festivalUpdate",
+					value: {
+						docId: body.docId,
+						signedUpdate: {
+							update: updateBytes,
+							author: "festival-do",
+							signature: doSignature,
+						},
+					},
+				},
+			});
 
-			// Build the gossip wire message
-			const wireMessage: GossipWireMessage = {
-				kind: "festival_update",
-				doc_id: body.docId,
-				payload: JSON.stringify(signedUpdate),
-			};
-
-			// Store in gossip log
-			const msgData = JSON.stringify(wireMessage);
+			// Store envelope as BLOB in gossip log
+			const envelopeBytes = toBinary(GossipEnvelopeSchema, envelope);
 			const result = this.sql
 				.exec(
 					"INSERT INTO gossip_log (topic, message) VALUES (?, ?) RETURNING seq",
 					body.topic,
-					msgData,
+					envelopeBytes,
 				)
 				.one() as { seq: number };
 
 			// Broadcast to subscribed WS clients
-			const broadcast = JSON.stringify({
-				type: "gossip",
-				topic: body.topic,
-				seq: result.seq,
-				message: wireMessage,
+			const broadcastMsg = create(RelayServerMessageSchema, {
+				msg: {
+					case: "gossip",
+					value: {
+						topic: body.topic,
+						seq: BigInt(result.seq),
+						message: envelope,
+					},
+				},
 			});
+			const broadcastBytes = toBinary(RelayServerMessageSchema, broadcastMsg);
 			for (const [ws, sess] of this.#sessions) {
 				if (sess.topics.has(body.topic)) {
-					ws.send(broadcast);
+					ws.send(broadcastBytes);
 				}
 			}
 
 			return Response.json({
 				seq: result.seq,
-				signedUpdate,
-				publicKey: Array.from(this.#publicKey)
-					.map((b) => b.toString(16).padStart(2, "0"))
-					.join(""),
+				signedUpdate: {
+					update: body.update,
+					author: "festival-do",
+					signature: bytesToBase64(doSignature),
+				},
+				publicKey: bytesToHex(this.#publicKey),
 			});
 		}
 
@@ -352,30 +388,29 @@ export class FestivalDO extends DurableObject {
 	}
 
 	async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
-		const raw = typeof message === "string" ? message : new TextDecoder().decode(message);
-		console.log(`[ws] recv: ${raw.slice(0, 200)}`);
+		// Only accept binary frames
+		if (typeof message === "string") {
+			this.#sendError(ws, "Expected binary frame, not text", ErrorCode.MALFORMED);
+			return;
+		}
 
-		let parsed: {
-			type: string;
-			topics?: string[];
-			topic?: string;
-			message?: GossipWireMessage;
-			sinceSeq?: number;
-		};
+		const raw = new Uint8Array(message);
+		console.log(`[ws] recv binary: ${raw.byteLength} bytes`);
 
+		let parsed: RelayClientMessage;
 		try {
-			parsed = JSON.parse(raw);
+			parsed = fromBinary(RelayClientMessageSchema, raw);
 		} catch {
-			ws.send(JSON.stringify({ type: "error", error: "Invalid JSON" }));
+			this.#sendError(ws, "Invalid protobuf message", ErrorCode.MALFORMED);
 			return;
 		}
 
 		let sess = this.#sessions.get(ws);
 		if (!sess) {
 			// Session not in memory — happens after hibernation, restore from attachment
-			const raw = ws.deserializeAttachment() as string | null;
-			const attachment = raw
-				? (JSON.parse(raw) as {
+			const rawAtt = ws.deserializeAttachment() as string | null;
+			const attachment = rawAtt
+				? (JSON.parse(rawAtt) as {
 						topics?: string[];
 						authenticated?: boolean;
 						publicKey?: string | null;
@@ -389,27 +424,28 @@ export class FestivalDO extends DurableObject {
 			this.#sessions.set(ws, sess);
 		}
 
-		switch (parsed.type) {
+		const { msg } = parsed;
+
+		switch (msg.case) {
 			case "auth": {
-				const authData = parsed as unknown as {
-					publicKey: string;
-					attestation: { message: string; signature: string; issuer: string };
-					signature: string;
-					timestamp: string;
-				};
-				if (!authData.publicKey || !authData.attestation || !authData.signature) {
-					ws.send(JSON.stringify({ type: "error", error: "Invalid auth message" }));
+				const authData = msg.value;
+				if (
+					authData.publicKey.length === 0 ||
+					!authData.attestation ||
+					authData.signature.length === 0
+				) {
+					this.#sendError(ws, "Invalid auth message", ErrorCode.MALFORMED);
 					break;
 				}
 				// Verify attestation signature against MainDO's public key (issuer)
 				const attMsg = new TextEncoder().encode(authData.attestation.message);
 				const attValid = await verify(
-					hexToBytes(authData.attestation.issuer),
+					authData.attestation.issuer,
 					attMsg,
-					hexToBytes(authData.attestation.signature),
+					authData.attestation.signature,
 				);
 				if (!attValid) {
-					ws.send(JSON.stringify({ type: "error", error: "Invalid attestation signature" }));
+					this.#sendError(ws, "Invalid attestation signature", ErrorCode.INVALID_SIGNATURE);
 					break;
 				}
 				// Check attestation expiry (with 7-day grace period)
@@ -417,38 +453,40 @@ export class FestivalDO extends DurableObject {
 				const expiresAt = Number.parseInt(parts[4], 10);
 				const graceExpiry = expiresAt + 7 * 24 * 60 * 60;
 				if (Date.now() / 1000 > graceExpiry) {
-					ws.send(JSON.stringify({ type: "error", error: "Attestation expired" }));
+					this.#sendError(ws, "Attestation expired", ErrorCode.UNAUTHORIZED);
 					break;
 				}
 				// Verify session signature (proves ownership of the Ed25519 key)
 				const sessionMsg = new TextEncoder().encode(`session:${authData.timestamp}`);
-				const sessionValid = await verify(
-					hexToBytes(authData.publicKey),
-					sessionMsg,
-					hexToBytes(authData.signature),
-				);
+				const sessionValid = await verify(authData.publicKey, sessionMsg, authData.signature);
 				if (!sessionValid) {
-					ws.send(JSON.stringify({ type: "error", error: "Invalid session signature" }));
+					this.#sendError(ws, "Invalid session signature", ErrorCode.INVALID_SIGNATURE);
 					break;
 				}
+				const publicKeyHex = bytesToHex(authData.publicKey);
 				sess.authenticated = true;
-				sess.publicKey = authData.publicKey;
+				sess.publicKey = publicKeyHex;
 				ws.serializeAttachment(
 					JSON.stringify({
 						topics: [...sess.topics],
 						authenticated: true,
-						publicKey: authData.publicKey,
+						publicKey: publicKeyHex,
 					}),
 				);
 				const adminCount = (
 					this.sql.exec("SELECT COUNT(*) as cnt FROM admins").one() as { cnt: number }
 				).cnt;
-				ws.send(JSON.stringify({ type: "auth_ok", authenticated: true, adminCount }));
+				this.#sendServerMsg(ws, {
+					msg: {
+						case: "authOk",
+						value: { authenticated: true, adminCount },
+					},
+				});
 				break;
 			}
 
 			case "subscribe": {
-				for (const topic of parsed.topics ?? []) {
+				for (const topic of msg.value.topics) {
 					sess.topics.add(topic);
 				}
 				ws.serializeAttachment(
@@ -459,12 +497,14 @@ export class FestivalDO extends DurableObject {
 					}),
 				);
 				console.log(`[ws] subscribed to: ${[...sess.topics].join(", ")}`);
-				ws.send(JSON.stringify({ type: "subscribed", topics: [...sess.topics] }));
+				this.#sendServerMsg(ws, {
+					msg: { case: "subscribed", value: { topics: [...sess.topics] } },
+				});
 				break;
 			}
 
 			case "unsubscribe": {
-				for (const topic of parsed.topics ?? []) {
+				for (const topic of msg.value.topics) {
 					sess.topics.delete(topic);
 				}
 				ws.serializeAttachment(
@@ -474,92 +514,88 @@ export class FestivalDO extends DurableObject {
 						publicKey: sess.publicKey,
 					}),
 				);
-				ws.send(JSON.stringify({ type: "subscribed", topics: [...sess.topics] }));
+				this.#sendServerMsg(ws, {
+					msg: { case: "subscribed", value: { topics: [...sess.topics] } },
+				});
 				break;
 			}
 
 			case "gossip": {
-				if (!parsed.topic || !parsed.message) break;
+				const { topic, message: envelope } = msg.value;
+				if (!topic || !envelope) break;
 
 				if (!sess.authenticated) {
-					ws.send(
-						JSON.stringify({
-							type: "error",
-							error: "Auth required for writes",
-						}),
-					);
+					this.#sendError(ws, "Auth required for writes", ErrorCode.UNAUTHORIZED);
 					break;
 				}
 
 				if (!this.#isWithinWindow()) {
-					ws.send(
-						JSON.stringify({
-							type: "error",
-							error: "Event is not active — gossip rejected",
-						}),
-					);
+					this.#sendError(ws, "Event is not active — gossip rejected", ErrorCode.UNAUTHORIZED);
 					break;
 				}
 
-				const msgData = JSON.stringify(parsed.message);
+				// Store the GossipEnvelope as BLOB
+				const envelopeBytes = toBinary(GossipEnvelopeSchema, envelope);
 				const result = this.sql
 					.exec(
 						"INSERT INTO gossip_log (topic, message) VALUES (?, ?) RETURNING seq",
-						parsed.topic,
-						msgData,
+						topic,
+						envelopeBytes,
 					)
 					.one() as { seq: number };
 
-				const broadcast = JSON.stringify({
-					type: "gossip",
-					topic: parsed.topic,
-					seq: result.seq,
-					message: parsed.message,
+				// Broadcast to other subscribed WS clients
+				const broadcastMsg = create(RelayServerMessageSchema, {
+					msg: {
+						case: "gossip",
+						value: {
+							topic,
+							seq: BigInt(result.seq),
+							message: envelope,
+						},
+					},
 				});
+				const broadcastBytes = toBinary(RelayServerMessageSchema, broadcastMsg);
 
 				for (const [other, otherSess] of this.#sessions) {
-					if (other !== ws && otherSess.topics.has(parsed.topic)) {
-						other.send(broadcast);
+					if (other !== ws && otherSess.topics.has(topic)) {
+						other.send(broadcastBytes);
 					}
 				}
 				break;
 			}
 
 			case "catchup": {
-				if (!parsed.topic) break;
-				const sinceSeq = parsed.sinceSeq ?? 0;
+				const { topic, sinceSeq } = msg.value;
+				if (!topic) break;
 
 				const rows = this.sql
 					.exec(
 						"SELECT seq, message, timestamp FROM gossip_log WHERE topic = ? AND seq > ? ORDER BY seq",
-						parsed.topic,
-						sinceSeq,
+						topic,
+						Number(sinceSeq),
 					)
-					.toArray() as { seq: number; message: string; timestamp: string }[];
+					.toArray() as { seq: number; message: ArrayBuffer; timestamp: string }[];
 
-				const messages: CatchupEntry[] = rows.map((r) => ({
-					seq: r.seq,
-					message: JSON.parse(r.message),
+				const messages = rows.map((r) => ({
+					seq: BigInt(r.seq),
+					message: fromBinary(GossipEnvelopeSchema, new Uint8Array(r.message)),
 					timestamp: r.timestamp,
 				}));
 
 				console.log(
-					`[ws] catchup: topic=${parsed.topic} sinceSeq=${sinceSeq} sending ${messages.length} messages`,
+					`[ws] catchup: topic=${topic} sinceSeq=${sinceSeq} sending ${messages.length} messages`,
 				);
-				ws.send(
-					JSON.stringify({
-						type: "catchup",
-						topic: parsed.topic,
-						messages,
-					}),
-				);
+				this.#sendServerMsg(ws, {
+					msg: { case: "catchup", value: { topic, messages } },
+				});
 				break;
 			}
 
-			case "sv_exchange": {
-				const { docId, sv: svBase64 } = parsed as { type: string; docId: string; sv: string };
-				if (!docId || !svBase64) {
-					ws.send(JSON.stringify({ type: "error", error: "sv_exchange requires docId and sv" }));
+			case "svExchange": {
+				const { docId, sv: clientSV } = msg.value;
+				if (!docId || clientSV.length === 0) {
+					this.#sendError(ws, "sv_exchange requires docId and sv", ErrorCode.MALFORMED);
 					break;
 				}
 
@@ -579,14 +615,12 @@ export class FestivalDO extends DurableObject {
 				// Apply any gossip_log entries that are festival_updates for this topic
 				const logEntries = this.sql
 					.exec("SELECT message FROM gossip_log WHERE topic = ? ORDER BY seq", topic)
-					.toArray() as { message: string }[];
+					.toArray() as { message: ArrayBuffer }[];
 
 				for (const entry of logEntries) {
-					const wireMsg = JSON.parse(entry.message) as GossipWireMessage;
-					if (wireMsg.kind === "festival_update" && wireMsg.payload) {
-						const signedUpdate = JSON.parse(wireMsg.payload) as { update: string };
-						const updateBytes = base64ToBytes(signedUpdate.update);
-						Y.applyUpdate(serverDoc, updateBytes);
+					const envelope = fromBinary(GossipEnvelopeSchema, new Uint8Array(entry.message));
+					if (envelope.payload.case === "festivalUpdate" && envelope.payload.value.signedUpdate) {
+						Y.applyUpdate(serverDoc, envelope.payload.value.signedUpdate.update);
 					}
 				}
 
@@ -599,37 +633,22 @@ export class FestivalDO extends DurableObject {
 				);
 
 				// Compute diff from client's state vector
-				const clientSV = base64ToBytes(svBase64);
 				const diff = Y.encodeStateAsUpdate(serverDoc, clientSV);
 
-				ws.send(
-					JSON.stringify({
-						type: "sv_diff",
-						docId,
-						diff: bytesToBase64(diff),
-					}),
-				);
+				this.#sendServerMsg(ws, {
+					msg: { case: "svDiff", value: { docId, diff } },
+				});
 				break;
 			}
 
-			case "chat_catchup": {
-				const {
-					topic: chatTopic,
-					sv: chatSv,
-					limit: chatLimit,
-				} = parsed as {
-					type: string;
-					topic: string;
-					sv: Record<string, number>;
-					limit?: number;
-				};
+			case "chatCatchup": {
+				const { topic: chatTopic, sv: chatSv, limit: chatLimit } = msg.value;
 				if (!chatTopic) {
-					ws.send(JSON.stringify({ type: "error", error: "chat_catchup requires topic" }));
+					this.#sendError(ws, "chat_catchup requires topic", ErrorCode.MALFORMED);
 					break;
 				}
 
-				const maxLimit = chatLimit ?? 50;
-				const svMap = chatSv ?? {};
+				const maxLimit = chatLimit || 50;
 
 				// Get chat messages from gossip_log for this topic
 				const chatRows = this.sql
@@ -638,50 +657,42 @@ export class FestivalDO extends DurableObject {
 						chatTopic,
 						maxLimit * 10,
 					)
-					.toArray() as { message: string }[];
+					.toArray() as { message: ArrayBuffer }[];
 
-				// Filter: parse each message, extract user_id and writer_seq (if present)
-				// Only include messages from writers not in sv, or with writer_seq > sv[writer]
-				const chatMessages: GossipWireMessage[] = [];
+				// Filter: parse each envelope, extract userId and writerSeq (if chat)
+				// Only include messages from writers not in sv, or with writerSeq > sv[writer]
+				const chatMessages = [];
 				for (const row of chatRows) {
-					const wireMsg = JSON.parse(row.message) as GossipWireMessage;
-					if (wireMsg.kind === "chat") {
-						try {
-							const chatPayload = JSON.parse(wireMsg.payload) as {
-								userId?: string;
-								writerSeq?: number;
-							};
-							const userId = chatPayload.userId;
-							const writerSeq = chatPayload.writerSeq ?? 0;
-							if (userId && userId in svMap) {
-								if (writerSeq > svMap[userId]) {
-									chatMessages.push(wireMsg);
-								}
-							} else {
-								chatMessages.push(wireMsg);
+					const envelope = fromBinary(GossipEnvelopeSchema, new Uint8Array(row.message));
+					if (envelope.payload.case === "chat") {
+						const chatPayload = envelope.payload.value;
+						const userId = chatPayload.userId;
+						const writerSeq = chatPayload.writerSeq ?? 0n;
+						if (userId && userId in chatSv) {
+							if (writerSeq > chatSv[userId]) {
+								chatMessages.push(envelope);
 							}
-						} catch {
-							chatMessages.push(wireMsg); // include if can't parse
+						} else {
+							chatMessages.push(envelope);
 						}
-					} else if (wireMsg.kind === "encrypted_chat") {
+					} else if (envelope.payload.case === "encryptedChat") {
 						// Can't filter encrypted chat by writer — include all
-						chatMessages.push(wireMsg);
+						chatMessages.push(envelope);
 					}
 					if (chatMessages.length >= maxLimit) break;
 				}
 
-				ws.send(
-					JSON.stringify({
-						type: "chat_diff",
-						topic: chatTopic,
-						messages: chatMessages,
-					}),
-				);
+				this.#sendServerMsg(ws, {
+					msg: {
+						case: "chatDiff",
+						value: { topic: chatTopic, messages: chatMessages },
+					},
+				});
 				break;
 			}
 
 			default:
-				ws.send(JSON.stringify({ type: "error", error: `Unknown type: ${parsed.type}` }));
+				this.#sendError(ws, `Unknown message case: ${msg.case}`, ErrorCode.MALFORMED);
 		}
 	}
 
@@ -763,24 +774,24 @@ export class FestivalDO extends DurableObject {
 		// Sign with the DO's Ed25519 key
 		const signature = await sign(this.#secretKey, updateBytes);
 
-		const signedUpdate = {
-			update: bytesToBase64(updateBytes),
-			author: "festival-do",
-			signature: bytesToBase64(signature),
-		};
+		// Build the GossipEnvelope as protobuf
+		const envelope = create(GossipEnvelopeSchema, {
+			payload: {
+				case: "festivalUpdate",
+				value: {
+					docId,
+					signedUpdate: {
+						update: updateBytes,
+						author: "festival-do",
+						signature,
+					},
+				},
+			},
+		});
 
-		const wireMessage: GossipWireMessage = {
-			kind: "festival_update",
-			doc_id: docId,
-			payload: JSON.stringify(signedUpdate),
-		};
-
-		// Store in gossip_log
-		this.sql.exec(
-			"INSERT INTO gossip_log (topic, message) VALUES (?, ?)",
-			topic,
-			JSON.stringify(wireMessage),
-		);
+		// Store envelope as BLOB in gossip_log
+		const envelopeBytes = toBinary(GossipEnvelopeSchema, envelope);
+		this.sql.exec("INSERT INTO gossip_log (topic, message) VALUES (?, ?)", topic, envelopeBytes);
 
 		// Also persist the consolidated Yrs doc for faster sv_exchange
 		const fullState = Y.encodeStateAsUpdate(doc);
@@ -794,6 +805,282 @@ export class FestivalDO extends DurableObject {
 			`[seedLineup] seeded ${docId}: ${lineup.stages.length} stages, ${lineup.days.length} days, ${lineup.sets.length} sets`,
 		);
 	}
+	// -----------------------------------------------------------------------
+	// Weather alarm
+	// -----------------------------------------------------------------------
+
+	/** DO alarm handler — fetches weather and writes to Yrs doc. */
+	async alarm() {
+		// Guard: bail if not configured
+		if (!this.#lat || !this.#lon || !this.#festivalId) {
+			console.log("[alarm] skipping — no lat/lon/festivalId configured");
+			return;
+		}
+
+		const now = new Date();
+
+		// Guard: stop if past closesAt (festival over)
+		if (this.#closesAt && now.toISOString() > this.#closesAt) {
+			console.log("[alarm] festival closed, not rescheduling");
+			return;
+		}
+
+		// Guard: if before opensAt - 24h, reschedule for that time
+		if (this.#opensAt) {
+			const earlyOpen = new Date(this.#opensAt);
+			earlyOpen.setDate(earlyOpen.getDate() - 1);
+			if (now < earlyOpen) {
+				console.log(`[alarm] too early, rescheduling for ${earlyOpen.toISOString()}`);
+				await this.ctx.storage.setAlarm(earlyOpen.getTime());
+				return;
+			}
+		}
+
+		// Fetch and write weather
+		try {
+			const weather = await this.#fetchWeather();
+			await this.#writeWeatherToDoc(weather);
+			console.log(`[alarm] weather updated for ${this.#festivalId}`);
+		} catch (err) {
+			console.error("[alarm] weather fetch/write failed:", err);
+		}
+
+		// Reschedule in 6 hours if still within window
+		const SIX_HOURS = 6 * 60 * 60 * 1000;
+		const next = new Date(now.getTime() + SIX_HOURS);
+		if (!this.#closesAt || next.toISOString() <= this.#closesAt) {
+			await this.ctx.storage.setAlarm(next.getTime());
+			console.log(`[alarm] next alarm at ${next.toISOString()}`);
+		}
+	}
+
+	/** Fetch hourly weather from Open-Meteo, capped to 1 day after festival closes. */
+	async #fetchWeather(): Promise<WeatherData> {
+		let forecastDays = 7;
+		if (this.#closesAt) {
+			const msLeft = new Date(this.#closesAt).getTime() - Date.now();
+			forecastDays = Math.max(1, Math.min(7, Math.ceil(msLeft / 86_400_000)));
+		}
+		const url = `https://api.open-meteo.com/v1/forecast?latitude=${this.#lat}&longitude=${this.#lon}&hourly=temperature_2m,precipitation_probability,weather_code,wind_speed_10m&forecast_days=${forecastDays}&timezone=auto`;
+		const resp = await fetch(url);
+		if (!resp.ok) {
+			throw new Error(`Open-Meteo error: ${resp.status} ${resp.statusText}`);
+		}
+		const data = (await resp.json()) as {
+			timezone: string;
+			hourly: {
+				time: string[];
+				temperature_2m: number[];
+				precipitation_probability: number[];
+				weather_code: number[];
+				wind_speed_10m: number[];
+			};
+		};
+		return {
+			updatedAt: new Date().toISOString(),
+			lat: this.#lat!,
+			lon: this.#lon!,
+			timezone: data.timezone,
+			hourly: data.hourly,
+		};
+	}
+
+	/** Merge weather into the Yrs doc and broadcast, following seedLineup pattern. */
+	async #writeWeatherToDoc(weather: WeatherData) {
+		if (!this.#secretKey || !this.#publicKey || !this.#festivalId) {
+			throw new Error("Not configured for weather writes");
+		}
+
+		const docId = `festival/${this.#festivalId}/state`;
+		const topic = docId;
+
+		// Load existing Yrs doc
+		const doc = new Y.Doc();
+		const stored = this.sql.exec("SELECT data FROM yrs_docs WHERE doc_id = ?", docId).toArray() as {
+			data: ArrayBuffer;
+		}[];
+
+		if (stored.length > 0) {
+			Y.applyUpdate(doc, new Uint8Array(stored[0].data));
+		}
+
+		// Replay gossip_log entries
+		const logEntries = this.sql
+			.exec("SELECT message FROM gossip_log WHERE topic = ? ORDER BY seq", topic)
+			.toArray() as { message: ArrayBuffer }[];
+
+		for (const entry of logEntries) {
+			const envelope = fromBinary(GossipEnvelopeSchema, new Uint8Array(entry.message));
+			if (envelope.payload.case === "festivalUpdate" && envelope.payload.value.signedUpdate) {
+				Y.applyUpdate(doc, envelope.payload.value.signedUpdate.update);
+			}
+		}
+
+		// Merge weather: keep past entries, replace from "now" onwards
+		const root = doc.getMap("root");
+		const existingRaw = root.get("weather") as string | undefined;
+		let merged = weather;
+
+		if (existingRaw) {
+			try {
+				const existing = JSON.parse(existingRaw) as WeatherData;
+				const nowIso = new Date().toISOString().slice(0, 16); // "YYYY-MM-DDTHH:MM"
+
+				// Find cutoff: entries before "now" from existing, from "now" onwards from fresh
+				const pastTimes: string[] = [];
+				const pastTemp: number[] = [];
+				const pastPrecip: number[] = [];
+				const pastCode: number[] = [];
+				const pastWind: number[] = [];
+
+				for (let i = 0; i < existing.hourly.time.length; i++) {
+					if (existing.hourly.time[i] < nowIso) {
+						pastTimes.push(existing.hourly.time[i]);
+						pastTemp.push(existing.hourly.temperature_2m[i]);
+						pastPrecip.push(existing.hourly.precipitation_probability[i]);
+						pastCode.push(existing.hourly.weather_code[i]);
+						pastWind.push(existing.hourly.wind_speed_10m[i]);
+					}
+				}
+
+				// Fresh entries from "now" onwards
+				const freshTimes: string[] = [];
+				const freshTemp: number[] = [];
+				const freshPrecip: number[] = [];
+				const freshCode: number[] = [];
+				const freshWind: number[] = [];
+
+				for (let i = 0; i < weather.hourly.time.length; i++) {
+					if (weather.hourly.time[i] >= nowIso) {
+						freshTimes.push(weather.hourly.time[i]);
+						freshTemp.push(weather.hourly.temperature_2m[i]);
+						freshPrecip.push(weather.hourly.precipitation_probability[i]);
+						freshCode.push(weather.hourly.weather_code[i]);
+						freshWind.push(weather.hourly.wind_speed_10m[i]);
+					}
+				}
+
+				merged = {
+					...weather,
+					hourly: {
+						time: [...pastTimes, ...freshTimes],
+						temperature_2m: [...pastTemp, ...freshTemp],
+						precipitation_probability: [...pastPrecip, ...freshPrecip],
+						weather_code: [...pastCode, ...freshCode],
+						wind_speed_10m: [...pastWind, ...freshWind],
+					},
+				};
+			} catch {
+				// If existing weather is corrupt, just use fresh data
+			}
+		}
+
+		// Trim entries past closesAt
+		if (this.#closesAt) {
+			const cutoff = this.#closesAt.slice(0, 16); // "YYYY-MM-DDTHH:MM"
+			const end = merged.hourly.time.findIndex((t) => t > cutoff);
+			if (end !== -1) {
+				merged.hourly.time = merged.hourly.time.slice(0, end);
+				merged.hourly.temperature_2m = merged.hourly.temperature_2m.slice(0, end);
+				merged.hourly.precipitation_probability = merged.hourly.precipitation_probability.slice(0, end);
+				merged.hourly.weather_code = merged.hourly.weather_code.slice(0, end);
+				merged.hourly.wind_speed_10m = merged.hourly.wind_speed_10m.slice(0, end);
+			}
+		}
+
+		// Get previous state vector for incremental diff
+		const prevSV = Y.encodeStateVector(doc);
+
+		// Write to Yrs doc
+		root.set("weather", JSON.stringify(merged));
+
+		// Encode incremental update
+		const update = Y.encodeStateAsUpdate(doc, prevSV);
+
+		// Sign with DO's Ed25519 key
+		const signature = await sign(this.#secretKey, update);
+
+		// Build the GossipEnvelope as protobuf
+		const envelope = create(GossipEnvelopeSchema, {
+			payload: {
+				case: "festivalUpdate",
+				value: {
+					docId,
+					signedUpdate: {
+						update,
+						author: "festival-do",
+						signature,
+					},
+				},
+			},
+		});
+
+		// Store envelope as BLOB in gossip_log
+		const envelopeBytes = toBinary(GossipEnvelopeSchema, envelope);
+		const result = this.sql
+			.exec(
+				"INSERT INTO gossip_log (topic, message) VALUES (?, ?) RETURNING seq",
+				topic,
+				envelopeBytes,
+			)
+			.one() as { seq: number };
+
+		// Persist consolidated doc
+		const fullState = Y.encodeStateAsUpdate(doc);
+		this.sql.exec(
+			"INSERT OR REPLACE INTO yrs_docs (doc_id, data, updated_at) VALUES (?, ?, datetime('now'))",
+			docId,
+			fullState,
+		);
+
+		// Broadcast to subscribed WS clients
+		const broadcastMsg = create(RelayServerMessageSchema, {
+			msg: {
+				case: "gossip",
+				value: {
+					topic,
+					seq: BigInt(result.seq),
+					message: envelope,
+				},
+			},
+		});
+		const broadcastBytes = toBinary(RelayServerMessageSchema, broadcastMsg);
+		for (const [ws, sess] of this.#sessions) {
+			if (sess.topics.has(topic)) {
+				ws.send(broadcastBytes);
+			}
+		}
+
+		console.log(
+			`[writeWeatherToDoc] wrote weather for ${docId}: ${merged.hourly.time.length} hourly entries`,
+		);
+	}
+
+	/** Arm the weather alarm. If no alarm is set, triggers immediately. */
+	async armWeatherAlarm() {
+		const existing = await this.ctx.storage.getAlarm();
+		if (existing) {
+			console.log(`[armWeatherAlarm] alarm already set for ${new Date(existing).toISOString()}`);
+			return;
+		}
+		await this.ctx.storage.setAlarm(Date.now());
+		console.log("[armWeatherAlarm] armed — triggering immediately");
+	}
+}
+
+/** Shape of weather data stored in the Yrs doc. */
+interface WeatherData {
+	updatedAt: string;
+	lat: number;
+	lon: number;
+	timezone: string;
+	hourly: {
+		time: string[];
+		temperature_2m: number[];
+		precipitation_probability: number[];
+		weather_code: number[];
+		wind_speed_10m: number[];
+	};
 }
 
 // ---------------------------------------------------------------------------
@@ -806,6 +1093,12 @@ function hexToBytes(hex: string): Uint8Array {
 		bytes[i / 2] = Number.parseInt(hex.substring(i, i + 2), 16);
 	}
 	return bytes;
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+	return Array.from(bytes)
+		.map((b) => b.toString(16).padStart(2, "0"))
+		.join("");
 }
 
 function bytesToBase64(bytes: Uint8Array): string {

@@ -9,15 +9,15 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::sync::{Arc, RwLock};
 
-use tokio::sync::Mutex;
-
 use crate::chat::ChatManager;
 use crate::db::Database;
 use crate::doc_manager::DocManager;
-use crate::gossip_manager::{dispatch_message, GossipMessage, GossipWireMessage};
+use crate::gossip_manager::{dispatch_message, GossipMessage};
+use crate::key_cache::GroupKeyCache;
 use crate::notifier::ResourceNotifier;
+use crate::proto;
 use crate::resource::{Priority, ResourceKind, ResourceRegistry};
-use crate::types::ChatMessage;
+use crate::types::{ChatMessage, SignedUpdate};
 
 // ---------------------------------------------------------------------------
 // ChatStateVector — per-writer high water marks for chat sync
@@ -81,14 +81,11 @@ pub struct SyncReport {
 // ---------------------------------------------------------------------------
 
 /// Abstract peer connection — works for both WS relay and iroh-gossip.
-///
-/// Implementations must be Send + Sync to work with async code.
 pub trait PeerConnection: Send + Sync {
     /// Subscribe to a set of topic strings.
     fn subscribe(&self, topics: Vec<String>) -> impl Future<Output = anyhow::Result<()>> + Send;
 
     /// Perform state vector exchange for a CRDT doc.
-    /// Sends our SV, receives updates we're missing.
     fn sv_exchange(&self, doc_id: &str, sv: &[u8]) -> impl Future<Output = anyhow::Result<()>> + Send;
 
     /// Request chat messages since our state vector.
@@ -110,20 +107,22 @@ pub trait PeerConnection: Send + Sync {
 /// Orchestrates sync for all registered resources in priority order.
 pub struct SyncOrchestrator {
     registry: Arc<RwLock<ResourceRegistry>>,
-    doc_manager: Arc<Mutex<DocManager>>,
+    doc_manager: Arc<DocManager>,
     #[allow(dead_code)]
     chat_manager: Arc<ChatManager>,
     db: Arc<Database>,
     notifier: Arc<ResourceNotifier>,
     /// Cached festival public keys for signature verification.
     festival_public_keys: Arc<RwLock<HashMap<String, [u8; 32]>>>,
+    /// In-memory group key cache.
+    key_cache: Arc<GroupKeyCache>,
 }
 
 impl SyncOrchestrator {
     /// Create a new SyncOrchestrator.
     pub fn new(
         registry: Arc<RwLock<ResourceRegistry>>,
-        doc_manager: Arc<Mutex<DocManager>>,
+        doc_manager: Arc<DocManager>,
         chat_manager: Arc<ChatManager>,
         db: Arc<Database>,
         notifier: Arc<ResourceNotifier>,
@@ -135,6 +134,7 @@ impl SyncOrchestrator {
             db,
             notifier,
             festival_public_keys: Arc::new(RwLock::new(HashMap::new())),
+            key_cache: Arc::new(GroupKeyCache::new()),
         }
     }
 
@@ -151,12 +151,16 @@ impl SyncOrchestrator {
     }
 
     /// Run subscribe→catch-up→live for all resources with a peer.
-    ///
-    /// Resources are synced in priority order (CRITICAL first, then HIGH, etc.).
     pub async fn sync_with_peer<P: PeerConnection>(&self, peer: &P) -> anyhow::Result<SyncReport> {
+        self.notifier.sync_started();
+        let result = self.sync_with_peer_inner(peer).await;
+        self.notifier.sync_completed();
+        result
+    }
+
+    async fn sync_with_peer_inner<P: PeerConnection>(&self, peer: &P) -> anyhow::Result<SyncReport> {
         let mut report = SyncReport::default();
 
-        // Get resources sorted by priority
         let resources: Vec<(String, ResourceKind, String, Priority)> = {
             let reg = self.registry.read().map_err(|_| anyhow::anyhow!("registry lock poisoned"))?;
             reg.by_priority()
@@ -172,13 +176,11 @@ impl SyncOrchestrator {
                 .collect()
         };
 
-        // Subscribe to all topics first
         let topics: Vec<String> = resources.iter().map(|(_, _, t, _)| t.clone()).collect();
         if !topics.is_empty() {
             peer.subscribe(topics).await?;
         }
 
-        // Then sync each resource
         for (id, kind, topic, _priority) in resources {
             match self.sync_resource_impl(&id, kind, &topic, peer).await {
                 Ok((crdt_count, chat_count)) => {
@@ -215,7 +217,6 @@ impl SyncOrchestrator {
             .map(|_| ())
     }
 
-    /// Internal sync implementation.
     async fn sync_resource_impl<P: PeerConnection>(
         &self,
         resource_id: &str,
@@ -225,48 +226,47 @@ impl SyncOrchestrator {
     ) -> anyhow::Result<(u32, u32)> {
         match kind {
             ResourceKind::CrdtDoc => {
-                // Send state vector, peer will respond with diff
                 let sv = {
-                    let mut dm = self.doc_manager.lock().await;
-                    dm.get_or_create(resource_id);
-                    dm.get_state_vector(resource_id)?
+                    self.doc_manager.get_or_create(resource_id);
+                    self.doc_manager.get_state_vector(resource_id)?
                 };
                 peer.sv_exchange(resource_id, &sv).await?;
-                // The actual update will arrive via handle_incoming
                 Ok((1, 0))
             }
             ResourceKind::AppendLog => {
-                // Build chat state vector from existing messages
                 let messages = self.db.get_chat_messages(topic, 1000, 0)?;
                 let csv = ChatStateVector::from_messages(&messages);
                 peer.chat_catchup(topic, &csv, 100).await?;
-                // Messages will arrive via handle_incoming
                 Ok((0, 1))
             }
         }
     }
 
-    /// Handle an incoming gossip message, routing to the correct handler.
-    ///
-    /// This is called when a message arrives from either WS relay or iroh-gossip.
-    pub async fn handle_incoming(
+    /// Handle an incoming gossip envelope from the wire (protobuf bytes).
+    pub async fn handle_incoming_bytes(
         &self,
         topic: &str,
-        wire: &GossipWireMessage,
+        bytes: &[u8],
     ) -> anyhow::Result<()> {
-        // Determine festival ID from topic for public key lookup
+        let envelope = proto::decode_envelope(bytes)?;
+        self.handle_incoming_envelope(topic, &envelope).await
+    }
+
+    /// Handle an incoming GossipEnvelope, routing to the correct handler.
+    pub async fn handle_incoming_envelope(
+        &self,
+        topic: &str,
+        envelope: &proto::GossipEnvelope,
+    ) -> anyhow::Result<()> {
         let festival_pk = self.extract_festival_public_key(topic);
 
-        // Decode wire message to GossipMessage
-        let gossip_msg = self.decode_wire_message(wire).await?;
+        let gossip_msg = self.decode_envelope(envelope)?;
         let Some(ref msg) = gossip_msg else {
-            return Ok(()); // Message type not handled or missing key
+            return Ok(());
         };
 
-        // Dispatch to handlers
-        let mut dm = self.doc_manager.lock().await;
         let pk = festival_pk.unwrap_or([0u8; 32]);
-        dispatch_message(&mut dm, &self.db, msg.clone(), &pk)?;
+        dispatch_message(&self.doc_manager, &self.db, msg.clone(), &pk)?;
 
         // Notify watchers after successful dispatch
         match msg {
@@ -283,146 +283,112 @@ impl SyncOrchestrator {
             }
             GossipMessage::EncryptedChat { .. } => {
                 // Encrypted chat doesn't have direct topic info after decryption
-                // TODO: track group chat topics
             }
-            GossipMessage::SyncRequest { .. } => {
-                // SyncRequest is handled at a higher level, no notification needed
-            }
+            GossipMessage::SyncRequest { .. } => {}
         }
 
         Ok(())
     }
 
+    /// Decode a GossipEnvelope using the in-memory key cache (no DB blocking).
+    fn decode_envelope(
+        &self,
+        envelope: &proto::GossipEnvelope,
+    ) -> anyhow::Result<Option<GossipMessage>> {
+        use proto::gossip_envelope::Payload;
+
+        let payload = envelope
+            .payload
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("empty gossip envelope"))?;
+
+        match payload {
+            Payload::FestivalUpdate(fu) => {
+                let signed = fu
+                    .signed_update
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("festival_update missing signed_update"))?;
+                Ok(Some(GossipMessage::FestivalUpdate {
+                    doc_id: fu.doc_id.clone(),
+                    signed_update: SignedUpdate {
+                        update: signed.update.clone(),
+                        author: signed.author.clone(),
+                        signature: signed.signature.clone(),
+                    },
+                }))
+            }
+
+            Payload::Chat(chat) => Ok(Some(GossipMessage::Chat(chat.clone().into()))),
+
+            Payload::GroupUpdate(gu) => {
+                let group_key = self
+                    .key_cache
+                    .get_or_load(&gu.group_key_id, &self.db)?
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("group_update: unknown group key {}", gu.group_key_id)
+                    })?;
+                Ok(Some(GossipMessage::GroupUpdate {
+                    doc_id: gu.doc_id.clone(),
+                    encrypted: gu.encrypted.clone(),
+                    group_key,
+                }))
+            }
+
+            Payload::EncryptedChat(ec) => {
+                let group_key = self
+                    .key_cache
+                    .get_or_load(&ec.group_key_id, &self.db)?
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("encrypted_chat: unknown group key {}", ec.group_key_id)
+                    })?;
+                Ok(Some(GossipMessage::EncryptedChat {
+                    group_key,
+                    encrypted: ec.encrypted.clone(),
+                }))
+            }
+
+            Payload::SyncRequest(_) => {
+                tracing::debug!("sync_request received; handled at higher level");
+                Ok(None)
+            }
+
+            Payload::SyncResponse(sr) => {
+                let group_key = self
+                    .key_cache
+                    .get_or_load(&sr.group_key_id, &self.db)?
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("sync_response: unknown group key {}", sr.group_key_id)
+                    })?;
+                Ok(Some(GossipMessage::SyncResponse {
+                    doc_id: sr.doc_id.clone(),
+                    encrypted_diff: sr.encrypted_diff.clone(),
+                    group_key,
+                }))
+            }
+
+            Payload::SyncUpdate(su) => {
+                let group_key = self
+                    .key_cache
+                    .get_or_load(&su.group_key_id, &self.db)?
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("sync_update: unknown group key {}", su.group_key_id)
+                    })?;
+                Ok(Some(GossipMessage::SyncUpdate {
+                    doc_id: su.doc_id.clone(),
+                    encrypted_diff: su.encrypted_diff.clone(),
+                    group_key,
+                }))
+            }
+        }
+    }
+
     /// Extract festival public key from topic string if applicable.
     fn extract_festival_public_key(&self, topic: &str) -> Option<[u8; 32]> {
-        // Topics like "festival/{id}/state" or "offbeat/{id}/state"
         let parts: Vec<&str> = topic.split('/').collect();
         if parts.len() >= 2 && (parts[0] == "festival" || parts[0] == "offbeat") {
             return self.get_festival_public_key(parts[1]);
         }
         None
-    }
-
-    /// Decode a wire message, performing DB lookups for group keys.
-    async fn decode_wire_message(
-        &self,
-        wire: &GossipWireMessage,
-    ) -> anyhow::Result<Option<GossipMessage>> {
-        use base64::Engine as _;
-        let b64 = base64::engine::general_purpose::STANDARD;
-
-        match wire.kind.as_str() {
-            "festival_update" => {
-                let signed_update: crate::types::SignedUpdate =
-                    serde_json::from_str(&wire.payload)?;
-                Ok(Some(GossipMessage::FestivalUpdate {
-                    doc_id: wire
-                        .doc_id
-                        .clone()
-                        .ok_or_else(|| anyhow::anyhow!("festival_update missing doc_id"))?,
-                    signed_update,
-                }))
-            }
-
-            "chat" => {
-                let chat: ChatMessage = serde_json::from_str(&wire.payload)?;
-                Ok(Some(GossipMessage::Chat(chat)))
-            }
-
-            "group_update" => {
-                let key_id = wire
-                    .group_key_id
-                    .as_deref()
-                    .ok_or_else(|| anyhow::anyhow!("group_update missing group_key_id"))?;
-
-                let db = Arc::clone(&self.db);
-                let key_id_owned = key_id.to_string();
-                let group_key = tokio::task::spawn_blocking(move || db.load_group_key(&key_id_owned))
-                    .await??
-                    .ok_or_else(|| anyhow::anyhow!("group_update: unknown group key {key_id}"))?;
-
-                let encrypted = b64
-                    .decode(&wire.payload)
-                    .map_err(|e| anyhow::anyhow!("group_update: base64 decode: {e}"))?;
-
-                Ok(Some(GossipMessage::GroupUpdate {
-                    doc_id: wire
-                        .doc_id
-                        .clone()
-                        .ok_or_else(|| anyhow::anyhow!("group_update missing doc_id"))?,
-                    encrypted,
-                    group_key,
-                }))
-            }
-
-            "encrypted_chat" => {
-                let key_id = wire
-                    .group_key_id
-                    .as_deref()
-                    .ok_or_else(|| anyhow::anyhow!("encrypted_chat missing group_key_id"))?;
-
-                let db = Arc::clone(&self.db);
-                let key_id_owned = key_id.to_string();
-                let group_key = tokio::task::spawn_blocking(move || db.load_group_key(&key_id_owned))
-                    .await??
-                    .ok_or_else(|| anyhow::anyhow!("encrypted_chat: unknown group key {key_id}"))?;
-
-                let encrypted = b64
-                    .decode(&wire.payload)
-                    .map_err(|e| anyhow::anyhow!("encrypted_chat: base64 decode: {e}"))?;
-
-                Ok(Some(GossipMessage::EncryptedChat { group_key, encrypted }))
-            }
-
-            "sync_response" | "sync_update" => {
-                let key_id = wire.group_key_id.as_deref();
-                if key_id.is_none() {
-                    tracing::warn!("sync message without group_key_id; skipping");
-                    return Ok(None);
-                }
-                let key_id = key_id.unwrap();
-
-                let db = Arc::clone(&self.db);
-                let key_id_owned = key_id.to_string();
-                let group_key = tokio::task::spawn_blocking(move || db.load_group_key(&key_id_owned))
-                    .await??
-                    .ok_or_else(|| anyhow::anyhow!("sync message: unknown group key {key_id}"))?;
-
-                let encrypted_diff = b64
-                    .decode(&wire.payload)
-                    .map_err(|e| anyhow::anyhow!("sync message: base64 decode: {e}"))?;
-
-                let doc_id = wire
-                    .doc_id
-                    .clone()
-                    .ok_or_else(|| anyhow::anyhow!("sync message missing doc_id"))?;
-
-                if wire.kind == "sync_response" {
-                    Ok(Some(GossipMessage::SyncResponse {
-                        doc_id,
-                        encrypted_diff,
-                        group_key,
-                    }))
-                } else {
-                    Ok(Some(GossipMessage::SyncUpdate {
-                        doc_id,
-                        encrypted_diff,
-                        group_key,
-                    }))
-                }
-            }
-
-            "sync_request" => {
-                // SyncRequest needs special handling — we need to respond
-                tracing::debug!("sync_request received; handled at higher level");
-                Ok(None)
-            }
-
-            other => {
-                tracing::warn!("unknown message kind: {other}; skipping");
-                Ok(None)
-            }
-        }
     }
 }
 
@@ -511,7 +477,7 @@ mod tests {
 
     fn create_orchestrator() -> SyncOrchestrator {
         let db = test_db();
-        let doc_manager = Arc::new(Mutex::new(crate::doc_manager::DocManager::new(db.clone())));
+        let doc_manager = Arc::new(crate::doc_manager::DocManager::new(db.clone()));
         let chat_manager = Arc::new(crate::chat::ChatManager::new(db.clone(), doc_manager.clone()));
         let registry = Arc::new(RwLock::new(ResourceRegistry::new()));
         let notifier = Arc::new(ResourceNotifier::new());
@@ -522,15 +488,12 @@ mod tests {
     fn test_orchestrator_festival_public_key_cache() {
         let orch = create_orchestrator();
 
-        // Initially no key
         assert!(orch.get_festival_public_key("fest1").is_none());
 
-        // Set and retrieve
         let key = [42u8; 32];
         orch.set_festival_public_key("fest1", key);
         assert_eq!(orch.get_festival_public_key("fest1"), Some(key));
 
-        // Different festival still none
         assert!(orch.get_festival_public_key("fest2").is_none());
     }
 
@@ -541,160 +504,103 @@ mod tests {
         let key = [99u8; 32];
         orch.set_festival_public_key("glastonbury", key);
 
-        // Festival topic format
         assert_eq!(
             orch.extract_festival_public_key("festival/glastonbury/state"),
             Some(key)
         );
-
-        // Offbeat topic format
         assert_eq!(
             orch.extract_festival_public_key("offbeat/glastonbury/chat"),
             Some(key)
         );
-
-        // Unknown festival
         assert!(orch.extract_festival_public_key("festival/unknown/state").is_none());
-
-        // Non-festival topic
         assert!(orch.extract_festival_public_key("group/abc123/state").is_none());
-
-        // Malformed topic
         assert!(orch.extract_festival_public_key("invalid").is_none());
     }
 
     #[tokio::test]
-    async fn test_decode_wire_message_festival_update() {
+    async fn test_handle_incoming_festival_update() {
         let orch = create_orchestrator();
 
         let signed = crate::types::SignedUpdate {
-            update: "dXBkYXRl".to_string(), // base64 "update"
+            update: b"update".to_vec(),
             author: "organizer".to_string(),
-            signature: "c2ln".to_string(), // base64 "sig"
+            signature: b"sig".to_vec(),
         };
 
-        let wire = GossipWireMessage {
-            kind: "festival_update".to_string(),
-            payload: serde_json::to_string(&signed).unwrap(),
-            doc_id: Some("festival/test/state".to_string()),
-            group_key_id: None,
+        let envelope = proto::GossipEnvelope {
+            payload: Some(proto::gossip_envelope::Payload::FestivalUpdate(
+                proto::FestivalUpdate {
+                    doc_id: "festival/test/state".to_string(),
+                    signed_update: Some(proto::SignedUpdate {
+                        update: signed.update.clone(),
+                        author: signed.author.clone(),
+                        signature: signed.signature.clone(),
+                    }),
+                },
+            )),
         };
 
-        let result = orch.decode_wire_message(&wire).await.unwrap();
-        assert!(matches!(result, Some(GossipMessage::FestivalUpdate { .. })));
+        let msg = orch.decode_envelope(&envelope).unwrap();
+        assert!(matches!(msg, Some(GossipMessage::FestivalUpdate { .. })));
 
-        if let Some(GossipMessage::FestivalUpdate { doc_id, signed_update }) = result {
+        if let Some(GossipMessage::FestivalUpdate { doc_id, signed_update }) = msg {
             assert_eq!(doc_id, "festival/test/state");
             assert_eq!(signed_update.author, "organizer");
         }
     }
 
     #[tokio::test]
-    async fn test_decode_wire_message_chat() {
+    async fn test_handle_incoming_chat() {
         let orch = create_orchestrator();
 
-        let chat = ChatMessage {
-            id: "msg1".to_string(),
-            user_id: "user1".to_string(),
-            display_name: "User".to_string(),
-            text: "hello".to_string(),
-            topic: "test".to_string(),
-            stage_id: None,
-            timestamp: "2026-01-01".to_string(),
-            writer_seq: 1,
+        let envelope = proto::GossipEnvelope {
+            payload: Some(proto::gossip_envelope::Payload::Chat(
+                proto::ChatMessage {
+                    id: "msg1".to_string(),
+                    user_id: "user1".to_string(),
+                    display_name: "User".to_string(),
+                    text: "hello".to_string(),
+                    topic: "test".to_string(),
+                    stage_id: None,
+                    timestamp: "2026-01-01".to_string(),
+                    writer_seq: 1,
+                },
+            )),
         };
 
-        let wire = GossipWireMessage {
-            kind: "chat".to_string(),
-            payload: serde_json::to_string(&chat).unwrap(),
-            doc_id: None,
-            group_key_id: None,
-        };
+        let msg = orch.decode_envelope(&envelope).unwrap();
+        assert!(matches!(msg, Some(GossipMessage::Chat(_))));
 
-        let result = orch.decode_wire_message(&wire).await.unwrap();
-        assert!(matches!(result, Some(GossipMessage::Chat(_))));
-
-        if let Some(GossipMessage::Chat(msg)) = result {
-            assert_eq!(msg.id, "msg1");
-            assert_eq!(msg.text, "hello");
+        if let Some(GossipMessage::Chat(chat)) = msg {
+            assert_eq!(chat.id, "msg1");
+            assert_eq!(chat.text, "hello");
         }
     }
 
     #[tokio::test]
-    async fn test_decode_wire_message_unknown_kind() {
+    async fn test_handle_incoming_empty_envelope() {
         let orch = create_orchestrator();
 
-        let wire = GossipWireMessage {
-            kind: "totally_unknown".to_string(),
-            payload: "{}".to_string(),
-            doc_id: None,
-            group_key_id: None,
-        };
-
-        let result = orch.decode_wire_message(&wire).await.unwrap();
-        assert!(result.is_none());
-    }
-
-    #[tokio::test]
-    async fn test_decode_wire_message_sync_request_skipped() {
-        let orch = create_orchestrator();
-
-        let wire = GossipWireMessage {
-            kind: "sync_request".to_string(),
-            payload: "{}".to_string(),
-            doc_id: Some("doc".to_string()),
-            group_key_id: Some("key".to_string()),
-        };
-
-        let result = orch.decode_wire_message(&wire).await.unwrap();
-        // sync_request is handled at a higher level
-        assert!(result.is_none());
-    }
-
-    #[tokio::test]
-    async fn test_decode_wire_message_group_update_missing_key() {
-        let orch = create_orchestrator();
-
-        let wire = GossipWireMessage {
-            kind: "group_update".to_string(),
-            payload: "encrypted_data".to_string(),
-            doc_id: Some("group/test".to_string()),
-            group_key_id: None, // Missing!
-        };
-
-        let result = orch.decode_wire_message(&wire).await;
+        let envelope = proto::GossipEnvelope { payload: None };
+        let result = orch.decode_envelope(&envelope);
         assert!(result.is_err());
     }
 
     #[tokio::test]
-    async fn test_decode_wire_message_encrypted_chat_unknown_group() {
+    async fn test_handle_incoming_sync_request_skipped() {
         let orch = create_orchestrator();
 
-        let wire = GossipWireMessage {
-            kind: "encrypted_chat".to_string(),
-            payload: "ZW5jcnlwdGVk".to_string(), // base64 "encrypted"
-            doc_id: None,
-            group_key_id: Some("unknown_group_id".to_string()),
+        let envelope = proto::GossipEnvelope {
+            payload: Some(proto::gossip_envelope::Payload::SyncRequest(
+                proto::SyncRequest {
+                    doc_id: "doc".to_string(),
+                    encrypted_sv: vec![],
+                    group_key_id: "key".to_string(),
+                },
+            )),
         };
 
-        // Should fail because group key is not in DB
-        let result = orch.decode_wire_message(&wire).await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_decode_wire_message_sync_without_group_key() {
-        let orch = create_orchestrator();
-
-        let wire = GossipWireMessage {
-            kind: "sync_response".to_string(),
-            payload: "ZGF0YQ==".to_string(),
-            doc_id: Some("doc".to_string()),
-            group_key_id: None, // Missing
-        };
-
-        // Should return None (skipped)
-        let result = orch.decode_wire_message(&wire).await.unwrap();
+        let result = orch.decode_envelope(&envelope).unwrap();
         assert!(result.is_none());
     }
 
@@ -748,7 +654,6 @@ mod tests {
 
         let report = orch.sync_with_peer(&peer).await.unwrap();
 
-        // Empty registry = nothing to sync
         assert_eq!(report.resources_synced, 0);
         assert!(report.failed.is_empty());
         assert!(peer.subscribed.lock().unwrap().is_empty());
@@ -756,20 +661,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_sync_with_peer_with_resources() {
-        use crate::resource::{FestivalState, StageChat};
+        use crate::resource::Resource;
 
         let db = test_db();
-        let doc_manager = Arc::new(Mutex::new(crate::doc_manager::DocManager::new(db.clone())));
+        let doc_manager = Arc::new(crate::doc_manager::DocManager::new(db.clone()));
         let chat_manager = Arc::new(crate::chat::ChatManager::new(db.clone(), doc_manager.clone()));
         let registry = Arc::new(RwLock::new(ResourceRegistry::new()));
 
         let dummy_key = [0u8; 32];
 
-        // Register some resources
         {
             let mut reg = registry.write().unwrap();
-            reg.register(Box::new(FestivalState::new("fest1", dummy_key)));
-            reg.register(Box::new(StageChat::new("fest1", "main-stage", dummy_key)));
+            reg.register(Resource::festival_state("fest1", dummy_key));
+            reg.register(Resource::stage_chat("fest1", "main-stage", dummy_key));
         }
 
         let notifier = Arc::new(ResourceNotifier::new());
@@ -778,17 +682,14 @@ mod tests {
 
         let report = orch.sync_with_peer(&peer).await.unwrap();
 
-        // Should have synced 2 resources
         assert_eq!(report.resources_synced, 2);
         assert!(report.failed.is_empty());
 
-        // Check subscriptions
         let subs = peer.subscribed.lock().unwrap();
         assert_eq!(subs.len(), 2);
 
-        // Check sv_exchanges (only for CRDT docs)
         let exchanges = peer.sv_exchanges.lock().unwrap();
-        assert_eq!(exchanges.len(), 1); // FestivalState is CrdtDoc
+        assert_eq!(exchanges.len(), 1);
         assert!(exchanges[0].contains("fest1"));
     }
 
@@ -801,11 +702,10 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // Helper to create orchestrator with a group key in DB
     fn create_orchestrator_with_group_key(group_id: &str, group_key: [u8; 32]) -> SyncOrchestrator {
         let db = test_db();
         db.save_group(group_id, "test-fest", "Test Group", &group_key).unwrap();
-        let doc_manager = Arc::new(Mutex::new(crate::doc_manager::DocManager::new(db.clone())));
+        let doc_manager = Arc::new(crate::doc_manager::DocManager::new(db.clone()));
         let chat_manager = Arc::new(crate::chat::ChatManager::new(db.clone(), doc_manager.clone()));
         let registry = Arc::new(RwLock::new(ResourceRegistry::new()));
         let notifier = Arc::new(ResourceNotifier::new());
@@ -813,24 +713,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_decode_wire_message_group_update_with_valid_key() {
-        use base64::Engine as _;
-        let b64 = base64::engine::general_purpose::STANDARD;
-
+    async fn test_decode_group_update_with_valid_key() {
         let group_key = crate::crypto::generate_group_key();
         let group_id = crate::crypto::group_id_from_key(&group_key);
         let orch = create_orchestrator_with_group_key(&group_id, group_key);
 
         let encrypted = crate::crypto::encrypt(&group_key, b"test data").unwrap();
 
-        let wire = GossipWireMessage {
-            kind: "group_update".to_string(),
-            payload: b64.encode(&encrypted),
-            doc_id: Some(format!("group/{group_id}")),
-            group_key_id: Some(group_id.clone()),
+        let envelope = proto::GossipEnvelope {
+            payload: Some(proto::gossip_envelope::Payload::GroupUpdate(
+                proto::GroupUpdate {
+                    doc_id: format!("group/{group_id}"),
+                    encrypted: encrypted.clone(),
+                    group_key_id: group_id.clone(),
+                },
+            )),
         };
 
-        let result = orch.decode_wire_message(&wire).await.unwrap();
+        let result = orch.decode_envelope(&envelope).unwrap();
         assert!(matches!(result, Some(GossipMessage::GroupUpdate { .. })));
 
         if let Some(GossipMessage::GroupUpdate { doc_id, encrypted: enc, group_key: key }) = result {
@@ -841,150 +741,45 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_decode_wire_message_encrypted_chat_with_valid_key() {
-        use base64::Engine as _;
-        let b64 = base64::engine::general_purpose::STANDARD;
-
+    async fn test_decode_encrypted_chat_with_valid_key() {
         let group_key = crate::crypto::generate_group_key();
         let group_id = crate::crypto::group_id_from_key(&group_key);
         let orch = create_orchestrator_with_group_key(&group_id, group_key);
 
         let encrypted = crate::crypto::encrypt(&group_key, b"chat message").unwrap();
 
-        let wire = GossipWireMessage {
-            kind: "encrypted_chat".to_string(),
-            payload: b64.encode(&encrypted),
-            doc_id: None,
-            group_key_id: Some(group_id.clone()),
+        let envelope = proto::GossipEnvelope {
+            payload: Some(proto::gossip_envelope::Payload::EncryptedChat(
+                proto::EncryptedPayload {
+                    encrypted: encrypted.clone(),
+                    group_key_id: group_id.clone(),
+                },
+            )),
         };
 
-        let result = orch.decode_wire_message(&wire).await.unwrap();
+        let result = orch.decode_envelope(&envelope).unwrap();
         assert!(matches!(result, Some(GossipMessage::EncryptedChat { .. })));
-
-        if let Some(GossipMessage::EncryptedChat { group_key: key, encrypted: enc }) = result {
-            assert_eq!(key, group_key);
-            assert_eq!(enc, encrypted);
-        }
     }
 
     #[tokio::test]
-    async fn test_decode_wire_message_sync_response_with_valid_key() {
-        use base64::Engine as _;
-        let b64 = base64::engine::general_purpose::STANDARD;
-
+    async fn test_decode_sync_response_with_valid_key() {
         let group_key = crate::crypto::generate_group_key();
         let group_id = crate::crypto::group_id_from_key(&group_key);
         let orch = create_orchestrator_with_group_key(&group_id, group_key);
 
         let encrypted_diff = crate::crypto::encrypt(&group_key, b"diff data").unwrap();
 
-        let wire = GossipWireMessage {
-            kind: "sync_response".to_string(),
-            payload: b64.encode(&encrypted_diff),
-            doc_id: Some("group/test-doc".to_string()),
-            group_key_id: Some(group_id.clone()),
+        let envelope = proto::GossipEnvelope {
+            payload: Some(proto::gossip_envelope::Payload::SyncResponse(
+                proto::SyncResponse {
+                    doc_id: "group/test-doc".to_string(),
+                    encrypted_diff: encrypted_diff.clone(),
+                    group_key_id: group_id.clone(),
+                },
+            )),
         };
 
-        let result = orch.decode_wire_message(&wire).await.unwrap();
+        let result = orch.decode_envelope(&envelope).unwrap();
         assert!(matches!(result, Some(GossipMessage::SyncResponse { .. })));
-
-        if let Some(GossipMessage::SyncResponse { doc_id, encrypted_diff: enc, group_key: key }) = result {
-            assert_eq!(doc_id, "group/test-doc");
-            assert_eq!(key, group_key);
-            assert_eq!(enc, encrypted_diff);
-        }
-    }
-
-    #[tokio::test]
-    async fn test_decode_wire_message_sync_update_with_valid_key() {
-        use base64::Engine as _;
-        let b64 = base64::engine::general_purpose::STANDARD;
-
-        let group_key = crate::crypto::generate_group_key();
-        let group_id = crate::crypto::group_id_from_key(&group_key);
-        let orch = create_orchestrator_with_group_key(&group_id, group_key);
-
-        let encrypted_diff = crate::crypto::encrypt(&group_key, b"update data").unwrap();
-
-        let wire = GossipWireMessage {
-            kind: "sync_update".to_string(),
-            payload: b64.encode(&encrypted_diff),
-            doc_id: Some("group/test-doc".to_string()),
-            group_key_id: Some(group_id.clone()),
-        };
-
-        let result = orch.decode_wire_message(&wire).await.unwrap();
-        assert!(matches!(result, Some(GossipMessage::SyncUpdate { .. })));
-
-        if let Some(GossipMessage::SyncUpdate { doc_id, encrypted_diff: enc, group_key: key }) = result {
-            assert_eq!(doc_id, "group/test-doc");
-            assert_eq!(key, group_key);
-            assert_eq!(enc, encrypted_diff);
-        }
-    }
-
-    #[tokio::test]
-    async fn test_decode_wire_message_festival_update_missing_doc_id() {
-        let orch = create_orchestrator();
-
-        let signed = crate::types::SignedUpdate {
-            update: "dXBkYXRl".to_string(),
-            author: "org".to_string(),
-            signature: "c2ln".to_string(),
-        };
-
-        let wire = GossipWireMessage {
-            kind: "festival_update".to_string(),
-            payload: serde_json::to_string(&signed).unwrap(),
-            doc_id: None, // Missing!
-            group_key_id: None,
-        };
-
-        let result = orch.decode_wire_message(&wire).await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_decode_wire_message_group_update_missing_doc_id() {
-        use base64::Engine as _;
-        let b64 = base64::engine::general_purpose::STANDARD;
-
-        let group_key = crate::crypto::generate_group_key();
-        let group_id = crate::crypto::group_id_from_key(&group_key);
-        let orch = create_orchestrator_with_group_key(&group_id, group_key);
-
-        let encrypted = crate::crypto::encrypt(&group_key, b"data").unwrap();
-
-        let wire = GossipWireMessage {
-            kind: "group_update".to_string(),
-            payload: b64.encode(&encrypted),
-            doc_id: None, // Missing!
-            group_key_id: Some(group_id),
-        };
-
-        let result = orch.decode_wire_message(&wire).await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_decode_wire_message_sync_missing_doc_id() {
-        use base64::Engine as _;
-        let b64 = base64::engine::general_purpose::STANDARD;
-
-        let group_key = crate::crypto::generate_group_key();
-        let group_id = crate::crypto::group_id_from_key(&group_key);
-        let orch = create_orchestrator_with_group_key(&group_id, group_key);
-
-        let encrypted_diff = crate::crypto::encrypt(&group_key, b"diff").unwrap();
-
-        let wire = GossipWireMessage {
-            kind: "sync_response".to_string(),
-            payload: b64.encode(&encrypted_diff),
-            doc_id: None, // Missing!
-            group_key_id: Some(group_id),
-        };
-
-        let result = orch.decode_wire_message(&wire).await;
-        assert!(result.is_err());
     }
 }

@@ -22,10 +22,12 @@ class FestivalDetailScreen extends StatefulWidget {
   final List<Day>? days;
   final List<FestSet>? sets;
   final bool loading;
+  final DateTime now;
 
   const FestivalDetailScreen({
     super.key,
     required this.festival,
+    required this.now,
     this.stages,
     this.days,
     this.sets,
@@ -83,7 +85,7 @@ class _FestivalDetailScreenState extends State<FestivalDetailScreen> {
   Widget _buildView(List<Stage> stages, List<Day> days, List<FestSet> sets) {
     switch (_view) {
       case FestDetailView.gantt:
-        return GanttView(sets: sets, stages: stages, days: days);
+        return GanttView(sets: sets, stages: stages, days: days, now: widget.now);
       case FestDetailView.dayTabs:
         return DayTabsView(
           sets: sets,

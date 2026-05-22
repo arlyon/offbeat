@@ -19,6 +19,9 @@ static RUNTIME: Lazy<Arc<Runtime>> = Lazy::new(|| {
 /// Initialize the Flutter Rust Bridge utilities. Must be called before any other bridge function.
 #[flutter_rust_bridge::frb(init)]
 pub fn init_app() {
+    // Install rustls crypto provider before anything else — both ring and aws-lc-rs
+    // are in the dep tree, so rustls can't auto-detect.
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     flutter_rust_bridge::setup_default_user_utils();
     // Force lazy initialization of the runtime
     let _ = &*RUNTIME;
@@ -121,6 +124,22 @@ pub struct LineupDto {
     pub sets: Vec<LineupSetDto>,
 }
 
+pub struct HourlyWeatherDto {
+    pub time: Vec<String>,
+    pub temperature_2m: Vec<f64>,
+    pub precipitation_probability: Vec<f64>,
+    pub weather_code: Vec<u32>,
+    pub wind_speed_10m: Vec<f64>,
+}
+
+pub struct WeatherForecastDto {
+    pub updated_at: String,
+    pub lat: f64,
+    pub lon: f64,
+    pub timezone: String,
+    pub hourly: HourlyWeatherDto,
+}
+
 /// Per-resource sync status.
 pub struct ResourceSyncStatusDto {
     pub id: String,
@@ -134,6 +153,43 @@ pub struct SyncStatusDto {
     pub syncing: bool,
     pub resources: Vec<ResourceSyncStatusDto>,
     pub pending_ops: u32,
+}
+
+// ---------------------------------------------------------------------------
+// Transport DTOs
+// ---------------------------------------------------------------------------
+
+pub struct TransportStatusDto {
+    /// Relay (Festival DO WebSocket) connection status.
+    pub relay: RelayStatusDto,
+    /// BLE transport status.
+    pub ble: BleStatusDto,
+}
+
+pub struct RelayStatusDto {
+    pub connected: bool,
+    pub authenticated: bool,
+    /// Bytes per second sent to the relay (computed over last interval).
+    pub tx_bytes_per_sec: u64,
+    /// Bytes per second received from the relay.
+    pub rx_bytes_per_sec: u64,
+}
+
+pub struct BleStatusDto {
+    pub active: bool,
+    pub peer_count: u32,
+    /// Aggregate BLE bytes per second sent.
+    pub tx_bytes_per_sec: u64,
+    /// Aggregate BLE bytes per second received.
+    pub rx_bytes_per_sec: u64,
+    pub retransmits: u64,
+    pub peers: Vec<TransportPeerDto>,
+}
+
+pub struct TransportPeerDto {
+    pub device_id: String,
+    pub phase: String,
+    pub connect_path: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -179,7 +235,7 @@ impl AppNode {
     /// Returns `None` if no lineup data has synced yet.
     pub async fn get_lineup(&self, festival_id: String) -> Option<LineupDto> {
         let doc_id = format!("festival/{festival_id}/state");
-        let mut dm = self.inner.doc_manager.lock().await;
+        let dm = &self.inner.doc_manager;
 
         let stages = parse_json_array(dm.read_map_value(&doc_id, "stages"), |s| {
             Some(LineupStageDto {
@@ -219,6 +275,14 @@ impl AppNode {
         }
 
         Some(LineupDto { stages, days, sets })
+    }
+
+    /// Read the weather forecast from the local Yrs doc for a festival.
+    ///
+    /// Returns `None` if no weather data has synced yet.
+    pub async fn get_weather(&self, festival_id: String) -> Option<WeatherForecastDto> {
+        let doc_id = format!("festival/{festival_id}/state");
+        read_weather_from_doc(&self.inner.doc_manager, &doc_id)
     }
 
     /// Persist a group record for a festival.
@@ -290,21 +354,23 @@ impl AppNode {
         )?;
 
         {
-            use offbeat_core::gossip_manager::{GossipMessage, encode_gossip_message_pub};
-            let wire = encode_gossip_message_pub(&GossipMessage::Chat(msg.clone()))?;
+            use offbeat_core::gossip_manager::{GossipMessage, encode_gossip_message};
+            use offbeat_core::proto::GossipEnvelope;
+            let gossip_msg = GossipMessage::Chat(msg.clone());
+            let envelope = GossipEnvelope::from_gossip_message(&gossip_msg);
+            let bytes = encode_gossip_message(&gossip_msg);
 
             if let Some(gm) = &self.inner.gossip_manager {
-                let bytes = serde_json::to_vec(&wire)?;
                 let _ = gm.lock().await.broadcast(topic_id, bytes).await;
             }
 
-            if let Some(ws) = &self.inner.ws_relay {
+            if let Some(ws) = { self.inner.ws_relay.read().clone() } {
                 let topic_str = format!(
                     "festival/{}/chat/{}",
                     festival_id,
                     stage_id.as_deref().unwrap_or("general")
                 );
-                let _ = ws.send_gossip(&topic_str, &wire).await;
+                let _ = ws.send_gossip(&topic_str, &envelope).await;
             }
         }
 
@@ -348,7 +414,8 @@ impl AppNode {
             .ok_or_else(|| anyhow::anyhow!("send_group_chat: message not found after save"))?;
 
         {
-            use offbeat_core::gossip_manager::{GossipMessage, encode_gossip_message_pub};
+            use offbeat_core::gossip_manager::{GossipMessage, encode_gossip_message};
+            use offbeat_core::proto::GossipEnvelope;
 
             let group_key = self
                 .inner
@@ -356,19 +423,20 @@ impl AppNode {
                 .load_group_key(&group_id)?
                 .ok_or_else(|| anyhow::anyhow!("group not found after send"))?;
 
-            let wire = encode_gossip_message_pub(&GossipMessage::EncryptedChat {
+            let gossip_msg = GossipMessage::EncryptedChat {
                 group_key,
                 encrypted: encrypted.clone(),
-            })?;
+            };
+            let envelope = GossipEnvelope::from_gossip_message(&gossip_msg);
+            let bytes = encode_gossip_message(&gossip_msg);
 
             if let Some(gm) = &self.inner.gossip_manager {
-                let bytes = serde_json::to_vec(&wire)?;
                 let _ = gm.lock().await.broadcast(topic_id, bytes).await;
             }
 
-            if let Some(ws) = &self.inner.ws_relay {
+            if let Some(ws) = { self.inner.ws_relay.read().clone() } {
                 let topic_str = format!("group/{group_id}/chat");
-                let _ = ws.send_gossip(&topic_str, &wire).await;
+                let _ = ws.send_gossip(&topic_str, &envelope).await;
             }
         }
 
@@ -467,7 +535,7 @@ impl AppNode {
             }
         }
 
-        self.inner.ws_relay = Some(Arc::new(sink));
+        *self.inner.ws_relay.write() = Some(Arc::new(sink));
 
         RUNTIME.spawn(async move {
             if let Err(e) = receive_loop.await {
@@ -496,7 +564,7 @@ impl AppNode {
         }
 
         // Sync via orchestrator using the WS peer
-        if let Some(ws) = &self.inner.ws_relay {
+        if let Some(ws) = { self.inner.ws_relay.read().clone() } {
             self.inner.sync_orchestrator.sync_with_peer(ws.as_ref()).await?;
         }
 
@@ -527,7 +595,8 @@ impl AppNode {
         topic: String,
         message: ChatMessageDto,
     ) -> anyhow::Result<()> {
-        use offbeat_core::gossip_manager::{GossipMessage, encode_gossip_message_pub};
+        use offbeat_core::gossip_manager::{GossipMessage, encode_gossip_message};
+            use offbeat_core::proto::GossipEnvelope;
         use offbeat_core::types::ChatMessage;
 
         let chat = ChatMessage {
@@ -548,15 +617,16 @@ impl AppNode {
             anyhow::bail!("unsupported topic format: {topic}");
         };
 
-        let wire = encode_gossip_message_pub(&GossipMessage::Chat(chat))?;
-        let bytes = serde_json::to_vec(&wire)?;
+        let gossip_msg = GossipMessage::Chat(chat);
+        let envelope = GossipEnvelope::from_gossip_message(&gossip_msg);
+        let bytes = encode_gossip_message(&gossip_msg);
 
         if let Some(gm) = &self.inner.gossip_manager {
             let _ = gm.lock().await.broadcast(topic_id, bytes).await;
         }
 
-        if let Some(ws) = &self.inner.ws_relay {
-            let _ = ws.send_gossip(&topic, &wire).await;
+        if let Some(ws) = { self.inner.ws_relay.read().clone() } {
+            let _ = ws.send_gossip(&topic, &envelope).await;
         }
 
         Ok(())
@@ -727,21 +797,23 @@ impl AppNode {
             .await?;
 
         if let Some(group_key) = self.inner.db.load_group_key(&group_id)? {
-            use offbeat_core::gossip_manager::{GossipMessage, encode_gossip_message_pub};
-            let wire = encode_gossip_message_pub(&GossipMessage::GroupUpdate {
+            use offbeat_core::gossip_manager::{GossipMessage, encode_gossip_message};
+            use offbeat_core::proto::GossipEnvelope;
+            let gossip_msg = GossipMessage::GroupUpdate {
                 doc_id: format!("group/{group_id}"),
                 encrypted: encrypted.clone(),
                 group_key,
-            })?;
+            };
+            let envelope = GossipEnvelope::from_gossip_message(&gossip_msg);
+            let bytes = encode_gossip_message(&gossip_msg);
 
             if let Some(gm) = &self.inner.gossip_manager {
                 let topic = offbeat_core::topics::group_topic(&group_key, "state");
-                let bytes = serde_json::to_vec(&wire)?;
-                let _ = gm.lock().await.broadcast(topic, bytes).await;
+                let _ = gm.lock().await.broadcast(topic, bytes.clone()).await;
             }
-            if let Some(ws) = &self.inner.ws_relay {
+            if let Some(ws) = { self.inner.ws_relay.read().clone() } {
                 let topic_str = format!("group/{group_id}/state");
-                let _ = ws.send_gossip(&topic_str, &wire).await;
+                let _ = ws.send_gossip(&topic_str, &envelope).await;
             }
         }
         Ok(())
@@ -764,21 +836,23 @@ impl AppNode {
             .await?;
 
         if let Some(group_key) = self.inner.db.load_group_key(&group_id)? {
-            use offbeat_core::gossip_manager::{GossipMessage, encode_gossip_message_pub};
-            let wire = encode_gossip_message_pub(&GossipMessage::GroupUpdate {
+            use offbeat_core::gossip_manager::{GossipMessage, encode_gossip_message};
+            use offbeat_core::proto::GossipEnvelope;
+            let gossip_msg = GossipMessage::GroupUpdate {
                 doc_id: format!("group/{group_id}"),
                 encrypted: encrypted.clone(),
                 group_key,
-            })?;
+            };
+            let envelope = GossipEnvelope::from_gossip_message(&gossip_msg);
+            let bytes = encode_gossip_message(&gossip_msg);
 
             if let Some(gm) = &self.inner.gossip_manager {
                 let topic = offbeat_core::topics::group_topic(&group_key, "state");
-                let bytes = serde_json::to_vec(&wire)?;
-                let _ = gm.lock().await.broadcast(topic, bytes).await;
+                let _ = gm.lock().await.broadcast(topic, bytes.clone()).await;
             }
-            if let Some(ws) = &self.inner.ws_relay {
+            if let Some(ws) = { self.inner.ws_relay.read().clone() } {
                 let topic_str = format!("group/{group_id}/state");
-                let _ = ws.send_gossip(&topic_str, &wire).await;
+                let _ = ws.send_gossip(&topic_str, &envelope).await;
             }
         }
         Ok(())
@@ -803,21 +877,23 @@ impl AppNode {
             .await?;
 
         if let Some(group_key) = self.inner.db.load_group_key(&group_id)? {
-            use offbeat_core::gossip_manager::{GossipMessage, encode_gossip_message_pub};
-            let wire = encode_gossip_message_pub(&GossipMessage::GroupUpdate {
+            use offbeat_core::gossip_manager::{GossipMessage, encode_gossip_message};
+            use offbeat_core::proto::GossipEnvelope;
+            let gossip_msg = GossipMessage::GroupUpdate {
                 doc_id: format!("group/{group_id}"),
                 encrypted: encrypted.clone(),
                 group_key,
-            })?;
+            };
+            let envelope = GossipEnvelope::from_gossip_message(&gossip_msg);
+            let bytes = encode_gossip_message(&gossip_msg);
 
             if let Some(gm) = &self.inner.gossip_manager {
                 let topic = offbeat_core::topics::group_topic(&group_key, "state");
-                let bytes = serde_json::to_vec(&wire)?;
-                let _ = gm.lock().await.broadcast(topic, bytes).await;
+                let _ = gm.lock().await.broadcast(topic, bytes.clone()).await;
             }
-            if let Some(ws) = &self.inner.ws_relay {
+            if let Some(ws) = { self.inner.ws_relay.read().clone() } {
                 let topic_str = format!("group/{group_id}/state");
-                let _ = ws.send_gossip(&topic_str, &wire).await;
+                let _ = ws.send_gossip(&topic_str, &envelope).await;
             }
         }
         Ok(())
@@ -884,24 +960,83 @@ impl AppNode {
         let doc_id_clone = doc_id.clone();
 
         RUNTIME.spawn(async move {
-            // Emit initial state
+            // Emit initial state (subscribe happened before this, so no race)
             {
-                let mut dm = doc_manager_clone.lock().await;
-                let lineup = read_lineup_from_doc(&mut dm, &doc_id_clone);
+                let lineup = read_lineup_from_doc(&doc_manager_clone, &doc_id_clone);
                 let sink = sink_clone.lock().await;
                 let _ = sink.add(lineup);
             }
 
-            // Watch for changes
-            loop {
-                if rx.changed().await.is_err() {
-                    break; // Channel closed
-                }
-                let mut dm = doc_manager_clone.lock().await;
-                let lineup = read_lineup_from_doc(&mut dm, &doc_id_clone);
+            // Check if data changed during the initial load
+            if rx.has_changed().unwrap_or(false) {
+                let lineup = read_lineup_from_doc(&doc_manager_clone, &doc_id_clone);
                 let sink = sink_clone.lock().await;
                 if sink.add(lineup).is_err() {
-                    break; // Sink closed
+                    return;
+                }
+            }
+
+            // Watch for subsequent changes
+            loop {
+                if rx.changed().await.is_err() {
+                    break;
+                }
+                let lineup = read_lineup_from_doc(&doc_manager_clone, &doc_id_clone);
+                let sink = sink_clone.lock().await;
+                if sink.add(lineup).is_err() {
+                    break;
+                }
+            }
+        });
+
+        Ok(())
+    }
+
+    /// Watch weather forecast — emits current forecast, then updates on changes.
+    #[flutter_rust_bridge::frb(stream_dart_await)]
+    pub fn watch_weather(
+        &self,
+        festival_id: String,
+        sink: StreamSink<Option<WeatherForecastDto>>,
+    ) -> anyhow::Result<()> {
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        let doc_id = format!("festival/{festival_id}/state");
+        let doc_manager = Arc::clone(&self.inner.doc_manager);
+        let notifier = Arc::clone(&self.inner.notifier);
+
+        let mut rx = notifier.watch_doc(&doc_id);
+
+        let sink = Arc::new(Mutex::new(sink));
+        let sink_clone = Arc::clone(&sink);
+        let doc_manager_clone = Arc::clone(&doc_manager);
+        let doc_id_clone = doc_id.clone();
+
+        RUNTIME.spawn(async move {
+            // Emit initial state
+            {
+                let weather = read_weather_from_doc(&doc_manager_clone, &doc_id_clone);
+                let sink = sink_clone.lock().await;
+                let _ = sink.add(weather);
+            }
+
+            if rx.has_changed().unwrap_or(false) {
+                let weather = read_weather_from_doc(&doc_manager_clone, &doc_id_clone);
+                let sink = sink_clone.lock().await;
+                if sink.add(weather).is_err() {
+                    return;
+                }
+            }
+
+            loop {
+                if rx.changed().await.is_err() {
+                    break;
+                }
+                let weather = read_weather_from_doc(&doc_manager_clone, &doc_id_clone);
+                let sink = sink_clone.lock().await;
+                if sink.add(weather).is_err() {
+                    break;
                 }
             }
         });
@@ -1067,6 +1202,110 @@ impl AppNode {
         Ok(())
     }
 
+    // -----------------------------------------------------------------------
+    // Transport methods
+    // -----------------------------------------------------------------------
+
+    /// Get a snapshot of transport status (no rate computation).
+    pub fn get_transport_status(&self) -> TransportStatusDto {
+        snapshot_transport(&self.inner)
+    }
+
+    /// Watch transport status — emits relay + BLE state with bandwidth
+    /// rates computed by diffing cumulative counters every second.
+    #[flutter_rust_bridge::frb(stream_dart_await)]
+    pub fn watch_transport_status(
+        &self,
+        sink: StreamSink<TransportStatusDto>,
+    ) -> anyhow::Result<()> {
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        let ble = self.inner.ble_transport.clone();
+        let ws = self.inner.ws_relay.clone();
+        let sink = Arc::new(Mutex::new(sink));
+
+        RUNTIME.spawn(async move {
+            let mut prev_relay_tx: u64 = 0;
+            let mut prev_relay_rx: u64 = 0;
+            let mut prev_ble_tx: u64 = 0;
+            let mut prev_ble_rx: u64 = 0;
+
+            loop {
+                // Relay stats
+                let relay = match &*ws.read() {
+                    Some(ws) => {
+                        let tx = ws.tx_bytes();
+                        let rx = ws.rx_bytes();
+                        let dto = RelayStatusDto {
+                            connected: ws.is_connected(),
+                            authenticated: ws.is_authenticated(),
+                            tx_bytes_per_sec: tx.saturating_sub(prev_relay_tx),
+                            rx_bytes_per_sec: rx.saturating_sub(prev_relay_rx),
+                        };
+                        prev_relay_tx = tx;
+                        prev_relay_rx = rx;
+                        dto
+                    }
+                    None => RelayStatusDto {
+                        connected: false,
+                        authenticated: false,
+                        tx_bytes_per_sec: 0,
+                        rx_bytes_per_sec: 0,
+                    },
+                };
+
+                // BLE stats
+                let ble_status = match &ble {
+                    Some(ble) => {
+                        let metrics = ble.metrics();
+                        let peers: Vec<TransportPeerDto> = ble
+                            .snapshot_peers()
+                            .into_iter()
+                            .map(|p| TransportPeerDto {
+                                device_id: p.device_id.to_string(),
+                                phase: format!("{:?}", p.phase),
+                                connect_path: p.connect_path.map(|c| format!("{c:?}")),
+                            })
+                            .collect();
+                        let dto = BleStatusDto {
+                            active: true,
+                            peer_count: peers.len() as u32,
+                            tx_bytes_per_sec: metrics.tx_bytes.saturating_sub(prev_ble_tx),
+                            rx_bytes_per_sec: metrics.rx_bytes.saturating_sub(prev_ble_rx),
+                            retransmits: metrics.retransmits,
+                            peers,
+                        };
+                        prev_ble_tx = metrics.tx_bytes;
+                        prev_ble_rx = metrics.rx_bytes;
+                        dto
+                    }
+                    None => BleStatusDto {
+                        active: false,
+                        peer_count: 0,
+                        tx_bytes_per_sec: 0,
+                        rx_bytes_per_sec: 0,
+                        retransmits: 0,
+                        peers: vec![],
+                    },
+                };
+
+                let status = TransportStatusDto {
+                    relay,
+                    ble: ble_status,
+                };
+                let sink = sink.lock().await;
+                if sink.add(status).is_err() {
+                    break;
+                }
+                drop(sink);
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
+        });
+
+        Ok(())
+    }
+
     /// Watch sync status — emits current status, then updates on changes.
     #[flutter_rust_bridge::frb(stream_dart_await)]
     pub fn watch_sync_status(
@@ -1127,7 +1366,7 @@ fn parse_json_array<T>(
 
 /// Read lineup from a doc manager (used by watch_lineup).
 fn read_lineup_from_doc(
-    dm: &mut offbeat_core::doc_manager::DocManager,
+    dm: &offbeat_core::doc_manager::DocManager,
     doc_id: &str,
 ) -> Option<LineupDto> {
     let stages = parse_json_array(dm.read_map_value(doc_id, "stages"), |s| {
@@ -1167,6 +1406,76 @@ fn read_lineup_from_doc(
     }
 
     Some(LineupDto { stages, days, sets })
+}
+
+/// Read weather from a doc manager (used by get_weather / watch_weather).
+fn read_weather_from_doc(
+    dm: &offbeat_core::doc_manager::DocManager,
+    doc_id: &str,
+) -> Option<WeatherForecastDto> {
+    let raw = dm.read_map_value(doc_id, "weather")?;
+    let forecast: offbeat_core::types::WeatherForecast = serde_json::from_str(&raw).ok()?;
+    Some(WeatherForecastDto {
+        updated_at: forecast.updated_at,
+        lat: forecast.lat,
+        lon: forecast.lon,
+        timezone: forecast.timezone,
+        hourly: HourlyWeatherDto {
+            time: forecast.hourly.time,
+            temperature_2m: forecast.hourly.temperature_2m,
+            precipitation_probability: forecast.hourly.precipitation_probability,
+            weather_code: forecast.hourly.weather_code,
+            wind_speed_10m: forecast.hourly.wind_speed_10m,
+        },
+    })
+}
+
+/// One-shot transport snapshot (no rate computation — rates are zero).
+fn snapshot_transport(node: &OffbeatNode) -> TransportStatusDto {
+    let relay = match &*node.ws_relay.read() {
+        Some(ws) => RelayStatusDto {
+            connected: ws.is_connected(),
+            authenticated: ws.is_authenticated(),
+            tx_bytes_per_sec: 0,
+            rx_bytes_per_sec: 0,
+        },
+        None => RelayStatusDto {
+            connected: false,
+            authenticated: false,
+            tx_bytes_per_sec: 0,
+            rx_bytes_per_sec: 0,
+        },
+    };
+    let ble = match &node.ble_transport {
+        Some(ble) => {
+            let peers: Vec<TransportPeerDto> = ble
+                .snapshot_peers()
+                .into_iter()
+                .map(|p| TransportPeerDto {
+                    device_id: p.device_id.to_string(),
+                    phase: format!("{:?}", p.phase),
+                    connect_path: p.connect_path.map(|c| format!("{c:?}")),
+                })
+                .collect();
+            BleStatusDto {
+                active: true,
+                peer_count: peers.len() as u32,
+                tx_bytes_per_sec: 0,
+                rx_bytes_per_sec: 0,
+                retransmits: ble.metrics().retransmits,
+                peers,
+            }
+        }
+        None => BleStatusDto {
+            active: false,
+            peer_count: 0,
+            tx_bytes_per_sec: 0,
+            rx_bytes_per_sec: 0,
+            retransmits: 0,
+            peers: vec![],
+        },
+    };
+    TransportStatusDto { relay, ble }
 }
 
 /// Convert SyncStatus from notifier to DTO.

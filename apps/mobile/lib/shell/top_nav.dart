@@ -16,6 +16,8 @@ class TopNav extends StatelessWidget {
   final VoidCallback? onBack;
   final Animation<double>? animation;
   final bool syncing;
+  final bool relayConnected;
+  final int blePeerCount;
 
   const TopNav({
     super.key,
@@ -25,9 +27,14 @@ class TopNav extends StatelessWidget {
     this.onBack,
     this.animation,
     this.syncing = false,
+    this.relayConnected = false,
+    this.blePeerCount = -1, // -1 = BLE unavailable
   });
 
   static const _curve = Cubic(0.2, 0.7, 0.2, 1.0);
+
+  /// Total connected peers: relay counts as 1, plus BLE peers.
+  int get _peerCount => (relayConnected ? 1 : 0) + (blePeerCount > 0 ? blePeerCount : 0);
 
   @override
   Widget build(BuildContext context) {
@@ -154,21 +161,52 @@ class TopNav extends StatelessWidget {
                             ),
                           ),
                         ),
-                        // Sync indicator
-                        if (syncing)
-                          Opacity(
-                            opacity: curvedT,
-                            child: const Padding(
-                              padding: EdgeInsets.only(left: 6),
-                              child: _SyncIndicator(),
-                            ),
-                          ),
                       ],
                     ],
                   ),
                 ),
-                // Right side
-                Row(mainAxisSize: MainAxisSize.min, children: rightWidgets),
+                // Right side: transport indicators + action buttons
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Connection status dot + peer count
+                    // green = actively syncing, purple = relay connected,
+                    // blue = BLE peer(s), grey = disconnected
+                    Padding(
+                      padding: const EdgeInsets.only(right: 4),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.circle,
+                            size: 7,
+                            color: syncing
+                                ? colorOk
+                                : relayConnected
+                                    ? const Color(0xFFC77DFF)
+                                    : blePeerCount > 0
+                                        ? colorCoAccent
+                                        : colorFg4,
+                          ),
+                          if (_peerCount > 0) ...[
+                            const SizedBox(width: 3),
+                            Text(
+                              '$_peerCount',
+                              style: const TextStyle(
+                                fontFamily: 'JetBrainsMono',
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700,
+                                color: colorFg3,
+                                height: 1,
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                    ...rightWidgets,
+                  ],
+                ),
               ],
             ),
           ),
@@ -233,48 +271,3 @@ class NavIconButton extends StatelessWidget {
   }
 }
 
-/// Animated sync indicator — small rotating sync icon
-class _SyncIndicator extends StatefulWidget {
-  const _SyncIndicator();
-
-  @override
-  State<_SyncIndicator> createState() => _SyncIndicatorState();
-}
-
-class _SyncIndicatorState extends State<_SyncIndicator>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _controller;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1200),
-    )..repeat();
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _controller,
-      builder: (context, child) {
-        return Transform.rotate(
-          angle: _controller.value * 2 * 3.14159,
-          child: child,
-        );
-      },
-      child: const Icon(
-        Icons.sync,
-        size: 12,
-        color: colorAccent,
-      ),
-    );
-  }
-}

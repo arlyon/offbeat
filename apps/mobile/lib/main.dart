@@ -20,6 +20,7 @@ import 'services/auth_service.dart';
 import 'services/admin_service.dart';
 import 'services/festival_admin_service.dart';
 import 'services/festival_service.dart';
+import 'widgets/weather_pill.dart';
 import 'src/rust/api.dart';
 import 'src/rust/frb_generated.dart';
 
@@ -88,8 +89,21 @@ class _OffbeatShellState extends State<_OffbeatShell>
   LineupDto? _lineup;
   bool _lineupLoading = true;
 
+  // Weather state
+  StreamSubscription<WeatherForecastDto?>? _weatherSub;
+  WeatherForecastDto? _weather;
+
+  // Live clock (ticks every 60s for timeline)
+  Timer? _clockTimer;
+  DateTime _now = DateTime.now();
+
   // Sync status
   bool _isSyncing = false;
+
+  // Transport status
+  StreamSubscription<TransportStatusDto>? _transportSub;
+  bool _relayConnected = false;
+  int _blePeerCount = -1; // -1 = unavailable
 
   // Admin state
   bool _isAdmin = false;
@@ -120,13 +134,19 @@ class _OffbeatShellState extends State<_OffbeatShell>
       begin: Offset.zero,
       end: const Offset(-0.3, 0.0),
     ).animate(CurvedAnimation(parent: _navController, curve: _curve));
+    _clockTimer = Timer.periodic(const Duration(seconds: 60), (_) {
+      if (mounted) setState(() => _now = DateTime.now());
+    });
     _initNode();
     _loadFestivals();
   }
 
   @override
   void dispose() {
+    _clockTimer?.cancel();
     _lineupSub?.cancel();
+    _weatherSub?.cancel();
+    _transportSub?.cancel();
     _navController.dispose();
     super.dispose();
   }
@@ -177,6 +197,17 @@ class _OffbeatShellState extends State<_OffbeatShell>
     syncStream.listen((status) {
       if (mounted) {
         setState(() => _isSyncing = status.syncing);
+      }
+    });
+
+    // Listen to transport status (relay + BLE)
+    final transportStream = await node.watchTransportStatus();
+    _transportSub = transportStream.listen((status) {
+      if (mounted) {
+        setState(() {
+          _relayConnected = status.relay.connected;
+          _blePeerCount = status.ble.active ? status.ble.peerCount : -1;
+        });
       }
     });
   }
@@ -252,6 +283,8 @@ class _OffbeatShellState extends State<_OffbeatShell>
 
     _lineupSub?.cancel();
     _lineupSub = null;
+    _weatherSub?.cancel();
+    _weatherSub = null;
     setState(() {
       _node = node;
       _authState = 'unregistered';
@@ -267,6 +300,7 @@ class _OffbeatShellState extends State<_OffbeatShell>
       _activeTab = AppTab.schedule;
       _lineup = null;
       _lineupLoading = true;
+      _weather = null;
     });
   }
 
@@ -274,13 +308,15 @@ class _OffbeatShellState extends State<_OffbeatShell>
     final node = _node;
     if (node == null) return;
 
-    // Cancel any previous lineup subscription
+    // Cancel any previous subscriptions
     _lineupSub?.cancel();
+    _weatherSub?.cancel();
 
     setState(() {
       _selectedFestival = fest;
       _lineup = null;
       _lineupLoading = true;
+      _weather = null;
     });
 
     // Start watching the lineup stream
@@ -293,6 +329,13 @@ class _OffbeatShellState extends State<_OffbeatShell>
         });
       }
     });
+
+    // Start watching weather
+    final weatherStream = await node.watchWeather(festivalId: fest.id);
+    _weatherSub = weatherStream.listen((weather) {
+      if (mounted) setState(() => _weather = weather);
+    });
+
     _navController.forward(from: 0.0);
 
     // Connect to the Festival DO WebSocket relay in the background
@@ -524,6 +567,8 @@ class _OffbeatShellState extends State<_OffbeatShell>
   void _navigateBack() {
     _lineupSub?.cancel();
     _lineupSub = null;
+    _weatherSub?.cancel();
+    _weatherSub = null;
     _navController.reverse().then((_) {
       if (!mounted) return;
       setState(() {
@@ -531,6 +576,7 @@ class _OffbeatShellState extends State<_OffbeatShell>
         _activeTab = AppTab.schedule;
         _lineup = null;
         _lineupLoading = true;
+        _weather = null;
       });
     });
   }
@@ -564,6 +610,8 @@ class _OffbeatShellState extends State<_OffbeatShell>
               onBack: _navigateBack,
               animation: _navController,
               syncing: _isSyncing,
+              relayConnected: _relayConnected,
+              blePeerCount: _blePeerCount,
               rightWidgets: [
                 // Crossfade between settings (lobby) and search+admin (festival)
                 AnimatedBuilder(
@@ -606,6 +654,12 @@ class _OffbeatShellState extends State<_OffbeatShell>
                     );
                   },
                 ),
+                // Weather pill (only visible inside festival when forecast available)
+                if (_weather != null && _weather!.hourly.time.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(left: 2),
+                    child: WeatherPill(forecast: _weather!),
+                  ),
               ],
             ),
             // Body with slide animation
@@ -769,6 +823,7 @@ class _OffbeatShellState extends State<_OffbeatShell>
 
     return FestivalDetailScreen(
       festival: _selectedFestival!,
+      now: _now,
       stages: stages,
       days: days,
       sets: sets,
