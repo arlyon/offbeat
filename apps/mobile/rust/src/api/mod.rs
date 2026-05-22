@@ -439,19 +439,21 @@ impl AppNode {
         use offbeat_core::{auth, ws_relay};
         use std::sync::Arc;
 
+        let sync_orchestrator = Arc::clone(&self.inner.sync_orchestrator);
         let doc_manager = Arc::clone(&self.inner.doc_manager);
-        let db = Arc::clone(&self.inner.db);
         let notifier = Arc::clone(&self.inner.notifier);
+
+        // Ensure the festival public key is registered with the orchestrator
         let festival_pk = self.inner.festival_public_keys.get(&festival_id).copied()
             .ok_or_else(|| anyhow::anyhow!(
                 "no public key for festival {festival_id} — call set_festival_public_key first"
             ))?;
+        sync_orchestrator.set_festival_public_key(&festival_id, festival_pk);
 
         let (sink, receive_loop) = ws_relay::connect(
             &url,
+            sync_orchestrator,
             doc_manager,
-            db,
-            festival_pk,
             notifier,
         )
         .await?;
@@ -478,20 +480,24 @@ impl AppNode {
 
     /// Subscribe to the gossip topic for a festival and perform a state vector
     /// exchange with the DO so we only receive updates we don't already have.
+    ///
+    /// Registers the festival as a resource in the registry, then delegates
+    /// subscribe + catch-up to the SyncOrchestrator.
     pub async fn subscribe_festival(&mut self, festival_id: String) -> anyhow::Result<()> {
-        let topic_str = format!("festival/{festival_id}/state");
-        let doc_id = topic_str.clone();
+        // Register the festival resource so the orchestrator knows about it
+        let festival_pk = self.inner.festival_public_keys.get(&festival_id).copied()
+            .ok_or_else(|| anyhow::anyhow!(
+                "no public key for festival {festival_id} — call set_festival_public_key first"
+            ))?;
+        {
+            let mut reg = self.inner.resource_registry.write()
+                .map_err(|_| anyhow::anyhow!("resource registry lock poisoned"))?;
+            reg.register_festival(&festival_id, festival_pk);
+        }
 
+        // Sync via orchestrator using the WS peer
         if let Some(ws) = &self.inner.ws_relay {
-            ws.subscribe(vec![topic_str]).await?;
-
-            // Send our state vector so the DO can compute a targeted diff
-            let sv = {
-                let mut dm = self.inner.doc_manager.lock().await;
-                dm.get_or_create(&doc_id);
-                dm.get_state_vector(&doc_id)?
-            };
-            ws.sv_exchange(&doc_id, &sv).await?;
+            self.inner.sync_orchestrator.sync_with_peer(ws.as_ref()).await?;
         }
 
         Ok(())

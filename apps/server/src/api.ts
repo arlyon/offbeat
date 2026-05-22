@@ -215,6 +215,20 @@ app.post("/festivals/:id/signing-key", async (c) => {
 	);
 });
 
+// DELETE /festivals/:id/reset — wipe a Festival DO's storage (admin-only, forwarded via MainDO)
+app.delete("/festivals/:id/reset", async (c) => {
+	const id = c.req.param("id");
+	// Admin auth is handled by forwarding to MainDO first
+	const authResp = await forwardToMainDO(c.env, `/festivals/${id}/reset`, c.req.raw);
+	if (!authResp.ok) return authResp;
+
+	const doId = c.env.FESTIVAL_DO.idFromName(id);
+	const stub = c.env.FESTIVAL_DO.get(doId);
+	const url = new URL(c.req.url);
+	url.pathname = "/reset";
+	return stub.fetch(new Request(url.toString(), { method: "DELETE" }));
+});
+
 // POST /festivals/:id/sign-update — sign + broadcast a Yrs update via the DO
 app.post("/festivals/:id/sign-update", async (c) => {
 	const id = c.req.param("id");

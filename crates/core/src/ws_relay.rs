@@ -30,9 +30,9 @@ use tokio::sync::Mutex;
 use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
 
 use crate::auth::Attestation;
-use crate::db::Database;
 use crate::doc_manager::DocManager;
 use crate::gossip_manager::GossipWireMessage;
+use crate::sync::SyncOrchestrator;
 
 // ---------------------------------------------------------------------------
 // Protocol types
@@ -339,9 +339,8 @@ impl crate::sync::PeerConnection for WsRelaySink {
 /// The caller should `tokio::spawn` the receive loop future.
 pub async fn connect(
     url: &str,
+    sync_orchestrator: Arc<SyncOrchestrator>,
     doc_manager: Arc<Mutex<DocManager>>,
-    db: Arc<Database>,
-    festival_public_key: [u8; 32],
     notifier: Arc<crate::notifier::ResourceNotifier>,
 ) -> anyhow::Result<(
     WsRelaySink,
@@ -370,9 +369,8 @@ pub async fn connect(
         recv_sink,
         stream,
         recv_url,
+        sync_orchestrator,
         doc_manager,
-        db,
-        festival_public_key,
         notifier,
     ));
 
@@ -383,9 +381,8 @@ pub async fn connect(
 pub async fn connect_with_retry(
     url: &str,
     max_retries: u32,
+    sync_orchestrator: Arc<SyncOrchestrator>,
     doc_manager: Arc<Mutex<DocManager>>,
-    db: Arc<Database>,
-    festival_public_key: [u8; 32],
     notifier: Arc<crate::notifier::ResourceNotifier>,
 ) -> anyhow::Result<(
     WsRelaySink,
@@ -395,7 +392,7 @@ pub async fn connect_with_retry(
     const MAX_DELAY_MS: u64 = 30_000;
 
     for attempt in 0..max_retries {
-        match connect(url, doc_manager.clone(), db.clone(), festival_public_key, notifier.clone()).await {
+        match connect(url, sync_orchestrator.clone(), doc_manager.clone(), notifier.clone()).await {
             Ok(result) => return Ok(result),
             Err(e) if attempt + 1 == max_retries => return Err(e),
             Err(e) => {
@@ -418,9 +415,8 @@ async fn run_receive_loop_with_reconnect(
     sink: WsRelaySink,
     initial_stream: WsStream,
     url: String,
+    sync_orchestrator: Arc<SyncOrchestrator>,
     doc_manager: Arc<Mutex<DocManager>>,
-    db: Arc<Database>,
-    festival_public_key: [u8; 32],
     notifier: Arc<crate::notifier::ResourceNotifier>,
 ) -> anyhow::Result<()> {
     use rand::RngExt;
@@ -433,9 +429,8 @@ async fn run_receive_loop_with_reconnect(
         let result = run_receive_loop(
             &sink,
             &mut stream,
+            &sync_orchestrator,
             &doc_manager,
-            &db,
-            festival_public_key,
             &notifier,
         )
         .await;
@@ -516,9 +511,8 @@ async fn run_receive_loop_with_reconnect(
 async fn run_receive_loop(
     sink: &WsRelaySink,
     stream: &mut WsStream,
+    sync_orchestrator: &Arc<SyncOrchestrator>,
     doc_manager: &Arc<Mutex<DocManager>>,
-    db: &Arc<Database>,
-    festival_public_key: [u8; 32],
     notifier: &Arc<crate::notifier::ResourceNotifier>,
 ) -> anyhow::Result<()> {
     while let Some(msg) = stream.next().await {
@@ -533,9 +527,8 @@ async fn run_receive_loop(
                         if let Err(e) = handle_server_message(
                             server_msg,
                             sink,
+                            sync_orchestrator,
                             doc_manager,
-                            db,
-                            festival_public_key,
                             notifier,
                         )
                         .await
@@ -569,9 +562,8 @@ async fn run_receive_loop(
 async fn handle_server_message(
     msg: WsServerMessage,
     sink: &WsRelaySink,
+    sync_orchestrator: &Arc<SyncOrchestrator>,
     doc_manager: &Arc<Mutex<DocManager>>,
-    db: &Arc<Database>,
-    festival_public_key: [u8; 32],
     notifier: &Arc<crate::notifier::ResourceNotifier>,
 ) -> anyhow::Result<()> {
     match msg {
@@ -598,15 +590,8 @@ async fn handle_server_message(
                 }
             }
 
-            // Dispatch through the standard gossip pipeline
-            let wire_bytes = serde_json::to_vec(&message)?;
-            crate::gossip_manager::handle_wire_bytes_pub(
-                &wire_bytes,
-                doc_manager,
-                db,
-                festival_public_key,
-            )
-            .await
+            // Dispatch through the SyncOrchestrator
+            sync_orchestrator.handle_incoming(&topic, &message).await
         }
         WsServerMessage::Catchup { messages, topic } => {
             for entry in messages {
@@ -619,15 +604,7 @@ async fn handle_server_message(
                     }
                 }
 
-                let wire_bytes = serde_json::to_vec(&entry.message)?;
-                if let Err(e) = crate::gossip_manager::handle_wire_bytes_pub(
-                    &wire_bytes,
-                    doc_manager,
-                    db,
-                    festival_public_key,
-                )
-                .await
-                {
+                if let Err(e) = sync_orchestrator.handle_incoming(&topic, &entry.message).await {
                     tracing::warn!("ws_relay catchup dispatch error: {e}");
                 }
             }
@@ -651,15 +628,7 @@ async fn handle_server_message(
         }
         WsServerMessage::ChatDiff { topic, messages } => {
             for wire_msg in messages {
-                let wire_bytes = serde_json::to_vec(&wire_msg)?;
-                if let Err(e) = crate::gossip_manager::handle_wire_bytes_pub(
-                    &wire_bytes,
-                    doc_manager,
-                    db,
-                    festival_public_key,
-                )
-                .await
-                {
+                if let Err(e) = sync_orchestrator.handle_incoming(&topic, &wire_msg).await {
                     tracing::warn!("ws_relay chat_diff dispatch error: {e}");
                 }
             }

@@ -254,6 +254,11 @@ impl ResourceRegistry {
         self.resources.get(id).map(|r| r.as_ref())
     }
 
+    /// Register a festival's state resource (CRDT doc, critical priority).
+    pub fn register_festival(&mut self, festival_id: &str, public_key: [u8; 32]) {
+        self.register(Box::new(FestivalState::new(festival_id, public_key)));
+    }
+
     /// Return all resources sorted by priority (lowest value first).
     pub fn by_priority(&self) -> Vec<&dyn Resource> {
         let mut v: Vec<&dyn Resource> = self.resources.values().map(|r| r.as_ref()).collect();
