@@ -431,4 +431,104 @@ mod tests {
             Some("val2".to_string())
         );
     }
+
+    /// Simulates the exact flow that happens when the Festival DO seeds a Yrs
+    /// doc with lineup data: server writes JSON arrays under "stages", "days",
+    /// "sets" keys, encodes as update, and the client applies the update via
+    /// `apply_update`.  Verifies the client can read all three keys back.
+    #[test]
+    fn test_lineup_crdt_roundtrip() {
+        let stages = r##"[{"id":"s1","name":"Main Stage","short":"MS","color":"#ff0000","order":0}]"##;
+        let days = r#"[{"id":"d1","label":"Friday","num":13,"month":"Jun"}]"#;
+        let sets = r#"[{"id":"set1","day":"d1","stage":"s1","artist":"Test Act","startMin":720,"durationMin":60,"genre":"rock","cancelled":false}]"#;
+
+        // --- server side: build doc and encode update ---
+        let server_doc = Doc::new();
+        let root = server_doc.get_or_insert_map("root");
+        {
+            let mut txn = server_doc.transact_mut();
+            root.insert(&mut txn, "stages", stages);
+            root.insert(&mut txn, "days", days);
+            root.insert(&mut txn, "sets", sets);
+        }
+        let update_bytes = server_doc
+            .transact()
+            .encode_state_as_update_v1(&StateVector::default());
+
+        // --- client side: apply update and read back ---
+        let db = test_db();
+        let mut mgr = DocManager::new(db);
+        mgr.apply_update("festival/test/state", &update_bytes)
+            .unwrap();
+
+        assert_eq!(
+            mgr.read_map_value("festival/test/state", "stages"),
+            Some(stages.to_string())
+        );
+        assert_eq!(
+            mgr.read_map_value("festival/test/state", "days"),
+            Some(days.to_string())
+        );
+        assert_eq!(
+            mgr.read_map_value("festival/test/state", "sets"),
+            Some(sets.to_string())
+        );
+    }
+
+    /// Same as above but via state-vector diff (the sv_exchange path).
+    /// Server has data, client has empty doc, diff transfers everything.
+    #[test]
+    fn test_lineup_sv_diff_roundtrip() {
+        let stages = r##"[{"id":"s1","name":"Main","short":"M","color":"#fff","order":0}]"##;
+        let days = r#"[{"id":"d1","label":"Sat","num":14,"month":"Jun"}]"#;
+        let sets = r#"[{"id":"x1","day":"d1","stage":"s1","artist":"A","startMin":0,"durationMin":60,"genre":"","cancelled":false}]"#;
+
+        // Server doc with data
+        let server_doc = Doc::new();
+        let root = server_doc.get_or_insert_map("root");
+        {
+            let mut txn = server_doc.transact_mut();
+            root.insert(&mut txn, "stages", stages);
+            root.insert(&mut txn, "days", days);
+            root.insert(&mut txn, "sets", sets);
+        }
+
+        // Client doc (empty)
+        let db = test_db();
+        let mut mgr = DocManager::new(db);
+        mgr.get_or_create("festival/test/state");
+        let client_sv = mgr.get_state_vector("festival/test/state").unwrap();
+
+        // Server computes diff from client's SV
+        let client_sv_decoded = StateVector::decode_v1(&client_sv).unwrap();
+        let diff = server_doc
+            .transact()
+            .encode_state_as_update_v1(&client_sv_decoded);
+
+        // Client applies diff
+        mgr.apply_update("festival/test/state", &diff).unwrap();
+
+        assert_eq!(
+            mgr.read_map_value("festival/test/state", "stages"),
+            Some(stages.to_string())
+        );
+        assert_eq!(
+            mgr.read_map_value("festival/test/state", "days"),
+            Some(days.to_string())
+        );
+        assert_eq!(
+            mgr.read_map_value("festival/test/state", "sets"),
+            Some(sets.to_string())
+        );
+    }
+
+    /// Verifies that `read_map_value` returns None for an empty/non-existent doc.
+    #[test]
+    fn test_read_lineup_from_empty_doc_returns_none() {
+        let db = test_db();
+        let mut mgr = DocManager::new(db);
+        assert_eq!(mgr.read_map_value("festival/missing/state", "stages"), None);
+        assert_eq!(mgr.read_map_value("festival/missing/state", "days"), None);
+        assert_eq!(mgr.read_map_value("festival/missing/state", "sets"), None);
+    }
 }

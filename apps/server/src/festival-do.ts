@@ -230,6 +230,24 @@ export class FestivalDO extends DurableObject {
 			});
 		}
 
+		// DELETE /reset — wipe all storage and reinitialize
+		if (request.method === "DELETE" && url.pathname === "/reset") {
+			// Close all active WebSocket sessions
+			for (const [ws] of this.#sessions) {
+				ws.close(1000, "DO reset");
+			}
+			this.#sessions.clear();
+
+			// Wipe all storage (SQL tables + KV)
+			await this.ctx.storage.deleteAll();
+
+			// Reinitialize
+			this.#initSchema();
+			await this.#initKeypair();
+
+			return Response.json({ ok: true });
+		}
+
 		// POST /sign-update — sign a Yrs update with the DO's key, broadcast it
 		// to WS subscribers, and return the signed update. Requires admin auth.
 		if (request.method === "POST" && url.pathname === "/sign-update") {
@@ -692,6 +710,89 @@ export class FestivalDO extends DurableObject {
 		for (const pk of publicKeys) {
 			this.sql.exec("INSERT OR IGNORE INTO admins (public_key) VALUES (?)", pk);
 		}
+	}
+
+	/**
+	 * Seed the Festival DO with lineup data as a signed Yrs CRDT document.
+	 * Called by `ensureFestivalConfig` when the Festival DO is first initialised.
+	 *
+	 * Creates a Yrs doc with root-map keys "stages", "days", "sets" (JSON array
+	 * strings), signs the update with the DO's Ed25519 key, and stores it in the
+	 * gossip_log so that `sv_exchange` returns the lineup to connecting clients.
+	 */
+	async seedLineup(
+		festivalId: string,
+		lineup: {
+			stages: { id: string; name: string; short: string; color: string; order: number }[];
+			days: { id: string; label: string; num: number; month: string }[];
+			sets: {
+				id: string;
+				day: string;
+				stage: string;
+				artist: string;
+				startMin: number;
+				durationMin: number;
+				genre: string;
+				cancelled: boolean;
+			}[];
+		},
+	) {
+		if (!this.#secretKey || !this.#publicKey) {
+			throw new Error("Keypair not initialized");
+		}
+
+		const docId = `festival/${festivalId}/state`;
+		const topic = docId;
+
+		// Check if we already have a seeded doc — skip if so
+		const existing = this.sql
+			.exec("SELECT 1 FROM gossip_log WHERE topic = ? LIMIT 1", topic)
+			.toArray();
+		if (existing.length > 0) return;
+
+		// Build a Yrs doc with the lineup data in the root map
+		const doc = new Y.Doc();
+		const root = doc.getMap("root");
+		root.set("stages", JSON.stringify(lineup.stages));
+		root.set("days", JSON.stringify(lineup.days));
+		root.set("sets", JSON.stringify(lineup.sets));
+
+		// Encode the full state as the update bytes
+		const updateBytes = Y.encodeStateAsUpdate(doc);
+
+		// Sign with the DO's Ed25519 key
+		const signature = await sign(this.#secretKey, updateBytes);
+
+		const signedUpdate = {
+			update: bytesToBase64(updateBytes),
+			author: "festival-do",
+			signature: bytesToBase64(signature),
+		};
+
+		const wireMessage: GossipWireMessage = {
+			kind: "festival_update",
+			doc_id: docId,
+			payload: JSON.stringify(signedUpdate),
+		};
+
+		// Store in gossip_log
+		this.sql.exec(
+			"INSERT INTO gossip_log (topic, message) VALUES (?, ?)",
+			topic,
+			JSON.stringify(wireMessage),
+		);
+
+		// Also persist the consolidated Yrs doc for faster sv_exchange
+		const fullState = Y.encodeStateAsUpdate(doc);
+		this.sql.exec(
+			"INSERT OR REPLACE INTO yrs_docs (doc_id, data, updated_at) VALUES (?, ?, datetime('now'))",
+			docId,
+			fullState,
+		);
+
+		console.log(
+			`[seedLineup] seeded ${docId}: ${lineup.stages.length} stages, ${lineup.days.length} days, ${lineup.sets.length} sets`,
+		);
 	}
 }
 

@@ -532,6 +532,14 @@ export class MainDO extends DurableObject {
 			return Response.json(this.#getFestival(id));
 		}
 
+		// DELETE /festivals/:id/reset — admin auth gate for Festival DO reset
+		const festivalResetMatch = path.match(/^\/festivals\/([^/]+)\/reset$/);
+		if (method === "DELETE" && festivalResetMatch) {
+			const authResult = await this.#requireAdmin(request);
+			if (authResult instanceof Response) return authResult;
+			return Response.json({ ok: true });
+		}
+
 		// DELETE /festivals/:id — delete a festival (admin-only)
 		const festivalDeleteMatch = path.match(/^\/festivals\/([^/]+)$/);
 		if (method === "DELETE" && festivalDeleteMatch) {
@@ -607,6 +615,14 @@ export class MainDO extends DurableObject {
 		if (method === "POST" && path === "/auth/register/begin") {
 			const body = (await request.json()) as { userId: string };
 			const options = await generateRegistrationOptions(body.userId, env);
+			console.log(
+				"Register begin — RP_ID:",
+				env.RP_ID,
+				"options.rp:",
+				(options as Record<string, unknown>).rp,
+				"expectedOrigins:",
+				getExpectedOrigins(env),
+			);
 			// Store challenge for verification (5-min TTL)
 			const challenge = (options as { challenge: string }).challenge;
 			await this.ctx.storage.put(`challenge:${challenge}`, body.userId);
@@ -621,6 +637,7 @@ export class MainDO extends DurableObject {
 				challenge: string;
 				ed25519PublicKey: string;
 			};
+			console.log("Register complete — webauthnResponse:", JSON.stringify(body.webauthnResponse));
 			if (!body.ed25519PublicKey || body.ed25519PublicKey.length !== 64) {
 				return new Response("ed25519PublicKey must be 64 hex chars", { status: 400 });
 			}

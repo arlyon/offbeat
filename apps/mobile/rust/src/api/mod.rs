@@ -441,6 +441,7 @@ impl AppNode {
 
         let doc_manager = Arc::clone(&self.inner.doc_manager);
         let db = Arc::clone(&self.inner.db);
+        let notifier = Arc::clone(&self.inner.notifier);
         let festival_pk = self.inner.festival_public_keys.get(&festival_id).copied()
             .ok_or_else(|| anyhow::anyhow!(
                 "no public key for festival {festival_id} — call set_festival_public_key first"
@@ -451,6 +452,7 @@ impl AppNode {
             doc_manager,
             db,
             festival_pk,
+            notifier,
         )
         .await?;
 

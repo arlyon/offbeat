@@ -1,5 +1,6 @@
 // OFFBEAT Mobile App — Entry point
 
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -82,8 +83,10 @@ class _OffbeatShellState extends State<_OffbeatShell>
   bool _festivalsLoading = false;
   String? _festivalsError;
 
-  // Lineup state (reactive stream)
-  Stream<LineupDto?>? _lineupStream;
+  // Lineup state (subscription-based)
+  StreamSubscription<LineupDto?>? _lineupSub;
+  LineupDto? _lineup;
+  bool _lineupLoading = true;
 
   // Sync status
   bool _isSyncing = false;
@@ -123,6 +126,7 @@ class _OffbeatShellState extends State<_OffbeatShell>
 
   @override
   void dispose() {
+    _lineupSub?.cancel();
     _navController.dispose();
     super.dispose();
   }
@@ -246,6 +250,8 @@ class _OffbeatShellState extends State<_OffbeatShell>
     // Recreate a fresh node
     final node = await AppNode.create(dbPath: dbPath);
 
+    _lineupSub?.cancel();
+    _lineupSub = null;
     setState(() {
       _node = node;
       _authState = 'unregistered';
@@ -259,6 +265,8 @@ class _OffbeatShellState extends State<_OffbeatShell>
       _adminRequestStatus = '';
       _selectedFestival = null;
       _activeTab = AppTab.schedule;
+      _lineup = null;
+      _lineupLoading = true;
     });
   }
 
@@ -266,12 +274,24 @@ class _OffbeatShellState extends State<_OffbeatShell>
     final node = _node;
     if (node == null) return;
 
-    // Start watching the lineup stream immediately
-    final stream = await node.watchLineup(festivalId: fest.id);
+    // Cancel any previous lineup subscription
+    _lineupSub?.cancel();
 
     setState(() {
       _selectedFestival = fest;
-      _lineupStream = stream;
+      _lineup = null;
+      _lineupLoading = true;
+    });
+
+    // Start watching the lineup stream
+    final stream = await node.watchLineup(festivalId: fest.id);
+    _lineupSub = stream.listen((lineup) {
+      if (mounted) {
+        setState(() {
+          _lineup = lineup;
+          _lineupLoading = false;
+        });
+      }
     });
     _navController.forward(from: 0.0);
 
@@ -502,12 +522,15 @@ class _OffbeatShellState extends State<_OffbeatShell>
   }
 
   void _navigateBack() {
+    _lineupSub?.cancel();
+    _lineupSub = null;
     _navController.reverse().then((_) {
       if (!mounted) return;
       setState(() {
         _selectedFestival = null;
         _activeTab = AppTab.schedule;
-        _lineupStream = null;
+        _lineup = null;
+        _lineupLoading = true;
       });
     });
   }
@@ -710,59 +733,46 @@ class _OffbeatShellState extends State<_OffbeatShell>
   }
 
   Widget _buildScheduleTab() {
-    final stream = _lineupStream;
-    if (stream == null) {
-      return const Center(
-        child: CircularProgressIndicator(color: colorAccent, strokeWidth: 1.5),
-      );
+    final lineup = _lineup;
+
+    List<Stage>? stages;
+    List<Day>? days;
+    List<FestSet>? sets;
+
+    if (lineup != null) {
+      stages = lineup.stages.map((s) => Stage.fromJson({
+        'id': s.id,
+        'name': s.name,
+        'short': s.short,
+        'color': s.color,
+        'order': s.order,
+      })).toList();
+
+      days = lineup.days.map((d) => Day.fromJson({
+        'id': d.id,
+        'label': d.label,
+        'num': d.num,
+        'month': d.month,
+      })).toList();
+
+      sets = lineup.sets.map((s) => FestSet.fromJson({
+        'id': s.id,
+        'day': s.day,
+        'stage': s.stage,
+        'artist': s.artist,
+        'startMin': s.startMin,
+        'durationMin': s.durationMin,
+        'genre': s.genre,
+        'cancelled': s.cancelled,
+      })).toList();
     }
 
-    return StreamBuilder<LineupDto?>(
-      stream: stream,
-      builder: (context, snapshot) {
-        final lineup = snapshot.data;
-        final loading = snapshot.connectionState == ConnectionState.waiting && lineup == null;
-
-        List<Stage>? stages;
-        List<Day>? days;
-        List<FestSet>? sets;
-
-        if (lineup != null) {
-          stages = lineup.stages.map((s) => Stage.fromJson({
-            'id': s.id,
-            'name': s.name,
-            'short': s.short,
-            'color': s.color,
-            'order': s.order,
-          })).toList();
-
-          days = lineup.days.map((d) => Day.fromJson({
-            'id': d.id,
-            'label': d.label,
-            'num': d.num,
-            'month': d.month,
-          })).toList();
-
-          sets = lineup.sets.map((s) => FestSet.fromJson({
-            'id': s.id,
-            'day': s.day,
-            'stage': s.stage,
-            'artist': s.artist,
-            'startMin': s.startMin,
-            'durationMin': s.durationMin,
-            'genre': s.genre,
-            'cancelled': s.cancelled,
-          })).toList();
-        }
-
-        return FestivalDetailScreen(
-          festival: _selectedFestival!,
-          stages: stages,
-          days: days,
-          sets: sets,
-          loading: loading,
-        );
-      },
+    return FestivalDetailScreen(
+      festival: _selectedFestival!,
+      stages: stages,
+      days: days,
+      sets: sets,
+      loading: _lineupLoading,
     );
   }
 

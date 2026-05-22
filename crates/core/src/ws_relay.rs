@@ -93,7 +93,7 @@ pub enum WsClientMessage {
 
 /// Messages received from the DO.
 #[derive(Deserialize, Debug, Clone)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum WsServerMessage {
     AuthOk {
         authenticated: bool,
@@ -342,6 +342,7 @@ pub async fn connect(
     doc_manager: Arc<Mutex<DocManager>>,
     db: Arc<Database>,
     festival_public_key: [u8; 32],
+    notifier: Arc<crate::notifier::ResourceNotifier>,
 ) -> anyhow::Result<(
     WsRelaySink,
     std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>>,
@@ -372,6 +373,7 @@ pub async fn connect(
         doc_manager,
         db,
         festival_public_key,
+        notifier,
     ));
 
     Ok((relay_sink, receive_loop))
@@ -384,6 +386,7 @@ pub async fn connect_with_retry(
     doc_manager: Arc<Mutex<DocManager>>,
     db: Arc<Database>,
     festival_public_key: [u8; 32],
+    notifier: Arc<crate::notifier::ResourceNotifier>,
 ) -> anyhow::Result<(
     WsRelaySink,
     std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>>,
@@ -392,7 +395,7 @@ pub async fn connect_with_retry(
     const MAX_DELAY_MS: u64 = 30_000;
 
     for attempt in 0..max_retries {
-        match connect(url, doc_manager.clone(), db.clone(), festival_public_key).await {
+        match connect(url, doc_manager.clone(), db.clone(), festival_public_key, notifier.clone()).await {
             Ok(result) => return Ok(result),
             Err(e) if attempt + 1 == max_retries => return Err(e),
             Err(e) => {
@@ -418,6 +421,7 @@ async fn run_receive_loop_with_reconnect(
     doc_manager: Arc<Mutex<DocManager>>,
     db: Arc<Database>,
     festival_public_key: [u8; 32],
+    notifier: Arc<crate::notifier::ResourceNotifier>,
 ) -> anyhow::Result<()> {
     use rand::RngExt;
     const MAX_DELAY_MS: u64 = 30_000;
@@ -432,6 +436,7 @@ async fn run_receive_loop_with_reconnect(
             &doc_manager,
             &db,
             festival_public_key,
+            &notifier,
         )
         .await;
 
@@ -514,6 +519,7 @@ async fn run_receive_loop(
     doc_manager: &Arc<Mutex<DocManager>>,
     db: &Arc<Database>,
     festival_public_key: [u8; 32],
+    notifier: &Arc<crate::notifier::ResourceNotifier>,
 ) -> anyhow::Result<()> {
     while let Some(msg) = stream.next().await {
         match msg {
@@ -530,6 +536,7 @@ async fn run_receive_loop(
                             doc_manager,
                             db,
                             festival_public_key,
+                            notifier,
                         )
                         .await
                         {
@@ -565,6 +572,7 @@ async fn handle_server_message(
     doc_manager: &Arc<Mutex<DocManager>>,
     db: &Arc<Database>,
     festival_public_key: [u8; 32],
+    notifier: &Arc<crate::notifier::ResourceNotifier>,
 ) -> anyhow::Result<()> {
     match msg {
         WsServerMessage::AuthOk {
@@ -637,6 +645,8 @@ async fn handle_server_message(
                 "ws_relay: applied sv_diff for {doc_id} ({} bytes)",
                 diff_bytes.len()
             );
+            // Notify watchers that the doc was updated
+            notifier.notify_doc(&doc_id);
             Ok(())
         }
         WsServerMessage::ChatDiff { topic, messages } => {
@@ -654,6 +664,8 @@ async fn handle_server_message(
                 }
             }
             tracing::info!("ws_relay: applied chat_diff for topic {topic}");
+            // Notify watchers that chat was updated
+            notifier.notify_chat(&topic);
             Ok(())
         }
         WsServerMessage::Subscribed { topics } => {
@@ -811,5 +823,44 @@ mod tests {
         let raw = r#"{"type":"future_type","data":"something"}"#;
         let msg: WsServerMessage = serde_json::from_str(raw).unwrap();
         assert!(matches!(msg, WsServerMessage::Unknown));
+    }
+
+    #[test]
+    fn test_deserialize_sv_diff() {
+        let raw = r#"{"type":"sv_diff","docId":"festival/test/state","diff":"AQAAAA=="}"#;
+        let msg: WsServerMessage = serde_json::from_str(raw).unwrap();
+        match msg {
+            WsServerMessage::SvDiff { doc_id, diff } => {
+                assert_eq!(doc_id, "festival/test/state");
+                assert_eq!(diff, "AQAAAA==");
+            }
+            other => panic!("expected SvDiff, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_deserialize_auth_ok() {
+        let raw = r#"{"type":"auth_ok","authenticated":true,"adminCount":1}"#;
+        let msg: WsServerMessage = serde_json::from_str(raw).unwrap();
+        match msg {
+            WsServerMessage::AuthOk { authenticated, admin_count } => {
+                assert!(authenticated);
+                assert_eq!(admin_count, 1);
+            }
+            other => panic!("expected AuthOk, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_deserialize_chat_diff() {
+        let raw = r#"{"type":"chat_diff","topic":"festival/test/chat","messages":[]}"#;
+        let msg: WsServerMessage = serde_json::from_str(raw).unwrap();
+        match msg {
+            WsServerMessage::ChatDiff { topic, messages } => {
+                assert_eq!(topic, "festival/test/chat");
+                assert!(messages.is_empty());
+            }
+            other => panic!("expected ChatDiff, got {other:?}"),
+        }
     }
 }
