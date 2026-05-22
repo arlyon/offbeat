@@ -18,6 +18,7 @@ class TopNav extends StatelessWidget {
   final bool syncing;
   final bool relayConnected;
   final int blePeerCount;
+  final VoidCallback? onConnectionTap;
 
   const TopNav({
     super.key,
@@ -29,6 +30,7 @@ class TopNav extends StatelessWidget {
     this.syncing = false,
     this.relayConnected = false,
     this.blePeerCount = -1, // -1 = BLE unavailable
+    this.onConnectionTap,
   });
 
   static const _curve = Cubic(0.2, 0.7, 0.2, 1.0);
@@ -172,36 +174,42 @@ class TopNav extends StatelessWidget {
                     // Connection status dot + peer count
                     // green = actively syncing, purple = relay connected,
                     // blue = BLE peer(s), grey = disconnected
-                    Padding(
-                      padding: const EdgeInsets.only(right: 4),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            Icons.circle,
-                            size: 7,
-                            color: syncing
-                                ? colorOk
-                                : relayConnected
-                                    ? const Color(0xFFC77DFF)
-                                    : blePeerCount > 0
-                                        ? colorCoAccent
-                                        : colorFg4,
-                          ),
-                          if (_peerCount > 0) ...[
-                            const SizedBox(width: 3),
-                            Text(
-                              '$_peerCount',
-                              style: const TextStyle(
-                                fontFamily: 'JetBrainsMono',
-                                fontSize: 10,
-                                fontWeight: FontWeight.w700,
-                                color: colorFg3,
-                                height: 1,
+                    GestureDetector(
+                      onTap: onConnectionTap,
+                      child: Padding(
+                        padding: const EdgeInsets.only(right: 4),
+                        child: SizedBox(
+                          height: 36,
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.circle,
+                                size: 7,
+                                color: syncing
+                                    ? colorOk
+                                    : relayConnected
+                                        ? const Color(0xFFC77DFF)
+                                        : blePeerCount > 0
+                                            ? colorCoAccent
+                                            : colorFg4,
                               ),
-                            ),
-                          ],
-                        ],
+                              if (_peerCount > 0) ...[
+                                const SizedBox(width: 3),
+                                Text(
+                                  '$_peerCount',
+                                  style: const TextStyle(
+                                    fontFamily: 'JetBrainsMono',
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w700,
+                                    color: colorFg3,
+                                    height: 1,
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
                       ),
                     ),
                     ...rightWidgets,

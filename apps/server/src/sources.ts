@@ -23,6 +23,8 @@ const SOURCES: ClashfinderSource[] = [
 		city: "London",
 		country: "GB",
 		genres: ["Electronic", "Indie", "Experimental"],
+		lat: 51.5369,
+		lon: -0.0394,
 	},
 	{
 		festivalId: "gala2026",
@@ -32,6 +34,8 @@ const SOURCES: ClashfinderSource[] = [
 		city: "London",
 		country: "GB",
 		genres: ["Electronic", "House", "Techno"],
+		lat: 51.4625,
+		lon: -0.0693,
 	},
 	{
 		festivalId: "houghton2025",
@@ -41,6 +45,8 @@ const SOURCES: ClashfinderSource[] = [
 		city: "King's Lynn",
 		country: "GB",
 		genres: ["Electronic", "House", "Techno", "Ambient"],
+		lat: 52.8272,
+		lon: 0.6544,
 	},
 ];
 

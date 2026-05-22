@@ -28,6 +28,8 @@ interface FestivalFixture {
 	country: string;
 	genres: string[];
 	clashfinderId: string;
+	lat?: number;
+	lon?: number;
 }
 
 function hexToBytes(hex: string): Uint8Array {
@@ -71,6 +73,8 @@ async function registerFestival(
 			city: festival.city,
 			country: festival.country,
 			genres: festival.genres,
+			lat: festival.lat,
+			lon: festival.lon,
 		},
 	};
 

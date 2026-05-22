@@ -57,6 +57,8 @@ export class MainDO extends DurableObject {
 				status TEXT NOT NULL DEFAULT 'upcoming',
 				clashfinder_id TEXT,
 				public_key TEXT,
+				lat REAL,
+				lon REAL,
 				updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 			);
 
@@ -75,6 +77,7 @@ export class MainDO extends DurableObject {
 				label TEXT NOT NULL,
 				num INTEGER NOT NULL,
 				month TEXT NOT NULL,
+				year INTEGER NOT NULL,
 				PRIMARY KEY (festival_id, id)
 			);
 
@@ -91,6 +94,9 @@ export class MainDO extends DurableObject {
 				PRIMARY KEY (festival_id, id)
 			);
 
+		`);
+
+		this.sql.exec(`
 			CREATE TABLE IF NOT EXISTS credentials (
 				id TEXT PRIMARY KEY,
 				user_id TEXT NOT NULL,
@@ -141,13 +147,14 @@ export class MainDO extends DurableObject {
 
 		for (const day of lineup.days) {
 			this.sql.exec(
-				`INSERT INTO festival_days (id, festival_id, label, num, month)
-				 VALUES (?, ?, ?, ?, ?)`,
+				`INSERT INTO festival_days (id, festival_id, label, num, month, year)
+				 VALUES (?, ?, ?, ?, ?, ?)`,
 				day.id,
 				festivalId,
 				day.label,
 				day.num,
 				day.month,
+				day.year,
 			);
 		}
 
@@ -193,6 +200,8 @@ export class MainDO extends DurableObject {
 				clashfinderId: row.clashfinder_id ?? undefined,
 				publicKey: row.public_key ?? "",
 				updatedAt: row.updated_at,
+				lat: (row.lat as number) ?? undefined,
+				lon: (row.lon as number) ?? undefined,
 				stages: stages.map((s) => ({
 					id: s.id,
 					name: s.name,
@@ -231,6 +240,8 @@ export class MainDO extends DurableObject {
 			clashfinderId: row.clashfinder_id ?? undefined,
 			publicKey: row.public_key ?? "",
 			updatedAt: row.updated_at,
+			lat: (row.lat as number) ?? undefined,
+			lon: (row.lon as number) ?? undefined,
 			stages: stages.map((s) => ({
 				id: s.id,
 				name: s.name,
@@ -320,42 +331,68 @@ export class MainDO extends DurableObject {
 		const festival = this.#getFestival(id);
 		if (!festival) return null;
 
+		interface StageRow {
+			id: string;
+			name: string;
+			short: string;
+			color: string;
+			sort_order: number;
+		}
+		interface DayRow {
+			id: string;
+			label: string;
+			num: number;
+			month: string;
+			year: number;
+		}
+		interface SetRow {
+			id: string;
+			day_id: string;
+			stage_id: string;
+			artist: string;
+			start_min: number;
+			duration_min: number;
+			genre: string;
+			cancelled: number;
+		}
+
 		const stages = this.sql
 			.exec("SELECT * FROM festival_stages WHERE festival_id = ? ORDER BY sort_order", id)
-			.toArray() as Record<string, unknown>[];
+			.toArray() as unknown as StageRow[];
 
 		const days = this.sql
 			.exec("SELECT * FROM festival_days WHERE festival_id = ? ORDER BY num", id)
-			.toArray() as Record<string, unknown>[];
+			.toArray() as unknown as DayRow[];
 
 		const sets = this.sql
 			.exec("SELECT * FROM festival_sets WHERE festival_id = ? ORDER BY start_min", id)
-			.toArray() as Record<string, unknown>[];
+			.toArray() as unknown as SetRow[];
 
 		return {
 			festival: { id, name: festival.name as string, location: festival.location as string },
 			stages: stages.map((s) => ({
-				id: s.id as string,
-				name: s.name as string,
-				short: s.short as string,
-				color: s.color as string,
-				order: s.sort_order as number,
+				id: s.id,
+				name: s.name,
+				short: s.short,
+				color: s.color,
+				order: s.sort_order,
 			})),
 			days: days.map((d) => ({
-				id: d.id as string,
-				label: d.label as string,
-				num: d.num as number,
-				month: d.month as string,
+				id: d.id,
+				label: d.label,
+				num: d.num,
+				month: d.month,
+				year: d.year,
 			})),
 			sets: sets.map((s) => ({
-				id: s.id as string,
-				day: s.day_id as string,
-				stage: s.stage_id as string,
-				artist: s.artist as string,
-				startMin: s.start_min as number,
-				durationMin: s.duration_min as number,
-				genre: s.genre as string,
-				cancelled: (s.cancelled as number) === 1,
+				id: s.id,
+				day: s.day_id,
+				stage: s.stage_id,
+				artist: s.artist,
+				startMin: s.start_min,
+				durationMin: s.duration_min,
+				genre: s.genre,
+				cancelled: s.cancelled === 1,
 			})),
 		};
 	}
@@ -440,33 +477,22 @@ export class MainDO extends DurableObject {
 				location: src.location,
 			});
 
-			// Derive start/end dates from the lineup days
-			const dayNums = lineup.days.map((d) => d.num);
-			const minDay = Math.min(...dayNums);
-			const maxDay = Math.max(...dayNums);
-			// Best-effort date construction from day numbers + month
-			const month = lineup.days[0]?.month ?? "Jan";
-			const monthIdx = [
-				"Jan",
-				"Feb",
-				"Mar",
-				"Apr",
-				"May",
-				"Jun",
-				"Jul",
-				"Aug",
-				"Sep",
-				"Oct",
-				"Nov",
-				"Dec",
-			].indexOf(month);
-			const year = new Date().getFullYear();
-			const startDate = new Date(year, monthIdx, minDay).toISOString().split("T")[0];
-			const endDate = new Date(year, monthIdx, maxDay).toISOString().split("T")[0];
+			// Derive start/end dates from the API event datetimes
+			const allStarts = apiResponse.locations.flatMap((loc) => loc.events.map((e) => e.start));
+			const allEnds = apiResponse.locations.flatMap((loc) => loc.events.map((e) => e.end));
+			const allDatetimes = [...allStarts, ...allEnds]
+				.map((dt) => new Date(dt.replace(" ", "T")))
+				.filter((d) => !Number.isNaN(d.getTime()));
+			allDatetimes.sort((a, b) => a.getTime() - b.getTime());
+			const startDate =
+				allDatetimes[0]?.toISOString().split("T")[0] ?? new Date().toISOString().split("T")[0];
+			const endDate =
+				allDatetimes[allDatetimes.length - 1]?.toISOString().split("T")[0] ?? startDate;
+			const year = allDatetimes[0]?.getFullYear() ?? new Date().getFullYear();
 
 			this.sql.exec(
-				`INSERT INTO festivals (id, name, year, location, city, country, start_date, end_date, genres, status, clashfinder_id)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				`INSERT INTO festivals (id, name, year, location, city, country, start_date, end_date, genres, status, clashfinder_id, lat, lon)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				src.festivalId,
 				src.name,
 				year,
@@ -478,6 +504,8 @@ export class MainDO extends DurableObject {
 				JSON.stringify(src.genres ?? []),
 				"upcoming",
 				src.clashfinderId,
+				src.lat ?? null,
+				src.lon ?? null,
 			);
 
 			this.#upsertLineup(src.festivalId, lineup);
@@ -521,6 +549,15 @@ export class MainDO extends DurableObject {
 			if (body.genres !== undefined) {
 				updates.push("genres = ?");
 				values.push(JSON.stringify(body.genres));
+			}
+			for (const [key, col] of [
+				["lat", "lat"],
+				["lon", "lon"],
+			]) {
+				if (body[key] !== undefined) {
+					updates.push(`${col} = ?`);
+					values.push(body[key]);
+				}
 			}
 
 			if (updates.length > 0) {

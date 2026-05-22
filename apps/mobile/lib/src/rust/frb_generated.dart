@@ -66,7 +66,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => -2131129893;
+  int get rustContentHash => -1030897408;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -159,6 +159,15 @@ abstract class RustLibApi extends BaseApi {
   Future<String> crateApiAppNodeGetPublicKeyHex({required AppNode that});
 
   Future<List<String>> crateApiAppNodeGetStars({
+    required AppNode that,
+    required String festivalId,
+  });
+
+  Future<TransportStatusDto> crateApiAppNodeGetTransportStatus({
+    required AppNode that,
+  });
+
+  Future<WeatherForecastDto?> crateApiAppNodeGetWeather({
     required AppNode that,
     required String festivalId,
   });
@@ -265,6 +274,15 @@ abstract class RustLibApi extends BaseApi {
 
   Future<Stream<SyncStatusDto>> crateApiAppNodeWatchSyncStatus({
     required AppNode that,
+  });
+
+  Future<Stream<TransportStatusDto>> crateApiAppNodeWatchTransportStatus({
+    required AppNode that,
+  });
+
+  Future<Stream<WeatherForecastDto?>> crateApiAppNodeWatchWeather({
+    required AppNode that,
+    required String festivalId,
   });
 
   Future<Uint8List> crateApiGenerateGroupKey();
@@ -954,6 +972,79 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   );
 
   @override
+  Future<TransportStatusDto> crateApiAppNodeGetTransportStatus({
+    required AppNode that,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerAppNode(
+            that,
+            serializer,
+          );
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 19,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_transport_status_dto,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiAppNodeGetTransportStatusConstMeta,
+        argValues: [that],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiAppNodeGetTransportStatusConstMeta =>
+      const TaskConstMeta(
+        debugName: "AppNode_get_transport_status",
+        argNames: ["that"],
+      );
+
+  @override
+  Future<WeatherForecastDto?> crateApiAppNodeGetWeather({
+    required AppNode that,
+    required String festivalId,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerAppNode(
+            that,
+            serializer,
+          );
+          sse_encode_String(festivalId, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 20,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_opt_box_autoadd_weather_forecast_dto,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiAppNodeGetWeatherConstMeta,
+        argValues: [that, festivalId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiAppNodeGetWeatherConstMeta => const TaskConstMeta(
+    debugName: "AppNode_get_weather",
+    argNames: ["that", "festivalId"],
+  );
+
+  @override
   Future<GroupJoinResultDto> crateApiAppNodeJoinGroup({
     required AppNode that,
     required String invitePayload,
@@ -972,7 +1063,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 19,
+            funcId: 21,
             port: port_,
           );
         },
@@ -1009,7 +1100,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 20,
+            funcId: 22,
             port: port_,
           );
         },
@@ -1048,7 +1139,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 21,
+            funcId: 23,
             port: port_,
           );
         },
@@ -1091,7 +1182,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 22,
+            funcId: 24,
             port: port_,
           );
         },
@@ -1132,7 +1223,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 23,
+            funcId: 25,
             port: port_,
           );
         },
@@ -1172,7 +1263,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 24,
+            funcId: 26,
             port: port_,
           );
         },
@@ -1210,7 +1301,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 25,
+            funcId: 27,
             port: port_,
           );
         },
@@ -1250,7 +1341,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 26,
+            funcId: 28,
             port: port_,
           );
         },
@@ -1288,7 +1379,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 27,
+            funcId: 29,
             port: port_,
           );
         },
@@ -1329,7 +1420,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 28,
+            funcId: 30,
             port: port_,
           );
         },
@@ -1369,7 +1460,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 29,
+            funcId: 31,
             port: port_,
           );
         },
@@ -1407,7 +1498,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 30,
+            funcId: 32,
             port: port_,
           );
         },
@@ -1447,7 +1538,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 31,
+            funcId: 33,
             port: port_,
           );
         },
@@ -1486,7 +1577,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 32,
+            funcId: 34,
             port: port_,
           );
         },
@@ -1528,7 +1619,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 33,
+            funcId: 35,
             port: port_,
           );
         },
@@ -1568,7 +1659,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 34,
+            funcId: 36,
             port: port_,
           );
         },
@@ -1612,7 +1703,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 35,
+            funcId: 37,
             port: port_,
           );
         },
@@ -1650,7 +1741,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 36,
+            funcId: 38,
             port: port_,
           );
         },
@@ -1673,6 +1764,89 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<Stream<TransportStatusDto>> crateApiAppNodeWatchTransportStatus({
+    required AppNode that,
+  }) async {
+    final sink = RustStreamSink<TransportStatusDto>();
+    await handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerAppNode(
+            that,
+            serializer,
+          );
+          sse_encode_StreamSink_transport_status_dto_Sse(sink, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 39,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiAppNodeWatchTransportStatusConstMeta,
+        argValues: [that, sink],
+        apiImpl: this,
+      ),
+    );
+    return sink.stream;
+  }
+
+  TaskConstMeta get kCrateApiAppNodeWatchTransportStatusConstMeta =>
+      const TaskConstMeta(
+        debugName: "AppNode_watch_transport_status",
+        argNames: ["that", "sink"],
+      );
+
+  @override
+  Future<Stream<WeatherForecastDto?>> crateApiAppNodeWatchWeather({
+    required AppNode that,
+    required String festivalId,
+  }) async {
+    final sink = RustStreamSink<WeatherForecastDto?>();
+    await handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerAppNode(
+            that,
+            serializer,
+          );
+          sse_encode_String(festivalId, serializer);
+          sse_encode_StreamSink_opt_box_autoadd_weather_forecast_dto_Sse(
+            sink,
+            serializer,
+          );
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 40,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiAppNodeWatchWeatherConstMeta,
+        argValues: [that, festivalId, sink],
+        apiImpl: this,
+      ),
+    );
+    return sink.stream;
+  }
+
+  TaskConstMeta get kCrateApiAppNodeWatchWeatherConstMeta =>
+      const TaskConstMeta(
+        debugName: "AppNode_watch_weather",
+        argNames: ["that", "festivalId", "sink"],
+      );
+
+  @override
   Future<Uint8List> crateApiGenerateGroupKey() {
     return handler.executeNormal(
       NormalTask(
@@ -1681,7 +1855,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 37,
+            funcId: 41,
             port: port_,
           );
         },
@@ -1709,7 +1883,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 38,
+            funcId: 42,
             port: port_,
           );
         },
@@ -1736,7 +1910,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 39,
+            funcId: 43,
             port: port_,
           );
         },
@@ -1827,9 +2001,23 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  RustStreamSink<WeatherForecastDto?>
+  dco_decode_StreamSink_opt_box_autoadd_weather_forecast_dto_Sse(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    throw UnimplementedError();
+  }
+
+  @protected
   RustStreamSink<SyncStatusDto> dco_decode_StreamSink_sync_status_dto_Sse(
     dynamic raw,
   ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    throw UnimplementedError();
+  }
+
+  @protected
+  RustStreamSink<TransportStatusDto>
+  dco_decode_StreamSink_transport_status_dto_Sse(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     throw UnimplementedError();
   }
@@ -1866,6 +2054,22 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  BleStatusDto dco_decode_ble_status_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 6)
+      throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
+    return BleStatusDto(
+      active: dco_decode_bool(arr[0]),
+      peerCount: dco_decode_u_32(arr[1]),
+      txBytesPerSec: dco_decode_u_64(arr[2]),
+      rxBytesPerSec: dco_decode_u_64(arr[3]),
+      retransmits: dco_decode_u_64(arr[4]),
+      peers: dco_decode_list_transport_peer_dto(arr[5]),
+    );
+  }
+
+  @protected
   bool dco_decode_bool(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as bool;
@@ -1890,6 +2094,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  WeatherForecastDto dco_decode_box_autoadd_weather_forecast_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_weather_forecast_dto(raw);
+  }
+
+  @protected
   ChatMessageDto dco_decode_chat_message_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
@@ -1904,6 +2114,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       stageId: dco_decode_opt_String(arr[5]),
       timestamp: dco_decode_String(arr[6]),
     );
+  }
+
+  @protected
+  double dco_decode_f_64(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as double;
   }
 
   @protected
@@ -1982,6 +2198,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  HourlyWeatherDto dco_decode_hourly_weather_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 5)
+      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
+    return HourlyWeatherDto(
+      time: dco_decode_list_String(arr[0]),
+      temperature2M: dco_decode_list_prim_f_64_strict(arr[1]),
+      precipitationProbability: dco_decode_list_prim_f_64_strict(arr[2]),
+      weatherCode: dco_decode_list_prim_u_32_strict(arr[3]),
+      windSpeed10M: dco_decode_list_prim_f_64_strict(arr[4]),
+    );
+  }
+
+  @protected
   int dco_decode_i_32(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as int;
@@ -2003,13 +2234,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   LineupDayDto dco_decode_lineup_day_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 4)
-      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    if (arr.length != 5)
+      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
     return LineupDayDto(
       id: dco_decode_String(arr[0]),
       label: dco_decode_String(arr[1]),
       num: dco_decode_i_32(arr[2]),
       month: dco_decode_String(arr[3]),
+      year: dco_decode_i_32(arr[4]),
     );
   }
 
@@ -2108,6 +2340,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  Float64List dco_decode_list_prim_f_64_strict(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as Float64List;
+  }
+
+  @protected
+  Uint32List dco_decode_list_prim_u_32_strict(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as Uint32List;
+  }
+
+  @protected
   List<int> dco_decode_list_prim_u_8_loose(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as List<int>;
@@ -2130,6 +2374,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<TransportPeerDto> dco_decode_list_transport_peer_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_transport_peer_dto).toList();
+  }
+
+  @protected
   String? dco_decode_opt_String(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_String(raw);
@@ -2145,6 +2395,30 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   LineupDto? dco_decode_opt_box_autoadd_lineup_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_box_autoadd_lineup_dto(raw);
+  }
+
+  @protected
+  WeatherForecastDto? dco_decode_opt_box_autoadd_weather_forecast_dto(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null
+        ? null
+        : dco_decode_box_autoadd_weather_forecast_dto(raw);
+  }
+
+  @protected
+  RelayStatusDto dco_decode_relay_status_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 4)
+      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    return RelayStatusDto(
+      connected: dco_decode_bool(arr[0]),
+      authenticated: dco_decode_bool(arr[1]),
+      txBytesPerSec: dco_decode_u_64(arr[2]),
+      rxBytesPerSec: dco_decode_u_64(arr[3]),
+    );
   }
 
   @protected
@@ -2175,9 +2449,40 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  TransportPeerDto dco_decode_transport_peer_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 3)
+      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    return TransportPeerDto(
+      deviceId: dco_decode_String(arr[0]),
+      phase: dco_decode_String(arr[1]),
+      connectPath: dco_decode_opt_String(arr[2]),
+    );
+  }
+
+  @protected
+  TransportStatusDto dco_decode_transport_status_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2)
+      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return TransportStatusDto(
+      relay: dco_decode_relay_status_dto(arr[0]),
+      ble: dco_decode_ble_status_dto(arr[1]),
+    );
+  }
+
+  @protected
   int dco_decode_u_32(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as int;
+  }
+
+  @protected
+  BigInt dco_decode_u_64(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dcoDecodeU64(raw);
   }
 
   @protected
@@ -2196,6 +2501,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   BigInt dco_decode_usize(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dcoDecodeU64(raw);
+  }
+
+  @protected
+  WeatherForecastDto dco_decode_weather_forecast_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 5)
+      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
+    return WeatherForecastDto(
+      updatedAt: dco_decode_String(arr[0]),
+      lat: dco_decode_f_64(arr[1]),
+      lon: dco_decode_f_64(arr[2]),
+      timezone: dco_decode_String(arr[3]),
+      hourly: dco_decode_hourly_weather_dto(arr[4]),
+    );
   }
 
   @protected
@@ -2280,9 +2600,25 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  RustStreamSink<WeatherForecastDto?>
+  sse_decode_StreamSink_opt_box_autoadd_weather_forecast_dto_Sse(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    throw UnimplementedError('Unreachable ()');
+  }
+
+  @protected
   RustStreamSink<SyncStatusDto> sse_decode_StreamSink_sync_status_dto_Sse(
     SseDeserializer deserializer,
   ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    throw UnimplementedError('Unreachable ()');
+  }
+
+  @protected
+  RustStreamSink<TransportStatusDto>
+  sse_decode_StreamSink_transport_status_dto_Sse(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     throw UnimplementedError('Unreachable ()');
   }
@@ -2316,6 +2652,25 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  BleStatusDto sse_decode_ble_status_dto(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_active = sse_decode_bool(deserializer);
+    var var_peerCount = sse_decode_u_32(deserializer);
+    var var_txBytesPerSec = sse_decode_u_64(deserializer);
+    var var_rxBytesPerSec = sse_decode_u_64(deserializer);
+    var var_retransmits = sse_decode_u_64(deserializer);
+    var var_peers = sse_decode_list_transport_peer_dto(deserializer);
+    return BleStatusDto(
+      active: var_active,
+      peerCount: var_peerCount,
+      txBytesPerSec: var_txBytesPerSec,
+      rxBytesPerSec: var_rxBytesPerSec,
+      retransmits: var_retransmits,
+      peers: var_peers,
+    );
+  }
+
+  @protected
   bool sse_decode_bool(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return deserializer.buffer.getUint8() != 0;
@@ -2344,6 +2699,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  WeatherForecastDto sse_decode_box_autoadd_weather_forecast_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_weather_forecast_dto(deserializer));
+  }
+
+  @protected
   ChatMessageDto sse_decode_chat_message_dto(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_id = sse_decode_String(deserializer);
@@ -2362,6 +2725,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       stageId: var_stageId,
       timestamp: var_timestamp,
     );
+  }
+
+  @protected
+  double sse_decode_f_64(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return deserializer.buffer.getFloat64();
   }
 
   @protected
@@ -2436,6 +2805,25 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  HourlyWeatherDto sse_decode_hourly_weather_dto(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_time = sse_decode_list_String(deserializer);
+    var var_temperature2M = sse_decode_list_prim_f_64_strict(deserializer);
+    var var_precipitationProbability = sse_decode_list_prim_f_64_strict(
+      deserializer,
+    );
+    var var_weatherCode = sse_decode_list_prim_u_32_strict(deserializer);
+    var var_windSpeed10M = sse_decode_list_prim_f_64_strict(deserializer);
+    return HourlyWeatherDto(
+      time: var_time,
+      temperature2M: var_temperature2M,
+      precipitationProbability: var_precipitationProbability,
+      weatherCode: var_weatherCode,
+      windSpeed10M: var_windSpeed10M,
+    );
+  }
+
+  @protected
   int sse_decode_i_32(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return deserializer.buffer.getInt32();
@@ -2456,11 +2844,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_label = sse_decode_String(deserializer);
     var var_num = sse_decode_i_32(deserializer);
     var var_month = sse_decode_String(deserializer);
+    var var_year = sse_decode_i_32(deserializer);
     return LineupDayDto(
       id: var_id,
       label: var_label,
       num: var_num,
       month: var_month,
+      year: var_year,
     );
   }
 
@@ -2622,6 +3012,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  Float64List sse_decode_list_prim_f_64_strict(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var len_ = sse_decode_i_32(deserializer);
+    return deserializer.buffer.getFloat64List(len_);
+  }
+
+  @protected
+  Uint32List sse_decode_list_prim_u_32_strict(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var len_ = sse_decode_i_32(deserializer);
+    return deserializer.buffer.getUint32List(len_);
+  }
+
+  @protected
   List<int> sse_decode_list_prim_u_8_loose(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var len_ = sse_decode_i_32(deserializer);
@@ -2645,6 +3049,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var ans_ = <ResourceSyncStatusDto>[];
     for (var idx_ = 0; idx_ < len_; ++idx_) {
       ans_.add(sse_decode_resource_sync_status_dto(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
+  List<TransportPeerDto> sse_decode_list_transport_peer_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <TransportPeerDto>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_transport_peer_dto(deserializer));
     }
     return ans_;
   }
@@ -2687,6 +3105,34 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  WeatherForecastDto? sse_decode_opt_box_autoadd_weather_forecast_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_box_autoadd_weather_forecast_dto(deserializer));
+    } else {
+      return null;
+    }
+  }
+
+  @protected
+  RelayStatusDto sse_decode_relay_status_dto(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_connected = sse_decode_bool(deserializer);
+    var var_authenticated = sse_decode_bool(deserializer);
+    var var_txBytesPerSec = sse_decode_u_64(deserializer);
+    var var_rxBytesPerSec = sse_decode_u_64(deserializer);
+    return RelayStatusDto(
+      connected: var_connected,
+      authenticated: var_authenticated,
+      txBytesPerSec: var_txBytesPerSec,
+      rxBytesPerSec: var_rxBytesPerSec,
+    );
+  }
+
+  @protected
   ResourceSyncStatusDto sse_decode_resource_sync_status_dto(
     SseDeserializer deserializer,
   ) {
@@ -2717,9 +3163,38 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  TransportPeerDto sse_decode_transport_peer_dto(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_deviceId = sse_decode_String(deserializer);
+    var var_phase = sse_decode_String(deserializer);
+    var var_connectPath = sse_decode_opt_String(deserializer);
+    return TransportPeerDto(
+      deviceId: var_deviceId,
+      phase: var_phase,
+      connectPath: var_connectPath,
+    );
+  }
+
+  @protected
+  TransportStatusDto sse_decode_transport_status_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_relay = sse_decode_relay_status_dto(deserializer);
+    var var_ble = sse_decode_ble_status_dto(deserializer);
+    return TransportStatusDto(relay: var_relay, ble: var_ble);
+  }
+
+  @protected
   int sse_decode_u_32(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return deserializer.buffer.getUint32();
+  }
+
+  @protected
+  BigInt sse_decode_u_64(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return deserializer.buffer.getBigUint64();
   }
 
   @protected
@@ -2737,6 +3212,25 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   BigInt sse_decode_usize(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return deserializer.buffer.getBigUint64();
+  }
+
+  @protected
+  WeatherForecastDto sse_decode_weather_forecast_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_updatedAt = sse_decode_String(deserializer);
+    var var_lat = sse_decode_f_64(deserializer);
+    var var_lon = sse_decode_f_64(deserializer);
+    var var_timezone = sse_decode_String(deserializer);
+    var var_hourly = sse_decode_hourly_weather_dto(deserializer);
+    return WeatherForecastDto(
+      updatedAt: var_updatedAt,
+      lat: var_lat,
+      lon: var_lon,
+      timezone: var_timezone,
+      hourly: var_hourly,
+    );
   }
 
   @protected
@@ -2852,6 +3346,23 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_StreamSink_opt_box_autoadd_weather_forecast_dto_Sse(
+    RustStreamSink<WeatherForecastDto?> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(
+      self.setupAndSerialize(
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_opt_box_autoadd_weather_forecast_dto,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+      ),
+      serializer,
+    );
+  }
+
+  @protected
   void sse_encode_StreamSink_sync_status_dto_Sse(
     RustStreamSink<SyncStatusDto> self,
     SseSerializer serializer,
@@ -2861,6 +3372,23 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       self.setupAndSerialize(
         codec: SseCodec(
           decodeSuccessData: sse_decode_sync_status_dto,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+      ),
+      serializer,
+    );
+  }
+
+  @protected
+  void sse_encode_StreamSink_transport_status_dto_Sse(
+    RustStreamSink<TransportStatusDto> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(
+      self.setupAndSerialize(
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_transport_status_dto,
           decodeErrorData: sse_decode_AnyhowException,
         ),
       ),
@@ -2890,6 +3418,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.state, serializer);
     sse_encode_opt_String(self.expiresAt, serializer);
+  }
+
+  @protected
+  void sse_encode_ble_status_dto(BleStatusDto self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_bool(self.active, serializer);
+    sse_encode_u_32(self.peerCount, serializer);
+    sse_encode_u_64(self.txBytesPerSec, serializer);
+    sse_encode_u_64(self.rxBytesPerSec, serializer);
+    sse_encode_u_64(self.retransmits, serializer);
+    sse_encode_list_transport_peer_dto(self.peers, serializer);
   }
 
   @protected
@@ -2926,6 +3465,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_box_autoadd_weather_forecast_dto(
+    WeatherForecastDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_weather_forecast_dto(self, serializer);
+  }
+
+  @protected
   void sse_encode_chat_message_dto(
     ChatMessageDto self,
     SseSerializer serializer,
@@ -2938,6 +3486,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_String(self.topic, serializer);
     sse_encode_opt_String(self.stageId, serializer);
     sse_encode_String(self.timestamp, serializer);
+  }
+
+  @protected
+  void sse_encode_f_64(double self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    serializer.buffer.putFloat64(self);
   }
 
   @protected
@@ -3000,6 +3554,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_hourly_weather_dto(
+    HourlyWeatherDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_list_String(self.time, serializer);
+    sse_encode_list_prim_f_64_strict(self.temperature2M, serializer);
+    sse_encode_list_prim_f_64_strict(self.precipitationProbability, serializer);
+    sse_encode_list_prim_u_32_strict(self.weatherCode, serializer);
+    sse_encode_list_prim_f_64_strict(self.windSpeed10M, serializer);
+  }
+
+  @protected
   void sse_encode_i_32(int self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putInt32(self);
@@ -3019,6 +3586,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_String(self.label, serializer);
     sse_encode_i_32(self.num, serializer);
     sse_encode_String(self.month, serializer);
+    sse_encode_i_32(self.year, serializer);
   }
 
   @protected
@@ -3149,6 +3717,26 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_list_prim_f_64_strict(
+    Float64List self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    serializer.buffer.putFloat64List(self);
+  }
+
+  @protected
+  void sse_encode_list_prim_u_32_strict(
+    Uint32List self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    serializer.buffer.putUint32List(self);
+  }
+
+  @protected
   void sse_encode_list_prim_u_8_loose(
     List<int> self,
     SseSerializer serializer,
@@ -3179,6 +3767,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_i_32(self.length, serializer);
     for (final item in self) {
       sse_encode_resource_sync_status_dto(item, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_list_transport_peer_dto(
+    List<TransportPeerDto> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_transport_peer_dto(item, serializer);
     }
   }
 
@@ -3219,6 +3819,31 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_opt_box_autoadd_weather_forecast_dto(
+    WeatherForecastDto? self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_box_autoadd_weather_forecast_dto(self, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_relay_status_dto(
+    RelayStatusDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_bool(self.connected, serializer);
+    sse_encode_bool(self.authenticated, serializer);
+    sse_encode_u_64(self.txBytesPerSec, serializer);
+    sse_encode_u_64(self.rxBytesPerSec, serializer);
+  }
+
+  @protected
   void sse_encode_resource_sync_status_dto(
     ResourceSyncStatusDto self,
     SseSerializer serializer,
@@ -3242,9 +3867,36 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_transport_peer_dto(
+    TransportPeerDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.deviceId, serializer);
+    sse_encode_String(self.phase, serializer);
+    sse_encode_opt_String(self.connectPath, serializer);
+  }
+
+  @protected
+  void sse_encode_transport_status_dto(
+    TransportStatusDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_relay_status_dto(self.relay, serializer);
+    sse_encode_ble_status_dto(self.ble, serializer);
+  }
+
+  @protected
   void sse_encode_u_32(int self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putUint32(self);
+  }
+
+  @protected
+  void sse_encode_u_64(BigInt self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    serializer.buffer.putBigUint64(self);
   }
 
   @protected
@@ -3262,6 +3914,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   void sse_encode_usize(BigInt self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putBigUint64(self);
+  }
+
+  @protected
+  void sse_encode_weather_forecast_dto(
+    WeatherForecastDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.updatedAt, serializer);
+    sse_encode_f_64(self.lat, serializer);
+    sse_encode_f_64(self.lon, serializer);
+    sse_encode_String(self.timezone, serializer);
+    sse_encode_hourly_weather_dto(self.hourly, serializer);
   }
 }
 
@@ -3414,6 +4079,19 @@ class AppNodeImpl extends RustOpaque implements AppNode {
       .api
       .crateApiAppNodeGetStars(that: this, festivalId: festivalId);
 
+  /// Get a snapshot of transport status (no rate computation).
+  Future<TransportStatusDto> getTransportStatus() =>
+      RustLib.instance.api.crateApiAppNodeGetTransportStatus(that: this);
+
+  /// Read the weather forecast from the local Yrs doc for a festival.
+  ///
+  /// Returns `None` if no weather data has synced yet.
+  Future<WeatherForecastDto?> getWeather({required String festivalId}) =>
+      RustLib.instance.api.crateApiAppNodeGetWeather(
+        that: this,
+        festivalId: festivalId,
+      );
+
   /// Join an existing group from an invite payload.
   Future<GroupJoinResultDto> joinGroup({
     required String invitePayload,
@@ -3518,6 +4196,9 @@ class AppNodeImpl extends RustOpaque implements AppNode {
 
   /// Subscribe to the gossip topic for a festival and perform a state vector
   /// exchange with the DO so we only receive updates we don't already have.
+  ///
+  /// Registers the festival as a resource in the registry, then delegates
+  /// subscribe + catch-up to the SyncOrchestrator.
   Future<void> subscribeFestival({required String festivalId}) => RustLib
       .instance
       .api
@@ -3573,4 +4254,17 @@ class AppNodeImpl extends RustOpaque implements AppNode {
   /// Watch sync status — emits current status, then updates on changes.
   Future<Stream<SyncStatusDto>> watchSyncStatus() =>
       RustLib.instance.api.crateApiAppNodeWatchSyncStatus(that: this);
+
+  /// Watch transport status — emits relay + BLE state with bandwidth
+  /// rates computed by diffing cumulative counters every second.
+  Future<Stream<TransportStatusDto>> watchTransportStatus() =>
+      RustLib.instance.api.crateApiAppNodeWatchTransportStatus(that: this);
+
+  /// Watch weather forecast — emits current forecast, then updates on changes.
+  Future<Stream<WeatherForecastDto?>> watchWeather({
+    required String festivalId,
+  }) => RustLib.instance.api.crateApiAppNodeWatchWeather(
+    that: this,
+    festivalId: festivalId,
+  );
 }

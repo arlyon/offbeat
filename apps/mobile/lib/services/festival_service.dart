@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../config.dart';
-import '../data/mock_data.dart';
+import '../data/models.dart';
 
 /// Fetches festival data from the MainDO server.
 class FestivalService {

@@ -9,7 +9,7 @@
 // Filter summary bar above the list when active
 
 import 'package:flutter/material.dart';
-import '../../data/mock_data.dart';
+import '../../data/models.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/dotted_border.dart';
 import '../../widgets/chip.dart';
@@ -144,7 +144,7 @@ class _FilterViewState extends State<FilterView> {
                       vertical: 10,
                     ),
                     child: Text(
-                      '${filtered.length} SETS // ${widget.days.firstWhere((d) => d.id == _day).label} ${widget.days.firstWhere((d) => d.id == _day).num}',
+                      '${filtered.length} SETS // ${widget.days.firstWhere((d) => d.id == _day).label} ${widget.days.firstWhere((d) => d.id == _day).dayNum}',
                       style: const TextStyle(
                         fontFamily: 'JetBrainsMono',
                         fontSize: 10,
@@ -184,6 +184,7 @@ class _FilterViewState extends State<FilterView> {
           _FilterSheet(
             filter: f,
             stages: widget.stages,
+            genres: widget.sets.map((s) => s.genre).toSet().toList()..sort(),
             filteredCount: filtered.length,
             onFilterChanged: (newF) => setState(() => _filter = newF),
             onClose: () => setState(() => _panelOpen = false),
@@ -316,6 +317,7 @@ class _FilterSummaryBar extends StatelessWidget {
 class _FilterSheet extends StatelessWidget {
   final FilterState filter;
   final List<Stage> stages;
+  final List<String> genres;
   final int filteredCount;
   final ValueChanged<FilterState> onFilterChanged;
   final VoidCallback onClose;
@@ -323,6 +325,7 @@ class _FilterSheet extends StatelessWidget {
   const _FilterSheet({
     required this.filter,
     required this.stages,
+    required this.genres,
     required this.filteredCount,
     required this.onFilterChanged,
     required this.onClose,
@@ -426,7 +429,7 @@ class _FilterSheet extends StatelessWidget {
                       child: Wrap(
                         spacing: 6,
                         runSpacing: 6,
-                        children: kGenres
+                        children: genres
                             .map(
                               (g) => MonoChip(
                                 label: g,

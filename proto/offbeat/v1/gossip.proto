@@ -1,0 +1,49 @@
+syntax = "proto3";
+package offbeat.v1;
+import "offbeat/v1/types.proto";
+
+message GossipEnvelope {
+  oneof payload {
+    FestivalUpdate festival_update = 1;
+    GroupUpdate group_update = 2;
+    ChatMessage chat = 3;
+    EncryptedPayload encrypted_chat = 4;
+    SyncRequest sync_request = 5;
+    SyncResponse sync_response = 6;
+    SyncUpdate sync_update = 7;
+  }
+}
+
+message FestivalUpdate {
+  string doc_id = 1;
+  SignedUpdate signed_update = 2;
+}
+
+message GroupUpdate {
+  string doc_id = 1;
+  bytes encrypted = 2;       // raw ciphertext
+  string group_key_id = 3;
+}
+
+message EncryptedPayload {
+  bytes encrypted = 1;
+  string group_key_id = 2;
+}
+
+message SyncRequest {
+  string doc_id = 1;
+  bytes encrypted_sv = 2;
+  string group_key_id = 3;
+}
+
+message SyncResponse {
+  string doc_id = 1;
+  bytes encrypted_diff = 2;
+  string group_key_id = 3;
+}
+
+message SyncUpdate {
+  string doc_id = 1;
+  bytes encrypted_diff = 2;
+  string group_key_id = 3;
+}

@@ -5,5 +5,7 @@
 	"city": "London",
 	"country": "GB",
 	"genres": ["Electronic", "House", "Techno"],
-	"clashfinderId": "gala2o26"
+	"clashfinderId": "gala2o26",
+	"lat": 51.4597,
+	"lon": -0.0690
 }

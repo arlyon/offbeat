@@ -45,6 +45,10 @@ export interface ClashfinderSource {
 	country: string;
 	/** Genre tags */
 	genres: string[];
+	/** Venue latitude (WGS84) */
+	lat?: number;
+	/** Venue longitude (WGS84) */
+	lon?: number;
 }
 
 // --- Authentication ---

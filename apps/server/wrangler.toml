@@ -15,11 +15,24 @@ class_name = "FestivalDO"
 tag = "v1"
 new_sqlite_classes = ["MainDO", "FestivalDO"]
 
-# Set RP_ID when using a tunnel or custom domain for passkey verification:
-#   wrangler dev --var RP_ID:manufacturers-decor-decided-reviewer.trycloudflare.com
-# Or uncomment below:
-# [vars]
-# RP_ID = "manufacturers-decor-decided-reviewer.trycloudflare.com"
+[[migrations]]
+tag = "v2-delete"
+deleted_classes = ["MainDO", "FestivalDO"]
+
+[[migrations]]
+tag = "v3-recreate"
+new_sqlite_classes = ["MainDO", "FestivalDO"]
+
+[[migrations]]
+tag = "v4-delete"
+deleted_classes = ["MainDO", "FestivalDO"]
+
+[[migrations]]
+tag = "v5-recreate"
+new_sqlite_classes = ["MainDO", "FestivalDO"]
+
+[vars]
+RP_ID = "offbeat-server.arlyon.workers.dev"
 
 # Clashfinder API credentials - set these with:
 #   wrangler secret put CLASHFINDER_USERNAME

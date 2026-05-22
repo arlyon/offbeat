@@ -5,7 +5,7 @@
 // Clash cards: warn-colored dotted border, A vs B options, resolve actions
 
 import 'package:flutter/material.dart';
-import '../../data/mock_data.dart';
+import '../../data/models.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/dotted_border.dart';
 import '../../widgets/chip.dart';
@@ -95,7 +95,7 @@ class _ClashRadarViewState extends State<ClashRadarView> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  '// YOUR PLAN · ${day.label} ${day.num} ${day.month}',
+                  '// YOUR PLAN · ${day.label} ${day.dayNum} ${day.month}',
                   style: TextStyle(
                     fontFamily: 'JetBrainsMono',
                     fontSize: 11,

@@ -11,9 +11,12 @@
 		"admin:keygen": "npx tsx scripts/generate-admin-key.ts",
 		"festival:register": "npx tsx scripts/register-festival.ts",
 		"festival:seed": "npx tsx scripts/seed-festivals.ts",
-		"festival:delete": "npx tsx scripts/delete-festival.ts"
+		"festival:delete": "npx tsx scripts/delete-festival.ts",
+		"festival:reset": "npx tsx scripts/reset-all.ts",
+		"festival:announce": "npx tsx scripts/announce.ts"
 	},
 	"dependencies": {
+		"@bufbuild/protobuf": "^2.12.0",
 		"@noble/curves": "^2.2.0",
 		"@offbeat/protocol": "workspace:*",
 		"@simplewebauthn/server": "^13.3.0",

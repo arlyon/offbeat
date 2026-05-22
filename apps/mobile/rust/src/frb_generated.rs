@@ -39,7 +39,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -2131129893;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1030897408;
 
 // Section: executor
 
@@ -243,7 +243,7 @@ fn wire__crate__api__AppNode_create_impl(
     rust_vec_len_: i32,
     data_len_: i32,
 ) {
-    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
         flutter_rust_bridge::for_generated::TaskInfo {
             debug_name: "AppNode_create",
             port: Some(port_),
@@ -261,12 +261,13 @@ fn wire__crate__api__AppNode_create_impl(
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_db_path = <String>::sse_decode(&mut deserializer);
             deserializer.end();
-            move |context| {
+            move |context| async move {
                 transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
-                    (move || {
-                        let output_ok = crate::api::AppNode::create(api_db_path)?;
+                    (move || async move {
+                        let output_ok = crate::api::AppNode::create(api_db_path).await?;
                         Ok(output_ok)
-                    })(),
+                    })()
+                    .await,
                 )
             }
         },
@@ -1018,6 +1019,116 @@ fn wire__crate__api__AppNode_get_stars_impl(
                             crate::api::AppNode::get_stars(&*api_that_guard, api_festival_id)?;
                         Ok(output_ok)
                     })(),
+                )
+            }
+        },
+    )
+}
+fn wire__crate__api__AppNode_get_transport_status_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "AppNode_get_transport_status",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<AppNode>,
+            >>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let mut api_that_guard = None;
+                    let decode_indices_ =
+                        flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
+                            flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                &api_that, 0, false,
+                            ),
+                        ]);
+                    for i in decode_indices_ {
+                        match i {
+                            0 => api_that_guard = Some(api_that.lockable_decode_sync_ref()),
+                            _ => unreachable!(),
+                        }
+                    }
+                    let api_that_guard = api_that_guard.unwrap();
+                    let output_ok = Result::<_, ()>::Ok(
+                        crate::api::AppNode::get_transport_status(&*api_that_guard),
+                    )?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__AppNode_get_weather_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "AppNode_get_weather",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<AppNode>,
+            >>::sse_decode(&mut deserializer);
+            let api_festival_id = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, ()>(
+                    (move || async move {
+                        let mut api_that_guard = None;
+                        let decode_indices_ =
+                            flutter_rust_bridge::for_generated::lockable_compute_decode_order(
+                                vec![flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                    &api_that, 0, false,
+                                )],
+                            );
+                        for i in decode_indices_ {
+                            match i {
+                                0 => {
+                                    api_that_guard =
+                                        Some(api_that.lockable_decode_async_ref().await)
+                                }
+                                _ => unreachable!(),
+                            }
+                        }
+                        let api_that_guard = api_that_guard.unwrap();
+                        let output_ok = Result::<_, ()>::Ok(
+                            crate::api::AppNode::get_weather(&*api_that_guard, api_festival_id)
+                                .await,
+                        )?;
+                        Ok(output_ok)
+                    })()
+                    .await,
                 )
             }
         },
@@ -2093,6 +2204,124 @@ fn wire__crate__api__AppNode_watch_sync_status_impl(
         },
     )
 }
+fn wire__crate__api__AppNode_watch_transport_status_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "AppNode_watch_transport_status",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<AppNode>,
+            >>::sse_decode(&mut deserializer);
+            let api_sink = <StreamSink<
+                crate::api::TransportStatusDto,
+                flutter_rust_bridge::for_generated::SseCodec,
+            >>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
+                    (move || {
+                        let mut api_that_guard = None;
+                        let decode_indices_ =
+                            flutter_rust_bridge::for_generated::lockable_compute_decode_order(
+                                vec![flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                    &api_that, 0, false,
+                                )],
+                            );
+                        for i in decode_indices_ {
+                            match i {
+                                0 => api_that_guard = Some(api_that.lockable_decode_sync_ref()),
+                                _ => unreachable!(),
+                            }
+                        }
+                        let api_that_guard = api_that_guard.unwrap();
+                        let output_ok = crate::api::AppNode::watch_transport_status(
+                            &*api_that_guard,
+                            api_sink,
+                        )?;
+                        Ok(output_ok)
+                    })(),
+                )
+            }
+        },
+    )
+}
+fn wire__crate__api__AppNode_watch_weather_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "AppNode_watch_weather",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<AppNode>,
+            >>::sse_decode(&mut deserializer);
+            let api_festival_id = <String>::sse_decode(&mut deserializer);
+            let api_sink = <StreamSink<
+                Option<crate::api::WeatherForecastDto>,
+                flutter_rust_bridge::for_generated::SseCodec,
+            >>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
+                    (move || {
+                        let mut api_that_guard = None;
+                        let decode_indices_ =
+                            flutter_rust_bridge::for_generated::lockable_compute_decode_order(
+                                vec![flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                    &api_that, 0, false,
+                                )],
+                            );
+                        for i in decode_indices_ {
+                            match i {
+                                0 => api_that_guard = Some(api_that.lockable_decode_sync_ref()),
+                                _ => unreachable!(),
+                            }
+                        }
+                        let api_that_guard = api_that_guard.unwrap();
+                        let output_ok = crate::api::AppNode::watch_weather(
+                            &*api_that_guard,
+                            api_festival_id,
+                            api_sink,
+                        )?;
+                        Ok(output_ok)
+                    })(),
+                )
+            }
+        },
+    )
+}
 fn wire__crate__api__generate_group_key_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -2260,7 +2489,30 @@ impl SseDecode
 }
 
 impl SseDecode
+    for StreamSink<
+        Option<crate::api::WeatherForecastDto>,
+        flutter_rust_bridge::for_generated::SseCodec,
+    >
+{
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <String>::sse_decode(deserializer);
+        return StreamSink::deserialize(inner);
+    }
+}
+
+impl SseDecode
     for StreamSink<crate::api::SyncStatusDto, flutter_rust_bridge::for_generated::SseCodec>
+{
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <String>::sse_decode(deserializer);
+        return StreamSink::deserialize(inner);
+    }
+}
+
+impl SseDecode
+    for StreamSink<crate::api::TransportStatusDto, flutter_rust_bridge::for_generated::SseCodec>
 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -2303,6 +2555,26 @@ impl SseDecode for crate::api::AuthStateDto {
     }
 }
 
+impl SseDecode for crate::api::BleStatusDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_active = <bool>::sse_decode(deserializer);
+        let mut var_peerCount = <u32>::sse_decode(deserializer);
+        let mut var_txBytesPerSec = <u64>::sse_decode(deserializer);
+        let mut var_rxBytesPerSec = <u64>::sse_decode(deserializer);
+        let mut var_retransmits = <u64>::sse_decode(deserializer);
+        let mut var_peers = <Vec<crate::api::TransportPeerDto>>::sse_decode(deserializer);
+        return crate::api::BleStatusDto {
+            active: var_active,
+            peer_count: var_peerCount,
+            tx_bytes_per_sec: var_txBytesPerSec,
+            rx_bytes_per_sec: var_rxBytesPerSec,
+            retransmits: var_retransmits,
+            peers: var_peers,
+        };
+    }
+}
+
 impl SseDecode for bool {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -2329,6 +2601,13 @@ impl SseDecode for crate::api::ChatMessageDto {
             stage_id: var_stageId,
             timestamp: var_timestamp,
         };
+    }
+}
+
+impl SseDecode for f64 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        deserializer.cursor.read_f64::<NativeEndian>().unwrap()
     }
 }
 
@@ -2414,6 +2693,24 @@ impl SseDecode for crate::api::GroupStateDto {
     }
 }
 
+impl SseDecode for crate::api::HourlyWeatherDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_time = <Vec<String>>::sse_decode(deserializer);
+        let mut var_temperature2M = <Vec<f64>>::sse_decode(deserializer);
+        let mut var_precipitationProbability = <Vec<f64>>::sse_decode(deserializer);
+        let mut var_weatherCode = <Vec<u32>>::sse_decode(deserializer);
+        let mut var_windSpeed10M = <Vec<f64>>::sse_decode(deserializer);
+        return crate::api::HourlyWeatherDto {
+            time: var_time,
+            temperature_2m: var_temperature2M,
+            precipitation_probability: var_precipitationProbability,
+            weather_code: var_weatherCode,
+            wind_speed_10m: var_windSpeed10M,
+        };
+    }
+}
+
 impl SseDecode for i32 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -2440,11 +2737,13 @@ impl SseDecode for crate::api::LineupDayDto {
         let mut var_label = <String>::sse_decode(deserializer);
         let mut var_num = <i32>::sse_decode(deserializer);
         let mut var_month = <String>::sse_decode(deserializer);
+        let mut var_year = <i32>::sse_decode(deserializer);
         return crate::api::LineupDayDto {
             id: var_id,
             label: var_label,
             num: var_num,
             month: var_month,
+            year: var_year,
         };
     }
 }
@@ -2601,6 +2900,30 @@ impl SseDecode for Vec<crate::api::LineupStageDto> {
     }
 }
 
+impl SseDecode for Vec<f64> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(<f64>::sse_decode(deserializer));
+        }
+        return ans_;
+    }
+}
+
+impl SseDecode for Vec<u32> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(<u32>::sse_decode(deserializer));
+        }
+        return ans_;
+    }
+}
+
 impl SseDecode for Vec<u8> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -2622,6 +2945,18 @@ impl SseDecode for Vec<crate::api::ResourceSyncStatusDto> {
             ans_.push(<crate::api::ResourceSyncStatusDto>::sse_decode(
                 deserializer,
             ));
+        }
+        return ans_;
+    }
+}
+
+impl SseDecode for Vec<crate::api::TransportPeerDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(<crate::api::TransportPeerDto>::sse_decode(deserializer));
         }
         return ans_;
     }
@@ -2660,6 +2995,33 @@ impl SseDecode for Option<crate::api::LineupDto> {
     }
 }
 
+impl SseDecode for Option<crate::api::WeatherForecastDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<crate::api::WeatherForecastDto>::sse_decode(deserializer));
+        } else {
+            return None;
+        }
+    }
+}
+
+impl SseDecode for crate::api::RelayStatusDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_connected = <bool>::sse_decode(deserializer);
+        let mut var_authenticated = <bool>::sse_decode(deserializer);
+        let mut var_txBytesPerSec = <u64>::sse_decode(deserializer);
+        let mut var_rxBytesPerSec = <u64>::sse_decode(deserializer);
+        return crate::api::RelayStatusDto {
+            connected: var_connected,
+            authenticated: var_authenticated,
+            tx_bytes_per_sec: var_txBytesPerSec,
+            rx_bytes_per_sec: var_rxBytesPerSec,
+        };
+    }
+}
+
 impl SseDecode for crate::api::ResourceSyncStatusDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -2690,10 +3052,43 @@ impl SseDecode for crate::api::SyncStatusDto {
     }
 }
 
+impl SseDecode for crate::api::TransportPeerDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_deviceId = <String>::sse_decode(deserializer);
+        let mut var_phase = <String>::sse_decode(deserializer);
+        let mut var_connectPath = <Option<String>>::sse_decode(deserializer);
+        return crate::api::TransportPeerDto {
+            device_id: var_deviceId,
+            phase: var_phase,
+            connect_path: var_connectPath,
+        };
+    }
+}
+
+impl SseDecode for crate::api::TransportStatusDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_relay = <crate::api::RelayStatusDto>::sse_decode(deserializer);
+        let mut var_ble = <crate::api::BleStatusDto>::sse_decode(deserializer);
+        return crate::api::TransportStatusDto {
+            relay: var_relay,
+            ble: var_ble,
+        };
+    }
+}
+
 impl SseDecode for u32 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         deserializer.cursor.read_u32::<NativeEndian>().unwrap()
+    }
+}
+
+impl SseDecode for u64 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        deserializer.cursor.read_u64::<NativeEndian>().unwrap()
     }
 }
 
@@ -2713,6 +3108,24 @@ impl SseDecode for usize {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         deserializer.cursor.read_u64::<NativeEndian>().unwrap() as _
+    }
+}
+
+impl SseDecode for crate::api::WeatherForecastDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_updatedAt = <String>::sse_decode(deserializer);
+        let mut var_lat = <f64>::sse_decode(deserializer);
+        let mut var_lon = <f64>::sse_decode(deserializer);
+        let mut var_timezone = <String>::sse_decode(deserializer);
+        let mut var_hourly = <crate::api::HourlyWeatherDto>::sse_decode(deserializer);
+        return crate::api::WeatherForecastDto {
+            updated_at: var_updatedAt,
+            lat: var_lat,
+            lon: var_lon,
+            timezone: var_timezone,
+            hourly: var_hourly,
+        };
     }
 }
 
@@ -2748,34 +3161,42 @@ fn pde_ffi_dispatcher_primary_impl(
         16 => wire__crate__api__AppNode_get_lineup_impl(port, ptr, rust_vec_len, data_len),
         17 => wire__crate__api__AppNode_get_public_key_hex_impl(port, ptr, rust_vec_len, data_len),
         18 => wire__crate__api__AppNode_get_stars_impl(port, ptr, rust_vec_len, data_len),
-        19 => wire__crate__api__AppNode_join_group_impl(port, ptr, rust_vec_len, data_len),
-        20 => wire__crate__api__AppNode_leave_group_impl(port, ptr, rust_vec_len, data_len),
-        21 => wire__crate__api__AppNode_publish_chat_impl(port, ptr, rust_vec_len, data_len),
-        22 => wire__crate__api__AppNode_save_group_impl(port, ptr, rust_vec_len, data_len),
-        23 => wire__crate__api__AppNode_send_festival_chat_impl(port, ptr, rust_vec_len, data_len),
-        24 => wire__crate__api__AppNode_send_group_chat_impl(port, ptr, rust_vec_len, data_len),
-        25 => wire__crate__api__AppNode_set_display_name_impl(port, ptr, rust_vec_len, data_len),
-        26 => wire__crate__api__AppNode_set_festival_public_key_impl(
+        19 => {
+            wire__crate__api__AppNode_get_transport_status_impl(port, ptr, rust_vec_len, data_len)
+        }
+        20 => wire__crate__api__AppNode_get_weather_impl(port, ptr, rust_vec_len, data_len),
+        21 => wire__crate__api__AppNode_join_group_impl(port, ptr, rust_vec_len, data_len),
+        22 => wire__crate__api__AppNode_leave_group_impl(port, ptr, rust_vec_len, data_len),
+        23 => wire__crate__api__AppNode_publish_chat_impl(port, ptr, rust_vec_len, data_len),
+        24 => wire__crate__api__AppNode_save_group_impl(port, ptr, rust_vec_len, data_len),
+        25 => wire__crate__api__AppNode_send_festival_chat_impl(port, ptr, rust_vec_len, data_len),
+        26 => wire__crate__api__AppNode_send_group_chat_impl(port, ptr, rust_vec_len, data_len),
+        27 => wire__crate__api__AppNode_set_display_name_impl(port, ptr, rust_vec_len, data_len),
+        28 => wire__crate__api__AppNode_set_festival_public_key_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        27 => wire__crate__api__AppNode_sign_message_impl(port, ptr, rust_vec_len, data_len),
-        28 => wire__crate__api__AppNode_store_attestation_impl(port, ptr, rust_vec_len, data_len),
-        29 => {
+        29 => wire__crate__api__AppNode_sign_message_impl(port, ptr, rust_vec_len, data_len),
+        30 => wire__crate__api__AppNode_store_attestation_impl(port, ptr, rust_vec_len, data_len),
+        31 => {
             wire__crate__api__AppNode_subscribe_chat_topics_impl(port, ptr, rust_vec_len, data_len)
         }
-        30 => wire__crate__api__AppNode_subscribe_festival_impl(port, ptr, rust_vec_len, data_len),
-        31 => wire__crate__api__AppNode_toggle_star_impl(port, ptr, rust_vec_len, data_len),
-        32 => wire__crate__api__AppNode_update_shared_stars_impl(port, ptr, rust_vec_len, data_len),
-        33 => wire__crate__api__AppNode_watch_chat_impl(port, ptr, rust_vec_len, data_len),
-        34 => wire__crate__api__AppNode_watch_group_state_impl(port, ptr, rust_vec_len, data_len),
-        35 => wire__crate__api__AppNode_watch_lineup_impl(port, ptr, rust_vec_len, data_len),
-        36 => wire__crate__api__AppNode_watch_sync_status_impl(port, ptr, rust_vec_len, data_len),
-        37 => wire__crate__api__generate_group_key_impl(port, ptr, rust_vec_len, data_len),
-        38 => wire__crate__api__group_id_from_key_impl(port, ptr, rust_vec_len, data_len),
-        39 => wire__crate__api__init_app_impl(port, ptr, rust_vec_len, data_len),
+        32 => wire__crate__api__AppNode_subscribe_festival_impl(port, ptr, rust_vec_len, data_len),
+        33 => wire__crate__api__AppNode_toggle_star_impl(port, ptr, rust_vec_len, data_len),
+        34 => wire__crate__api__AppNode_update_shared_stars_impl(port, ptr, rust_vec_len, data_len),
+        35 => wire__crate__api__AppNode_watch_chat_impl(port, ptr, rust_vec_len, data_len),
+        36 => wire__crate__api__AppNode_watch_group_state_impl(port, ptr, rust_vec_len, data_len),
+        37 => wire__crate__api__AppNode_watch_lineup_impl(port, ptr, rust_vec_len, data_len),
+        38 => wire__crate__api__AppNode_watch_sync_status_impl(port, ptr, rust_vec_len, data_len),
+        39 => {
+            wire__crate__api__AppNode_watch_transport_status_impl(port, ptr, rust_vec_len, data_len)
+        }
+        40 => wire__crate__api__AppNode_watch_weather_impl(port, ptr, rust_vec_len, data_len),
+        41 => wire__crate__api__generate_group_key_impl(port, ptr, rust_vec_len, data_len),
+        42 => wire__crate__api__group_id_from_key_impl(port, ptr, rust_vec_len, data_len),
+        43 => wire__crate__api__init_app_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -2839,6 +3260,26 @@ impl flutter_rust_bridge::IntoDart for crate::api::AuthStateDto {
 impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::AuthStateDto {}
 impl flutter_rust_bridge::IntoIntoDart<crate::api::AuthStateDto> for crate::api::AuthStateDto {
     fn into_into_dart(self) -> crate::api::AuthStateDto {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::BleStatusDto {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.active.into_into_dart().into_dart(),
+            self.peer_count.into_into_dart().into_dart(),
+            self.tx_bytes_per_sec.into_into_dart().into_dart(),
+            self.rx_bytes_per_sec.into_into_dart().into_dart(),
+            self.retransmits.into_into_dart().into_dart(),
+            self.peers.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::BleStatusDto {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::BleStatusDto> for crate::api::BleStatusDto {
+    fn into_into_dart(self) -> crate::api::BleStatusDto {
         self
     }
 }
@@ -2972,6 +3413,27 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::GroupStateDto> for crate::api
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::HourlyWeatherDto {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.time.into_into_dart().into_dart(),
+            self.temperature_2m.into_into_dart().into_dart(),
+            self.precipitation_probability.into_into_dart().into_dart(),
+            self.weather_code.into_into_dart().into_dart(),
+            self.wind_speed_10m.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::HourlyWeatherDto {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::HourlyWeatherDto>
+    for crate::api::HourlyWeatherDto
+{
+    fn into_into_dart(self) -> crate::api::HourlyWeatherDto {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::IdentityDto {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
@@ -2995,6 +3457,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::LineupDayDto {
             self.label.into_into_dart().into_dart(),
             self.num.into_into_dart().into_dart(),
             self.month.into_into_dart().into_dart(),
+            self.year.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -3064,6 +3527,24 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::LineupStageDto> for crate::ap
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::RelayStatusDto {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.connected.into_into_dart().into_dart(),
+            self.authenticated.into_into_dart().into_dart(),
+            self.tx_bytes_per_sec.into_into_dart().into_dart(),
+            self.rx_bytes_per_sec.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::RelayStatusDto {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::RelayStatusDto> for crate::api::RelayStatusDto {
+    fn into_into_dart(self) -> crate::api::RelayStatusDto {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::ResourceSyncStatusDto {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
@@ -3100,6 +3581,70 @@ impl flutter_rust_bridge::IntoDart for crate::api::SyncStatusDto {
 impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::SyncStatusDto {}
 impl flutter_rust_bridge::IntoIntoDart<crate::api::SyncStatusDto> for crate::api::SyncStatusDto {
     fn into_into_dart(self) -> crate::api::SyncStatusDto {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::TransportPeerDto {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.device_id.into_into_dart().into_dart(),
+            self.phase.into_into_dart().into_dart(),
+            self.connect_path.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::TransportPeerDto {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::TransportPeerDto>
+    for crate::api::TransportPeerDto
+{
+    fn into_into_dart(self) -> crate::api::TransportPeerDto {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::TransportStatusDto {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.relay.into_into_dart().into_dart(),
+            self.ble.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::TransportStatusDto
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::TransportStatusDto>
+    for crate::api::TransportStatusDto
+{
+    fn into_into_dart(self) -> crate::api::TransportStatusDto {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::WeatherForecastDto {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.updated_at.into_into_dart().into_dart(),
+            self.lat.into_into_dart().into_dart(),
+            self.lon.into_into_dart().into_dart(),
+            self.timezone.into_into_dart().into_dart(),
+            self.hourly.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::WeatherForecastDto
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::WeatherForecastDto>
+    for crate::api::WeatherForecastDto
+{
+    fn into_into_dart(self) -> crate::api::WeatherForecastDto {
         self
     }
 }
@@ -3155,7 +3700,28 @@ impl SseEncode
 }
 
 impl SseEncode
+    for StreamSink<
+        Option<crate::api::WeatherForecastDto>,
+        flutter_rust_bridge::for_generated::SseCodec,
+    >
+{
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        unimplemented!("")
+    }
+}
+
+impl SseEncode
     for StreamSink<crate::api::SyncStatusDto, flutter_rust_bridge::for_generated::SseCodec>
+{
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        unimplemented!("")
+    }
+}
+
+impl SseEncode
+    for StreamSink<crate::api::TransportStatusDto, flutter_rust_bridge::for_generated::SseCodec>
 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -3187,6 +3753,18 @@ impl SseEncode for crate::api::AuthStateDto {
     }
 }
 
+impl SseEncode for crate::api::BleStatusDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.active, serializer);
+        <u32>::sse_encode(self.peer_count, serializer);
+        <u64>::sse_encode(self.tx_bytes_per_sec, serializer);
+        <u64>::sse_encode(self.rx_bytes_per_sec, serializer);
+        <u64>::sse_encode(self.retransmits, serializer);
+        <Vec<crate::api::TransportPeerDto>>::sse_encode(self.peers, serializer);
+    }
+}
+
 impl SseEncode for bool {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -3204,6 +3782,13 @@ impl SseEncode for crate::api::ChatMessageDto {
         <String>::sse_encode(self.topic, serializer);
         <Option<String>>::sse_encode(self.stage_id, serializer);
         <String>::sse_encode(self.timestamp, serializer);
+    }
+}
+
+impl SseEncode for f64 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        serializer.cursor.write_f64::<NativeEndian>(self).unwrap();
     }
 }
 
@@ -3260,6 +3845,17 @@ impl SseEncode for crate::api::GroupStateDto {
     }
 }
 
+impl SseEncode for crate::api::HourlyWeatherDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <Vec<String>>::sse_encode(self.time, serializer);
+        <Vec<f64>>::sse_encode(self.temperature_2m, serializer);
+        <Vec<f64>>::sse_encode(self.precipitation_probability, serializer);
+        <Vec<u32>>::sse_encode(self.weather_code, serializer);
+        <Vec<f64>>::sse_encode(self.wind_speed_10m, serializer);
+    }
+}
+
 impl SseEncode for i32 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -3282,6 +3878,7 @@ impl SseEncode for crate::api::LineupDayDto {
         <String>::sse_encode(self.label, serializer);
         <i32>::sse_encode(self.num, serializer);
         <String>::sse_encode(self.month, serializer);
+        <i32>::sse_encode(self.year, serializer);
     }
 }
 
@@ -3399,6 +3996,26 @@ impl SseEncode for Vec<crate::api::LineupStageDto> {
     }
 }
 
+impl SseEncode for Vec<f64> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <f64>::sse_encode(item, serializer);
+        }
+    }
+}
+
+impl SseEncode for Vec<u32> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <u32>::sse_encode(item, serializer);
+        }
+    }
+}
+
 impl SseEncode for Vec<u8> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -3415,6 +4032,16 @@ impl SseEncode for Vec<crate::api::ResourceSyncStatusDto> {
         <i32>::sse_encode(self.len() as _, serializer);
         for item in self {
             <crate::api::ResourceSyncStatusDto>::sse_encode(item, serializer);
+        }
+    }
+}
+
+impl SseEncode for Vec<crate::api::TransportPeerDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::api::TransportPeerDto>::sse_encode(item, serializer);
         }
     }
 }
@@ -3449,6 +4076,26 @@ impl SseEncode for Option<crate::api::LineupDto> {
     }
 }
 
+impl SseEncode for Option<crate::api::WeatherForecastDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <crate::api::WeatherForecastDto>::sse_encode(value, serializer);
+        }
+    }
+}
+
+impl SseEncode for crate::api::RelayStatusDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.connected, serializer);
+        <bool>::sse_encode(self.authenticated, serializer);
+        <u64>::sse_encode(self.tx_bytes_per_sec, serializer);
+        <u64>::sse_encode(self.rx_bytes_per_sec, serializer);
+    }
+}
+
 impl SseEncode for crate::api::ResourceSyncStatusDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -3468,10 +4115,34 @@ impl SseEncode for crate::api::SyncStatusDto {
     }
 }
 
+impl SseEncode for crate::api::TransportPeerDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.device_id, serializer);
+        <String>::sse_encode(self.phase, serializer);
+        <Option<String>>::sse_encode(self.connect_path, serializer);
+    }
+}
+
+impl SseEncode for crate::api::TransportStatusDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <crate::api::RelayStatusDto>::sse_encode(self.relay, serializer);
+        <crate::api::BleStatusDto>::sse_encode(self.ble, serializer);
+    }
+}
+
 impl SseEncode for u32 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         serializer.cursor.write_u32::<NativeEndian>(self).unwrap();
+    }
+}
+
+impl SseEncode for u64 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        serializer.cursor.write_u64::<NativeEndian>(self).unwrap();
     }
 }
 
@@ -3494,6 +4165,17 @@ impl SseEncode for usize {
             .cursor
             .write_u64::<NativeEndian>(self as _)
             .unwrap();
+    }
+}
+
+impl SseEncode for crate::api::WeatherForecastDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.updated_at, serializer);
+        <f64>::sse_encode(self.lat, serializer);
+        <f64>::sse_encode(self.lon, serializer);
+        <String>::sse_encode(self.timezone, serializer);
+        <crate::api::HourlyWeatherDto>::sse_encode(self.hourly, serializer);
     }
 }
 

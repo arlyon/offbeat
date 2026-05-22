@@ -5,5 +5,7 @@
 	"city": "King's Lynn",
 	"country": "GB",
 	"genres": ["Electronic", "House", "Techno", "Ambient"],
-	"clashfinderId": "houghton25"
+	"clashfinderId": "houghton25",
+	"lat": 52.8277,
+	"lon": 0.6538
 }

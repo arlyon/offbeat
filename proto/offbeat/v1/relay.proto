@@ -1,0 +1,114 @@
+syntax = "proto3";
+package offbeat.v1;
+import "offbeat/v1/gossip.proto";
+import "offbeat/v1/types.proto";
+
+// Client -> Server
+message RelayClientMessage {
+  oneof msg {
+    AuthRequest auth = 1;
+    SubscribeRequest subscribe = 2;
+    UnsubscribeRequest unsubscribe = 3;
+    GossipRelay gossip = 4;
+    CatchupRequest catchup = 5;
+    SvExchangeRequest sv_exchange = 6;
+    ChatCatchupRequest chat_catchup = 7;
+  }
+}
+
+message AuthRequest {
+  bytes public_key = 1;
+  Attestation attestation = 2;
+  bytes signature = 3;
+  string timestamp = 4;
+}
+
+message Attestation {
+  string message = 1;
+  bytes signature = 2;
+  bytes issuer = 3;
+}
+
+message SubscribeRequest { repeated string topics = 1; }
+message UnsubscribeRequest { repeated string topics = 1; }
+
+message GossipRelay {
+  string topic = 1;
+  GossipEnvelope message = 2;
+}
+
+message CatchupRequest {
+  string topic = 1;
+  uint64 since_seq = 2;
+}
+
+message SvExchangeRequest {
+  string doc_id = 1;
+  bytes sv = 2;            // raw Yrs state vector bytes
+}
+
+message ChatCatchupRequest {
+  string topic = 1;
+  map<string, uint64> sv = 2;
+  uint32 limit = 3;
+}
+
+// Server -> Client
+message RelayServerMessage {
+  oneof msg {
+    AuthOk auth_ok = 1;
+    Subscribed subscribed = 2;
+    GossipBroadcast gossip = 3;
+    CatchupResponse catchup = 4;
+    SvDiffResponse sv_diff = 5;
+    ChatDiffResponse chat_diff = 6;
+    RelayError error = 7;
+  }
+}
+
+message AuthOk {
+  bool authenticated = 1;
+  uint32 admin_count = 2;
+}
+
+message Subscribed { repeated string topics = 1; }
+
+message GossipBroadcast {
+  string topic = 1;
+  uint64 seq = 2;
+  GossipEnvelope message = 3;
+}
+
+message CatchupEntry {
+  uint64 seq = 1;
+  GossipEnvelope message = 2;
+  string timestamp = 3;
+}
+
+message CatchupResponse {
+  string topic = 1;
+  repeated CatchupEntry messages = 2;
+}
+
+message SvDiffResponse {
+  string doc_id = 1;
+  bytes diff = 2;
+}
+
+message ChatDiffResponse {
+  string topic = 1;
+  repeated GossipEnvelope messages = 2;
+}
+
+message RelayError {
+  string error = 1;
+  ErrorCode code = 2;
+}
+
+enum ErrorCode {
+  ERROR_CODE_UNSPECIFIED = 0;
+  ERROR_CODE_INVALID_SIGNATURE = 1;
+  ERROR_CODE_UNAUTHORIZED = 2;
+  ERROR_CODE_RATE_LIMITED = 3;
+  ERROR_CODE_MALFORMED = 4;
+}

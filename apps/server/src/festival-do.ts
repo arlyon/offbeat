@@ -735,7 +735,7 @@ export class FestivalDO extends DurableObject {
 		festivalId: string,
 		lineup: {
 			stages: { id: string; name: string; short: string; color: string; order: number }[];
-			days: { id: string; label: string; num: number; month: string }[];
+			days: { id: string; label: string; num: number; month: string; year: number }[];
 			sets: {
 				id: string;
 				day: string;
@@ -805,6 +805,141 @@ export class FestivalDO extends DurableObject {
 			`[seedLineup] seeded ${docId}: ${lineup.stages.length} stages, ${lineup.days.length} days, ${lineup.sets.length} sets`,
 		);
 	}
+	/**
+	 * Update the Festival DO's Yrs CRDT document with a new lineup.
+	 * Called when an admin refreshes the lineup via PUT /festivals/:id/lineup.
+	 *
+	 * Loads the existing Yrs doc, applies the new stages/days/sets as an
+	 * incremental update, signs it, stores in gossip_log, persists to yrs_docs,
+	 * and broadcasts to all subscribed WS clients.
+	 *
+	 * If no existing doc is found, falls through to seedLineup().
+	 */
+	async updateLineup(
+		festivalId: string,
+		lineup: {
+			stages: { id: string; name: string; short: string; color: string; order: number }[];
+			days: { id: string; label: string; num: number; month: string; year: number }[];
+			sets: {
+				id: string;
+				day: string;
+				stage: string;
+				artist: string;
+				startMin: number;
+				durationMin: number;
+				genre: string;
+				cancelled: boolean;
+			}[];
+		},
+	) {
+		if (!this.#secretKey || !this.#publicKey) {
+			throw new Error("Keypair not initialized");
+		}
+
+		const docId = `festival/${festivalId}/state`;
+		const topic = docId;
+
+		// If there's no existing doc, delegate to seedLineup for genesis
+		const existing = this.sql
+			.exec("SELECT 1 FROM gossip_log WHERE topic = ? LIMIT 1", topic)
+			.toArray();
+		if (existing.length === 0) {
+			return this.seedLineup(festivalId, lineup);
+		}
+
+		// Load the existing Yrs doc
+		const doc = new Y.Doc();
+		const stored = this.sql.exec("SELECT data FROM yrs_docs WHERE doc_id = ?", docId).toArray() as {
+			data: ArrayBuffer;
+		}[];
+
+		if (stored.length > 0) {
+			Y.applyUpdate(doc, new Uint8Array(stored[0].data));
+		}
+
+		// Replay gossip_log entries
+		const logEntries = this.sql
+			.exec("SELECT message FROM gossip_log WHERE topic = ? ORDER BY seq", topic)
+			.toArray() as { message: ArrayBuffer }[];
+
+		for (const entry of logEntries) {
+			const envelope = fromBinary(GossipEnvelopeSchema, new Uint8Array(entry.message));
+			if (envelope.payload.case === "festivalUpdate" && envelope.payload.value.signedUpdate) {
+				Y.applyUpdate(doc, envelope.payload.value.signedUpdate.update);
+			}
+		}
+
+		// Capture state vector before mutation
+		const prevSV = Y.encodeStateVector(doc);
+
+		// Apply new lineup data
+		const root = doc.getMap("root");
+		root.set("stages", JSON.stringify(lineup.stages));
+		root.set("days", JSON.stringify(lineup.days));
+		root.set("sets", JSON.stringify(lineup.sets));
+
+		// Encode incremental update
+		const update = Y.encodeStateAsUpdate(doc, prevSV);
+
+		// Sign with DO's Ed25519 key
+		const signature = await sign(this.#secretKey, update);
+
+		// Build the GossipEnvelope
+		const envelope = create(GossipEnvelopeSchema, {
+			payload: {
+				case: "festivalUpdate",
+				value: {
+					docId,
+					signedUpdate: {
+						update,
+						author: "festival-do",
+						signature,
+					},
+				},
+			},
+		});
+
+		// Store in gossip_log
+		const envelopeBytes = toBinary(GossipEnvelopeSchema, envelope);
+		const result = this.sql
+			.exec(
+				"INSERT INTO gossip_log (topic, message) VALUES (?, ?) RETURNING seq",
+				topic,
+				envelopeBytes,
+			)
+			.one() as { seq: number };
+
+		// Persist consolidated doc
+		const fullState = Y.encodeStateAsUpdate(doc);
+		this.sql.exec(
+			"INSERT OR REPLACE INTO yrs_docs (doc_id, data, updated_at) VALUES (?, ?, datetime('now'))",
+			docId,
+			fullState,
+		);
+
+		// Broadcast to subscribed WS clients
+		const broadcastMsg = create(RelayServerMessageSchema, {
+			msg: {
+				case: "gossip",
+				value: {
+					topic,
+					seq: BigInt(result.seq),
+					message: envelope,
+				},
+			},
+		});
+		const broadcastBytes = toBinary(RelayServerMessageSchema, broadcastMsg);
+		for (const [ws, sess] of this.#sessions) {
+			if (sess.topics.has(topic)) {
+				ws.send(broadcastBytes);
+			}
+		}
+
+		console.log(
+			`[updateLineup] updated ${docId}: ${lineup.stages.length} stages, ${lineup.days.length} days, ${lineup.sets.length} sets`,
+		);
+	}
+
 	// -----------------------------------------------------------------------
 	// Weather alarm
 	// -----------------------------------------------------------------------
@@ -982,7 +1117,10 @@ export class FestivalDO extends DurableObject {
 			if (end !== -1) {
 				merged.hourly.time = merged.hourly.time.slice(0, end);
 				merged.hourly.temperature_2m = merged.hourly.temperature_2m.slice(0, end);
-				merged.hourly.precipitation_probability = merged.hourly.precipitation_probability.slice(0, end);
+				merged.hourly.precipitation_probability = merged.hourly.precipitation_probability.slice(
+					0,
+					end,
+				);
 				merged.hourly.weather_code = merged.hourly.weather_code.slice(0, end);
 				merged.hourly.wind_speed_10m = merged.hourly.wind_speed_10m.slice(0, end);
 			}

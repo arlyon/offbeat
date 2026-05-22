@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use base64::Engine as _;
 use iroh_gossip::proto::TopicId;
-use tokio::sync::Mutex;
 
 use crate::crypto;
 use crate::db::Database;
@@ -48,11 +47,11 @@ pub struct GroupState {
 
 pub struct GroupManager {
     db: Arc<Database>,
-    doc_manager: Arc<Mutex<DocManager>>,
+    doc_manager: Arc<DocManager>,
 }
 
 impl GroupManager {
-    pub fn new(db: Arc<Database>, doc_manager: Arc<Mutex<DocManager>>) -> Self {
+    pub fn new(db: Arc<Database>, doc_manager: Arc<DocManager>) -> Self {
         Self { db, doc_manager }
     }
 
@@ -73,20 +72,18 @@ impl GroupManager {
         self.db.save_group(&group_id, festival_id, name, &key)?;
 
         let doc_id = format!("group/{group_id}");
-        let mut dm = self.doc_manager.lock().await;
-
-        dm.set_map_value(&doc_id, "name", name)?;
-        dm.set_map_value(&doc_id, "festival_id", festival_id)?;
-        dm.set_map_value(&doc_id, "created_by", user_id)?;
+        self.doc_manager.set_map_value(&doc_id, "name", name)?;
+        self.doc_manager.set_map_value(&doc_id, "festival_id", festival_id)?;
+        self.doc_manager.set_map_value(&doc_id, "created_by", user_id)?;
 
         let member_json = serde_json::json!({
             "displayName": display_name,
             "status": "active"
         })
         .to_string();
-        dm.set_map_value(&doc_id, &format!("member/{user_id}"), &member_json)?;
+        self.doc_manager.set_map_value(&doc_id, &format!("member/{user_id}"), &member_json)?;
 
-        drop(dm);
+
 
         let b64key = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(key);
         let invite_payload = format!("offbeat://group/{group_id}/{b64key}");
@@ -145,16 +142,15 @@ impl GroupManager {
             .save_group(&derived_id, "", "", &group_key)?;
 
         let doc_id = format!("group/{derived_id}");
-        let mut dm = self.doc_manager.lock().await;
 
         let member_json = serde_json::json!({
             "displayName": display_name,
             "status": "active"
         })
         .to_string();
-        dm.set_map_value(&doc_id, &format!("member/{user_id}"), &member_json)?;
+        self.doc_manager.set_map_value(&doc_id, &format!("member/{user_id}"), &member_json)?;
 
-        drop(dm);
+
 
         let topic_state = topics::group_topic(&group_key, "state");
         let topic_chat = topics::group_topic(&group_key, "chat");
@@ -180,11 +176,9 @@ impl GroupManager {
         user_id: &str,
     ) -> anyhow::Result<Option<Vec<u8>>> {
         let doc_id = format!("group/{group_id}");
-        let mut dm = self.doc_manager.lock().await;
+        let update = self.doc_manager.remove_map_value(&doc_id, &format!("member/{user_id}"))?;
 
-        let update = dm.remove_map_value(&doc_id, &format!("member/{user_id}"))?;
 
-        drop(dm);
         self.db.delete_group(group_id)?;
 
         Ok(Some(update))
@@ -217,9 +211,8 @@ impl GroupManager {
         .to_string();
 
         let doc_id = format!("group/{group_id}");
-        let mut dm = self.doc_manager.lock().await;
-        let diff = dm.set_map_value(&doc_id, &format!("location/{user_id}"), &location_json)?;
-        drop(dm);
+        let diff = self.doc_manager.set_map_value(&doc_id, &format!("location/{user_id}"), &location_json)?;
+
 
         let encrypted = crypto::encrypt(&group_key, &diff)?;
         Ok(encrypted)
@@ -242,9 +235,8 @@ impl GroupManager {
 
         let stars_json = serde_json::to_string(&set_ids)?;
         let doc_id = format!("group/{group_id}");
-        let mut dm = self.doc_manager.lock().await;
-        let diff = dm.set_map_value(&doc_id, &format!("stars/{user_id}"), &stars_json)?;
-        drop(dm);
+        let diff = self.doc_manager.set_map_value(&doc_id, &format!("stars/{user_id}"), &stars_json)?;
+
 
         let encrypted = crypto::encrypt(&group_key, &diff)?;
         Ok(encrypted)
@@ -276,9 +268,8 @@ impl GroupManager {
         .to_string();
 
         let doc_id = format!("group/{group_id}");
-        let mut dm = self.doc_manager.lock().await;
-        let diff = dm.set_map_value(&doc_id, &format!("pin/{pin_id}"), &pin_json)?;
-        drop(dm);
+        let diff = self.doc_manager.set_map_value(&doc_id, &format!("pin/{pin_id}"), &pin_json)?;
+
 
         let encrypted = crypto::encrypt(&group_key, &diff)?;
         Ok(encrypted)
@@ -290,14 +281,12 @@ impl GroupManager {
 
     pub async fn get_group_state(&self, group_id: &str) -> anyhow::Result<GroupState> {
         let doc_id = format!("group/{group_id}");
-        let mut dm = self.doc_manager.lock().await;
-
-        let name = dm
+        let name = self.doc_manager
             .read_map_value(&doc_id, "name")
             .unwrap_or_default();
 
-        let prefixed = dm.read_map_values_with_prefix(&doc_id);
-        drop(dm);
+        let prefixed = self.doc_manager.read_map_values_with_prefix(&doc_id);
+
 
         let mut members = Vec::new();
         let mut pins = Vec::new();
@@ -366,11 +355,9 @@ impl GroupManager {
             .ok_or_else(|| anyhow::anyhow!("group not found: {group_id}"))?;
 
         let doc_id = format!("group/{group_id}");
-        let mut dm = self.doc_manager.lock().await;
-        // Ensure the doc exists so we can read its SV.
-        dm.get_or_create(&doc_id);
-        let sv_bytes = dm.get_state_vector(&doc_id)?;
-        drop(dm);
+        self.doc_manager.get_or_create(&doc_id);
+        let sv_bytes = self.doc_manager.get_state_vector(&doc_id)?;
+
 
         // Encrypt the SV so it doesn't leak doc structure to bystanders.
         let encrypted_sv = crypto::encrypt(&group_key, &sv_bytes)?;
@@ -392,9 +379,8 @@ impl GroupManager {
         let remote_sv = crypto::decrypt(&group_key, remote_sv_encrypted)?;
 
         let doc_id = format!("group/{group_id}");
-        let dm = self.doc_manager.lock().await;
-        let diff = dm.encode_diff(&doc_id, &remote_sv)?;
-        drop(dm);
+        let diff = self.doc_manager.encode_diff(&doc_id, &remote_sv)?;
+
 
         let encrypted_diff = crypto::encrypt(&group_key, &diff)?;
         Ok(encrypted_diff)
@@ -426,7 +412,7 @@ mod tests {
 
     fn make_manager() -> GroupManager {
         let db = Arc::new(Database::new_in_memory().expect("in-memory db"));
-        let doc_manager = Arc::new(Mutex::new(DocManager::new(db.clone())));
+        let doc_manager = Arc::new(DocManager::new(db.clone()));
         GroupManager::new(db, doc_manager)
     }
 
@@ -450,16 +436,12 @@ mod tests {
         let doc_id = format!("group/{}", result.group_id);
         let name = gm
             .doc_manager
-            .lock()
-            .await
             .read_map_value(&doc_id, "name")
             .unwrap();
         assert_eq!(name, "Crew A");
 
         let member_json = gm
             .doc_manager
-            .lock()
-            .await
             .read_map_value(&doc_id, "member/user1")
             .unwrap();
         let v: serde_json::Value = serde_json::from_str(&member_json).unwrap();
@@ -486,13 +468,9 @@ mod tests {
         let doc_id = format!("group/{}", create.group_id);
         let m1 = gm
             .doc_manager
-            .lock()
-            .await
             .read_map_value(&doc_id, "member/user1");
         let m2 = gm
             .doc_manager
-            .lock()
-            .await
             .read_map_value(&doc_id, "member/user2");
         assert!(m1.is_some(), "user1 should be in doc");
         assert!(m2.is_some(), "user2 should be in doc");
@@ -526,8 +504,6 @@ mod tests {
         let doc_id = format!("group/{}", create.group_id);
         let val = gm
             .doc_manager
-            .lock()
-            .await
             .read_map_value(&doc_id, "member/user1");
         assert!(val.is_some(), "member should exist before leave");
 
@@ -536,8 +512,6 @@ mod tests {
         // After leaving, the key should be gone (not a tombstone)
         let val = gm
             .doc_manager
-            .lock()
-            .await
             .read_map_value(&doc_id, "member/user1");
         assert_eq!(val, None, "member key should be removed, not tombstoned");
     }
@@ -585,8 +559,6 @@ mod tests {
         let doc_id = format!("group/{}", create.group_id);
         let raw = gm
             .doc_manager
-            .lock()
-            .await
             .read_map_value(&doc_id, "stars/user1")
             .unwrap();
         let parsed: Vec<String> = serde_json::from_str(&raw).unwrap();
@@ -613,8 +585,6 @@ mod tests {
         let doc_id = format!("group/{}", create.group_id);
         let raw = gm
             .doc_manager
-            .lock()
-            .await
             .read_map_value(&doc_id, "pin/pin-1")
             .unwrap();
         let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
@@ -730,8 +700,6 @@ mod tests {
         let diff = crate::crypto::decrypt(&group_key, &encrypted_diff).unwrap();
         gm_d2
             .doc_manager
-            .lock()
-            .await
             .apply_update(&format!("group/{group_id}"), &diff)
             .unwrap();
 
@@ -758,8 +726,6 @@ mod tests {
         let diff_join = crate::crypto::decrypt(&group_key, &encrypted_diff_d2_to_d1).unwrap();
         gm_d1
             .doc_manager
-            .lock()
-            .await
             .apply_update(&format!("group/{group_id}"), &diff_join)
             .unwrap();
 
@@ -773,8 +739,6 @@ mod tests {
         let diff_d2 = crate::crypto::decrypt(&group_key, &encrypted_update_d2).unwrap();
         gm_d1
             .doc_manager
-            .lock()
-            .await
             .apply_update(&format!("group/{group_id}"), &diff_d2)
             .unwrap();
 

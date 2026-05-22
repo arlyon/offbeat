@@ -4,7 +4,7 @@
 // Each view rendered in the Expanded body
 
 import 'package:flutter/material.dart';
-import '../../data/mock_data.dart';
+import '../../data/models.dart';
 import '../../widgets/dotted_border.dart';
 import '../../widgets/chip.dart';
 import 'gantt_view.dart';
@@ -53,7 +53,10 @@ class _FestivalDetailScreenState extends State<FestivalDetailScreen> {
     final days = widget.days;
     final sets = widget.sets;
 
-    if (stages == null || days == null || sets == null || sets.isEmpty) {
+    if (stages == null || days == null || sets == null ||
+        stages.isEmpty || days.isEmpty || sets.isEmpty) {
+      debugPrint('[FestivalDetail] guard tripped: '
+          'stages=${stages?.length}, days=${days?.length}, sets=${sets?.length}');
       return const Center(
         child: Text(
           'NO LINEUP DATA',

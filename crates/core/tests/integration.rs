@@ -765,7 +765,7 @@ async fn test_group_encrypted_state_sync_via_relay() {
         .decode(recv_d2["message"]["payload"].as_str().unwrap())
         .unwrap();
     let diff_bytes = crypto::decrypt(&group_key, &diff_encrypted).unwrap();
-    node_d2.doc_manager.lock().await.apply_update(&doc_id, &diff_bytes).unwrap();
+    node_d2.doc_manager.apply_update(&doc_id, &diff_bytes).unwrap();
 
     let state_d2 = node_d2.group_manager.get_group_state(group_id).await.unwrap();
     assert_eq!(state_d2.pins.len(), 1);
@@ -846,7 +846,7 @@ async fn test_sv_handshake_group_sync() {
     let recv_d2 = wait_for_message_type(&mut stream_d2, "gossip", 5).await.unwrap();
     let diff_enc = base64::engine::general_purpose::STANDARD.decode(recv_d2["message"]["payload"].as_str().unwrap()).unwrap();
     let diff = crypto::decrypt(&group_key, &diff_enc).unwrap();
-    node_d2.doc_manager.lock().await.apply_update(&doc_id, &diff).unwrap();
+    node_d2.doc_manager.apply_update(&doc_id, &diff).unwrap();
 
     let state_d2 = node_d2.group_manager.get_group_state(group_id).await.unwrap();
     assert_eq!(state_d2.pins.len(), 1);
@@ -1334,7 +1334,7 @@ async fn test_do_fastforward_group_data() {
     let (mut sink_n1, _stream_n1) = connect_and_subscribe(&server, festival_id, &topic).await.unwrap();
 
     // N1 sends full state as an encrypted group_update
-    let full_state = node_n1.doc_manager.lock().await.encode_full_state(&doc_id).unwrap();
+    let full_state = node_n1.doc_manager.encode_full_state(&doc_id).unwrap();
     let encrypted = crypto::encrypt(&group_key, &full_state).unwrap();
     let encoded = base64::engine::general_purpose::STANDARD.encode(&encrypted);
 
@@ -1369,7 +1369,7 @@ async fn test_do_fastforward_group_data() {
         let payload = wire_msg["payload"].as_str().unwrap();
         let encrypted_bytes = base64::engine::general_purpose::STANDARD.decode(payload).unwrap();
         let decrypted = crypto::decrypt(&group_key, &encrypted_bytes).unwrap();
-        node_n2.doc_manager.lock().await.apply_update(&doc_id, &decrypted).unwrap();
+        node_n2.doc_manager.apply_update(&doc_id, &decrypted).unwrap();
     }
 
     // N2 should now see all of N1's data

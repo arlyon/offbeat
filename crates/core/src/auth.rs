@@ -44,6 +44,21 @@ pub fn derive_identity_from_prf(db: &Database, prf_output: &[u8; 32]) -> anyhow:
     Ok(key)
 }
 
+/// Get or generate a persistent device ID (UUID v4).
+///
+/// The device_id is used as a partition key for writer_seq in chat,
+/// ensuring sequence numbers don't collide across multiple devices
+/// for the same user.
+pub fn get_device_id(db: &Database) -> anyhow::Result<String> {
+    if let Some(bytes) = db.get_credential("device_id")? {
+        return Ok(String::from_utf8(bytes)?);
+    }
+
+    let device_id = uuid::Uuid::new_v4().to_string();
+    db.set_credential("device_id", device_id.as_bytes())?;
+    Ok(device_id)
+}
+
 /// Derive a short, stable user ID from a signing key.
 ///
 /// Returns the first 16 hex characters of the verifying (public) key — a 64-bit

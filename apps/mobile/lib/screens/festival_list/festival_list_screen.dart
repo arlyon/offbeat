@@ -6,7 +6,7 @@
 // Empty state: "NO RESULTS // {query}"
 
 import 'package:flutter/material.dart';
-import '../../data/mock_data.dart';
+import '../../data/models.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/dotted_border.dart';
 import 'festival_row.dart';
@@ -60,8 +60,11 @@ class _FestivalListScreenState extends State<FestivalListScreen> {
   Widget build(BuildContext context) {
     final filtered = _filtered;
     final savedFests = filtered.where((f) => _saved.contains(f.id)).toList();
+    final nowFests = filtered
+        .where((f) => !_saved.contains(f.id) && f.status == FestStatus.live)
+        .toList();
     final discoverFests = filtered
-        .where((f) => !_saved.contains(f.id))
+        .where((f) => !_saved.contains(f.id) && f.status != FestStatus.live)
         .toList();
 
     return Column(
@@ -83,10 +86,7 @@ class _FestivalListScreenState extends State<FestivalListScreen> {
                     padding: EdgeInsets.zero,
                     children: [
                       // Page header
-                      _PageHeader(
-                        activeCount: _activeCount,
-                        savedCount: _saved.length,
-                      ),
+                      _PageHeader(activeCount: _activeCount),
                       // Error banner
                       if (widget.error != null)
                         _ErrorBanner(
@@ -112,6 +112,27 @@ class _FestivalListScreenState extends State<FestivalListScreen> {
                           onRightTap: () {},
                         ),
                         ...savedFests.map(
+                          (f) => FestivalRow(
+                            fest: f,
+                            saved: _saved.contains(f.id),
+                            onToggleSave: () => setState(() {
+                              if (_saved.contains(f.id)) {
+                                _saved.remove(f.id);
+                              } else {
+                                _saved.add(f.id);
+                              }
+                            }),
+                            onTap: () => widget.onFestivalTap(f),
+                          ),
+                        ),
+                      ],
+                      // Now section (live festivals not in saved)
+                      if (nowFests.isNotEmpty) ...[
+                        _EyebrowRow(
+                          label: '// NOW',
+                          right: '${nowFests.length} LIVE',
+                        ),
+                        ...nowFests.map(
                           (f) => FestivalRow(
                             fest: f,
                             saved: _saved.contains(f.id),
@@ -160,9 +181,8 @@ class _FestivalListScreenState extends State<FestivalListScreen> {
 
 class _PageHeader extends StatelessWidget {
   final int activeCount;
-  final int savedCount;
 
-  const _PageHeader({required this.activeCount, required this.savedCount});
+  const _PageHeader({required this.activeCount});
 
   @override
   Widget build(BuildContext context) {
@@ -183,16 +203,7 @@ class _PageHeader extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 8),
-          Wrap(
-            spacing: 6,
-            children: [
-              Text('$activeCount ACTIVE', style: _metaStyle),
-              const Text('·', style: _dimDotStyle),
-              Text('$savedCount SAVED', style: _metaStyle),
-              const Text('·', style: _dimDotStyle),
-              const Text('SYNC 14:02', style: _metaStyle),
-            ],
-          ),
+          Text('$activeCount ACTIVE', style: _metaStyle),
         ],
       ),
     );
@@ -203,12 +214,6 @@ class _PageHeader extends StatelessWidget {
     fontSize: 11,
     color: colorFg3,
     letterSpacing: 0.08 * 11,
-    height: 1.3,
-  );
-  static const _dimDotStyle = TextStyle(
-    fontFamily: 'JetBrainsMono',
-    fontSize: 11,
-    color: colorFg4,
     height: 1.3,
   );
 }

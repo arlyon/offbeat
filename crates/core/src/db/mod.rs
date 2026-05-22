@@ -1,11 +1,11 @@
+mod migrations;
+
 use anyhow::Result;
 use rusqlite::{Connection, params};
 use std::path::Path;
 use std::sync::Mutex;
 
 use crate::types::ChatMessage;
-
-const SCHEMA: &str = include_str!("schema.sql");
 
 /// Thread-safe SQLite database wrapper.
 pub struct Database {
@@ -17,11 +17,11 @@ pub struct Database {
 unsafe impl Sync for Database {}
 
 impl Database {
-    /// Open (or create) a database at the given path and run the schema.
+    /// Open (or create) a database at the given path and run migrations.
     pub fn new(path: &Path) -> Result<Self> {
         let conn = Connection::open(path)?;
         Self::apply_pragmas(&conn)?;
-        conn.execute_batch(SCHEMA)?;
+        migrations::apply_migrations(&conn)?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -31,7 +31,7 @@ impl Database {
     pub fn new_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
         Self::apply_pragmas(&conn)?;
-        conn.execute_batch(SCHEMA)?;
+        migrations::apply_migrations(&conn)?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -75,6 +75,60 @@ impl Database {
             .query_map(params![doc_type], |row| row.get(0))?
             .collect::<rusqlite::Result<Vec<String>>>()?;
         Ok(ids)
+    }
+
+    // --- doc updates (append-only CRDT persistence) ---
+
+    /// Append a single CRDT update for a doc.
+    pub fn append_doc_update(&self, doc_id: &str, update_data: &[u8]) -> Result<()> {
+        self.conn.lock().unwrap().execute(
+            "INSERT INTO doc_updates (doc_id, update_data) VALUES (?1, ?2)",
+            params![doc_id, update_data],
+        )?;
+        Ok(())
+    }
+
+    /// Load all update blobs for a doc, ordered by insertion.
+    pub fn load_doc_updates(&self, doc_id: &str) -> Result<Vec<Vec<u8>>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT update_data FROM doc_updates WHERE doc_id = ?1 ORDER BY id",
+        )?;
+        let updates = stmt
+            .query_map(params![doc_id], |row| row.get(0))?
+            .collect::<rusqlite::Result<Vec<Vec<u8>>>>()?;
+        Ok(updates)
+    }
+
+    /// Count updates for a doc.
+    pub fn count_doc_updates(&self, doc_id: &str) -> Result<u32> {
+        let conn = self.conn.lock().unwrap();
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM doc_updates WHERE doc_id = ?1",
+            params![doc_id],
+            |row| row.get(0),
+        )?;
+        Ok(count as u32)
+    }
+
+    /// Replace all updates for a doc with a single compacted blob.
+    pub fn compact_doc_updates(&self, doc_id: &str, compacted: &[u8]) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM doc_updates WHERE doc_id = ?1",
+            params![doc_id],
+        )?;
+        conn.execute(
+            "INSERT INTO doc_updates (doc_id, update_data) VALUES (?1, ?2)",
+            params![doc_id, compacted],
+        )?;
+        // Also update the docs table for fast boot
+        conn.execute(
+            "INSERT OR REPLACE INTO docs (id, doc_type, data, updated_at)
+             VALUES (?1, 'yrs', ?2, datetime('now'))",
+            params![doc_id, compacted],
+        )?;
+        Ok(())
     }
 
     // --- groups ---

@@ -10,7 +10,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import '../../data/mock_data.dart';
+import '../../data/models.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/live_dot.dart';
 import '../../widgets/dotted_border.dart';
@@ -50,6 +50,7 @@ class _GanttViewState extends State<GanttView> {
 
   // ── Cached data (recomputed only when widget.sets/days change) ──
 
+  bool _hasComputedData = false;
   late Map<String, int> _dayOffsets;
   late List<FestSet> _absoluteSets;
   late int _startMin;
@@ -65,6 +66,13 @@ class _GanttViewState extends State<GanttView> {
   late List<(double, double, double)> _activitySteps;
 
   void _recomputeData() {
+    // Capture current viewport center in absolute-time space so we can
+    // restore it after the time range shifts.
+    final hadData = _hasComputedData && _viewportInnerW > 0;
+    final double prevCenterMin = hadData
+        ? _startMin + (_tx + _viewportInnerW / 2) / ganttPxPerMin
+        : -1;
+
     // Day offsets
     _dayOffsets = {
       for (int i = 0; i < widget.days.length; i++)
@@ -98,6 +106,16 @@ class _GanttViewState extends State<GanttView> {
 
     // Activity step graph — sweep line over set start/end events
     _activitySteps = _buildActivitySteps();
+
+    _hasComputedData = true;
+
+    // Restore scroll to same time position after recompute
+    if (hadData && prevCenterMin >= 0 && _hScrollController.hasClients) {
+      final target =
+          ((prevCenterMin - _startMin) * ganttPxPerMin - _viewportInnerW / 2)
+              .clamp(0.0, _maxTx);
+      _hScrollController.jumpTo(target);
+    }
   }
 
   List<(double, double, double)> _buildActivitySteps() {
@@ -186,9 +204,32 @@ class _GanttViewState extends State<GanttView> {
   @override
   void didUpdateWidget(GanttView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.sets != widget.sets || oldWidget.days != widget.days || oldWidget.now != widget.now) {
+    if (_setsChanged(oldWidget) || _daysChanged(oldWidget) || oldWidget.now != widget.now) {
       _recomputeData();
     }
+  }
+
+  bool _setsChanged(GanttView old) {
+    if (old.sets.length != widget.sets.length) return true;
+    for (int i = 0; i < widget.sets.length; i++) {
+      final a = old.sets[i], b = widget.sets[i];
+      if (a.id != b.id || a.t != b.t || a.dur != b.dur || a.stage != b.stage ||
+          a.day != b.day || a.starred != b.starred || a.live != b.live) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  bool _daysChanged(GanttView old) {
+    if (old.days.length != widget.days.length) return true;
+    for (int i = 0; i < widget.days.length; i++) {
+      final a = old.days[i], b = widget.days[i];
+      if (a.id != b.id || a.label != b.label || a.dayNum != b.dayNum || a.month != b.month || a.year != b.year) {
+        return true;
+      }
+    }
+    return false;
   }
 
   @override
@@ -311,43 +352,45 @@ class _GanttViewState extends State<GanttView> {
               final totalStagesH = _totalStagesHeight(stageAreaH);
 
               if (_viewportInnerW != vw) {
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  setState(() => _viewportInnerW = vw);
-                  _centerOnNow();
-                });
+                final wasZero = _viewportInnerW == 0.0;
+                _viewportInnerW = vw;
+                if (wasZero) {
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    _centerOnNow();
+                  });
+                }
               }
 
               return Stack(
                 children: [
-                  // Gantt content — rebuilds only when a scroll controller fires,
-                  // not the entire _GanttViewState tree.
+                  // Gantt content
                   Positioned.fill(
-                    child: IgnorePointer(
-                      child: RepaintBoundary(
-                        child: ListenableBuilder(
-                          listenable: Listenable.merge([_hScrollController, _vScrollController]),
-                          builder: (context, _) => _GanttContent(
-                            tx: _tx,
-                            progress: _progress,
-                            viewportInnerW: _viewportInnerW,
-                            allSets: allSets,
-                            stages: widget.stages,
-                            days: widget.days,
-                            dayOffsets: _dayOffsets,
-                            axisHours: _axisHours,
-                            nowX: _nowX,
-                            nowInRange: _nowInRange,
-                            startMin: _startMin,
-                            vertOffset: _vScrollController.hasClients
-                                ? _vScrollController.offset
-                                : 0.0,
-                            rowHeight: rh,
+                      child: IgnorePointer(
+                        child: RepaintBoundary(
+                          child: ListenableBuilder(
+                            listenable: Listenable.merge([_hScrollController, _vScrollController]),
+                            builder: (context, _) => _GanttContent(
+                              tx: _tx,
+                              progress: _progress,
+                              viewportInnerW: _viewportInnerW,
+                              allSets: allSets,
+                              stages: widget.stages,
+                              days: widget.days,
+                              dayOffsets: _dayOffsets,
+                              axisHours: _axisHours,
+                              nowX: _nowX,
+                              nowInRange: _nowInRange,
+                              startMin: _startMin,
+                              vertOffset: _vScrollController.hasClients
+                                  ? _vScrollController.offset
+                                  : 0.0,
+                              rowHeight: rh,
+                            ),
                           ),
                         ),
                       ),
                     ),
-                  ),
-                  // Horizontal scroll sentinel (full area, 1:1 mapping)
+                  // Horizontal scroll sentinel (always present so controller attaches)
                   Positioned.fill(
                     child: SingleChildScrollView(
                       controller: _hScrollController,
@@ -378,27 +421,27 @@ class _GanttViewState extends State<GanttView> {
                         ),
                       ),
                     ),
-                  // Bottom HUD (scrubber is draggable)
+                  // Bottom HUD
                   Positioned(
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    child: ListenableBuilder(
-                      listenable: _hScrollController,
-                      builder: (context, _) => _GanttHUD(
-                        progress: _progress,
-                        tx: _tx,
-                        viewportInnerW: _viewportInnerW,
-                        startMin: _startMin,
-                        maxTx: _maxTx,
-                        activitySteps: _activitySteps,
-                        onScrub: (p) {
-                          final target = (p * _maxTx).clamp(0.0, _maxTx);
-                          _hScrollController.jumpTo(target);
-                        },
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      child: ListenableBuilder(
+                        listenable: _hScrollController,
+                        builder: (context, _) => _GanttHUD(
+                          progress: _progress,
+                          tx: _tx,
+                          viewportInnerW: _viewportInnerW,
+                          startMin: _startMin,
+                          maxTx: _maxTx,
+                          activitySteps: _activitySteps,
+                          onScrub: (p) {
+                            final target = (p * _maxTx).clamp(0.0, _maxTx);
+                            _hScrollController.jumpTo(target);
+                          },
+                        ),
                       ),
                     ),
-                  ),
                 ],
               );
             },
@@ -517,7 +560,7 @@ class _MetaStrip extends StatelessWidget {
                                 ),
                               ),
                               child: Text(
-                                '${d.label} ${d.num}',
+                                '${d.label} ${d.dayNum}',
                                 style: TextStyle(
                                   fontFamily: 'JetBrainsMono',
                                   fontSize: 10,
@@ -1135,21 +1178,41 @@ class _GanttHUDState extends State<_GanttHUD>
 ///
 /// Matches [now] against [days] by day-of-month + month abbreviation.
 /// Returns minutes-since-midnight offset by the matching day's position.
+/// If today isn't a festival day, places "now" before the first day or
+/// after the last day depending on the calendar date.
+/// Parse a [Day] into a [DateTime] (midnight on that day).
+DateTime _dayToDate(Day d) {
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return DateTime(d.year, months.indexOf(d.month) + 1, int.parse(d.dayNum));
+}
+
 int _resolveNowMin(DateTime now, List<Day> days, Map<String, int> dayOffsets) {
   const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   final nowMonth = months[now.month - 1];
   final nowDay = now.day.toString();
   final nowMinOfDay = now.hour * 60 + now.minute;
 
+  // Exact match — today is a festival day
   for (final d in days) {
-    if (d.num == nowDay && d.month == nowMonth) {
+    if (d.year == now.year && d.dayNum == nowDay && d.month == nowMonth) {
       return (dayOffsets[d.id] ?? 0) + nowMinOfDay;
     }
   }
 
-  // Not on a festival day — place before or after based on date comparison
   if (days.isEmpty) return nowMinOfDay;
-  return (dayOffsets[days.last.id] ?? 0) + 24 * 60 + nowMinOfDay;
+
+  // Not a festival day — determine if we're before or after
+  final nowDate = DateTime(now.year, now.month, now.day);
+  final firstDayDate = _dayToDate(days.first);
+
+  if (nowDate.isBefore(firstDayDate)) {
+    final daysBefore = firstDayDate.difference(nowDate).inDays;
+    return (dayOffsets[days.first.id] ?? 0) - daysBefore * 24 * 60 + nowMinOfDay;
+  }
+
+  final lastDayDate = _dayToDate(days.last);
+  final daysAfter = nowDate.difference(lastDayDate).inDays;
+  return (dayOffsets[days.last.id] ?? 0) + daysAfter * 24 * 60 + nowMinOfDay;
 }
 
 class _ActivityPainter extends CustomPainter {

@@ -5,5 +5,7 @@
 	"city": "London",
 	"country": "GB",
 	"genres": ["Electronic", "Indie", "Experimental"],
-	"clashfinderId": "fieldday2026"
+	"clashfinderId": "fieldday2026",
+	"lat": 51.5366,
+	"lon": -0.0378
 }

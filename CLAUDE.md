@@ -125,6 +125,47 @@ Secrets (set via `wrangler secret put`):
 - `CLASHFINDER_USERNAME`
 - `CLASHFINDER_PRIVATE_KEY`
 
+### Admin Scripts (`apps/server/scripts/`)
+
+All scripts default to `--api-url http://localhost:8787`. Pass `--api-url https://offbeat-server.arlyon.workers.dev` for prod.
+
+All admin-authenticated scripts require `ADMIN_SECRET_KEY` env var (64-char hex Ed25519 secret key).
+
+```bash
+# --- Bootstrap & Auth ---
+pnpm -F @offbeat/server admin:keygen       # Generate a new Ed25519 keypair (prints to stdout)
+pnpm -F @offbeat/server admin:bootstrap    # Bootstrap first admin on a fresh server (no auth needed)
+pnpm -F @offbeat/server admin:add          # Add another admin (requires existing admin auth)
+  # --generate            Generate a new keypair and register it
+  # <public-key>          Or provide an existing 64-char hex public key
+
+# --- Festival Management ---
+pnpm -F @offbeat/server festival:register  # Register a single festival from a JSON fixture file
+  # <festival.json>       Path to fixture file
+  # --dry-run             Validate without making requests
+
+pnpm -F @offbeat/server festival:seed      # Seed all festivals from a folder of JSON fixtures
+  # [folder]              Fixture folder (default: fixtures/)
+  # --dry-run             Validate without making requests
+
+pnpm -F @offbeat/server festival:delete    # Delete a festival by ID
+  # <festival-id>
+
+pnpm -F @offbeat/server festival:reset     # Wipe all Festival DOs + MainDO data, re-seed from fixtures
+
+pnpm -F @offbeat/server festival:announce  # Submit an announcement to a festival's CRDT doc
+  # <festival-id> <message>
+  # --priority <info|warning|urgent>
+  # --title <title>
+```
+
+Typical workflow after a fresh deploy or DO wipe:
+```bash
+export ADMIN_SECRET_KEY=...
+npx tsx scripts/bootstrap-admin.ts --api-url https://offbeat-server.arlyon.workers.dev
+npx tsx scripts/reset-all.ts --api-url https://offbeat-server.arlyon.workers.dev
+```
+
 ### Mobile (`apps/mobile`)
 
 ```bash
@@ -142,6 +183,13 @@ cargo test --workspace       # Run all tests
 cargo clippy --workspace --all-targets -- -D warnings  # Lint
 cargo doc --workspace --no-deps --open  # Generate docs
 ```
+
+## Important Rules
+
+- **Never edit generated code.** Files like `frb_generated.rs`, `frb_generated.dart`,
+  `frb_generated.io.dart`, `frb_generated.web.dart` are produced by
+  `flutter_rust_bridge_codegen generate`. If the Rust bridge API types change, regenerate
+  instead of hand-editing.
 
 ## Code Conventions
 

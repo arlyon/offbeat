@@ -28,6 +28,7 @@ export interface Day {
 	label: string; // e.g. "Friday"
 	num: number; // day-of-month
 	month: string; // e.g. "Jun"
+	year: number; // e.g. 2026
 }
 
 export interface Set {
@@ -82,8 +83,5 @@ export interface TransportStatus {
 	meshConnected: boolean;
 }
 
-export interface SignedUpdate {
-	update: string; // base64-encoded binary
-	author: string;
-	signature: string; // base64-encoded
-}
+// SignedUpdate is now generated from proto — see generated/offbeat/v1/types_pb.ts
+// The proto version uses raw bytes instead of base64-encoded strings.

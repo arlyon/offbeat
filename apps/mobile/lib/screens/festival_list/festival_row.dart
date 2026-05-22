@@ -5,7 +5,7 @@
 // Dotted bottom border
 
 import 'package:flutter/material.dart';
-import '../../data/mock_data.dart';
+import '../../data/models.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/fest_art.dart';
 import '../../widgets/star_button.dart';
@@ -26,6 +26,8 @@ class FestivalRow extends StatelessWidget {
     required this.onTap,
   });
 
+  bool get _isLive => fest.status == FestStatus.live;
+
   @override
   Widget build(BuildContext context) {
     return DottedBorder.bottom(
@@ -35,84 +37,118 @@ class FestivalRow extends StatelessWidget {
           onTap: onTap,
           splashColor: Colors.transparent,
           highlightColor: colorSurface1,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+          child: IntrinsicHeight(
             child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // Festival art tile
-                FestArt(
-                  hue: fest.hue,
-                  width: 68,
-                  height: 68,
-                  label: fest.id.substring(0, 3),
-                ),
-                const SizedBox(width: 14),
-                // Body
+                // Live accent bar
+                if (_isLive)
+                  Container(width: 3, color: colorAccent),
                 Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // Name row + star
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Expanded(
-                            child: Wrap(
-                              crossAxisAlignment: WrapCrossAlignment.center,
-                              spacing: 8,
-                              children: [
-                                Text(
-                                  fest.name,
-                                  style: const TextStyle(
-                                    fontFamily: 'Helvetica',
-                                    fontWeight: FontWeight.w700,
-                                    fontSize: 17,
-                                    letterSpacing: -0.02 * 17,
-                                    height: 1.15,
-                                    color: colorFg,
-                                  ),
-                                ),
-                                if (fest.status == FestStatus.live)
-                                  _LiveBadge(),
-                                if (fest.status == FestStatus.past)
-                                  _PastBadge(year: fest.year),
-                              ],
+                  child: Padding(
+                    padding: EdgeInsets.fromLTRB(
+                      _isLive ? 15 : 18, 14, 18, 14,
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Festival art tile with optional live dot
+                        Stack(
+                          clipBehavior: Clip.none,
+                          children: [
+                            FestArt(
+                              hue: fest.hue,
+                              width: 68,
+                              height: 68,
+                              label: fest.id.substring(0, 3),
                             ),
+                            if (_isLive)
+                              const Positioned(
+                                top: -3,
+                                right: -3,
+                                child: LiveDot(size: 8),
+                              ),
+                          ],
+                        ),
+                        const SizedBox(width: 14),
+                        // Body
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              // Name row + star
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Expanded(
+                                    child: Wrap(
+                                      crossAxisAlignment:
+                                          WrapCrossAlignment.center,
+                                      spacing: 8,
+                                      children: [
+                                        Text(
+                                          fest.name,
+                                          style: const TextStyle(
+                                            fontFamily: 'Helvetica',
+                                            fontWeight: FontWeight.w700,
+                                            fontSize: 17,
+                                            letterSpacing: -0.02 * 17,
+                                            height: 1.15,
+                                            color: colorFg,
+                                          ),
+                                        ),
+                                        if (_isLive) _LiveBadge(),
+                                        if (fest.status == FestStatus.past)
+                                          _PastBadge(year: fest.year),
+                                      ],
+                                    ),
+                                  ),
+                                  StarButton(
+                                    starred: saved,
+                                    onToggle: onToggleSave,
+                                    size: 18,
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 6),
+                              // Dates + city
+                              Wrap(
+                                spacing: 6,
+                                children: [
+                                  _MetaText(
+                                    fest.dates
+                                        .replaceAll('· 2025', '')
+                                        .trim(),
+                                  ),
+                                  const _MetaDot(),
+                                  _MetaText(fest.city),
+                                ],
+                              ),
+                              const SizedBox(height: 4),
+                              // Stages / sets / genre
+                              Wrap(
+                                spacing: 6,
+                                children: [
+                                  _MetaText(
+                                    '${fest.stages} STAGES',
+                                    dim: true,
+                                  ),
+                                  _MetaDot(dim: true),
+                                  _MetaText(
+                                    '${fest.sets > 0 ? fest.sets : '—'} SETS',
+                                    dim: true,
+                                  ),
+                                  if (fest.genres.isNotEmpty) ...[
+                                    _MetaDot(dim: true),
+                                    _MetaText(fest.genres.first, dim: true),
+                                  ],
+                                ],
+                              ),
+                            ],
                           ),
-                          StarButton(
-                            starred: saved,
-                            onToggle: onToggleSave,
-                            size: 18,
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 4),
-                      // Dates + city
-                      Wrap(
-                        spacing: 6,
-                        children: [
-                          _MetaText(fest.dates.replaceAll('· 2025', '').trim()),
-                          const _MetaDot(),
-                          _MetaText(fest.city),
-                        ],
-                      ),
-                      const SizedBox(height: 2),
-                      // Stages / sets / genre
-                      Wrap(
-                        spacing: 6,
-                        children: [
-                          _MetaText('${fest.stages} STAGES', dim: true),
-                          _MetaDot(dim: true),
-                          _MetaText(
-                            '${fest.sets > 0 ? fest.sets : '—'} SETS',
-                            dim: true,
-                          ),
-                          _MetaDot(dim: true),
-                          _MetaText(fest.genres.first, dim: true),
-                        ],
-                      ),
-                    ],
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ],

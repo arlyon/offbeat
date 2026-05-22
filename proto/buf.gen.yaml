@@ -1,0 +1,10 @@
+version: v2
+plugins:
+  - remote: buf.build/community/neoeinstein-prost:v0.4.0
+    out: ../crates/core/src/proto
+    opt:
+      - file_descriptor_set
+  - local: protoc-gen-es
+    out: ../packages/protocol/src/generated
+    opt:
+      - target=ts

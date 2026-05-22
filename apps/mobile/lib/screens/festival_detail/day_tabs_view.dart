@@ -5,7 +5,7 @@
 // SetRow: grid [56px time | 4px color bar | name + sub | star]
 
 import 'package:flutter/material.dart';
-import '../../data/mock_data.dart';
+import '../../data/models.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/dotted_border.dart';
 import '../../widgets/star_button.dart';
@@ -209,7 +209,7 @@ class _DayTabStrip extends StatelessWidget {
                         ),
                         const SizedBox(height: 6),
                         Text(
-                          d.num,
+                          d.dayNum,
                           style: TextStyle(
                             fontFamily: 'Helvetica',
                             fontWeight: FontWeight.w700,

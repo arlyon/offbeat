@@ -10,7 +10,7 @@ import 'theme/app_theme.dart';
 import 'theme/tokens.dart';
 import 'shell/bottom_tab_bar.dart';
 import 'shell/top_nav.dart';
-import 'data/mock_data.dart';
+import 'data/models.dart';
 import 'screens/festival_list/festival_list_screen.dart';
 import 'screens/festival_detail/festival_detail_screen.dart';
 import 'screens/festival_detail/admin_panel.dart';
@@ -20,6 +20,8 @@ import 'services/auth_service.dart';
 import 'services/admin_service.dart';
 import 'services/festival_admin_service.dart';
 import 'services/festival_service.dart';
+import 'services/bluetooth_service.dart';
+import 'widgets/connection_drawer.dart';
 import 'widgets/weather_pill.dart';
 import 'src/rust/api.dart';
 import 'src/rust/frb_generated.dart';
@@ -27,6 +29,8 @@ import 'src/rust/frb_generated.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await RustLib.init();
+  await BluetoothService.requestPermissions();
+  await BluetoothService.initBle();
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
     statusBarColor: Colors.transparent,
     statusBarBrightness: Brightness.dark,
@@ -62,6 +66,7 @@ class _OffbeatShellState extends State<_OffbeatShell>
   // Navigation: null = lobby (festival list), non-null = inside festival
   Festival? _selectedFestival;
   AppTab _activeTab = AppTab.schedule;
+  final _festivalContentKey = GlobalKey();
 
   // Navigation animation
   late final AnimationController _navController;
@@ -102,7 +107,9 @@ class _OffbeatShellState extends State<_OffbeatShell>
 
   // Transport status
   StreamSubscription<TransportStatusDto>? _transportSub;
+  TransportStatusDto? _transportStatus;
   bool _relayConnected = false;
+  String? _relayFestivalId;
   int _blePeerCount = -1; // -1 = unavailable
 
   // Admin state
@@ -205,11 +212,35 @@ class _OffbeatShellState extends State<_OffbeatShell>
     _transportSub = transportStream.listen((status) {
       if (mounted) {
         setState(() {
+          _transportStatus = status;
           _relayConnected = status.relay.connected;
           _blePeerCount = status.ble.active ? status.ble.peerCount : -1;
         });
       }
     });
+  }
+
+  /// Restart the node to re-attempt BLE transport initialization.
+  Future<void> _restartNode() async {
+    _lineupSub?.cancel();
+    _lineupSub = null;
+    _weatherSub?.cancel();
+    _weatherSub = null;
+    _transportSub?.cancel();
+    _transportSub = null;
+    _relayFestivalId = null;
+    setState(() {
+      _nodeReady = false;
+      _transportStatus = null;
+      _relayConnected = false;
+      _blePeerCount = -1;
+      _selectedFestival = null;
+      _lineup = null;
+      _lineupLoading = true;
+      _weather = null;
+    });
+    await _initNode();
+    _loadFestivals();
   }
 
   Future<void> _loadFestivals() async {
@@ -228,13 +259,9 @@ class _OffbeatShellState extends State<_OffbeatShell>
       if (!mounted) return;
       setState(() {
         _festivalsLoading = false;
-        // Fall back to mock data when server is unreachable
-        if (_festivals.isEmpty) {
-          _festivals = kFests;
-          _festivalsError = 'offline — showing cached data';
-        } else {
-          _festivalsError = 'could not refresh';
-        }
+        _festivalsError = _festivals.isEmpty
+            ? 'offline — no cached data'
+            : 'could not refresh';
       });
     }
   }
@@ -312,6 +339,10 @@ class _OffbeatShellState extends State<_OffbeatShell>
     _lineupSub?.cancel();
     _weatherSub?.cancel();
 
+    // Start animation and set state in the same frame so the lobby is
+    // never removed before the slide transition begins.
+    _navController.forward(from: 0.0);
+
     setState(() {
       _selectedFestival = fest;
       _lineup = null;
@@ -335,8 +366,6 @@ class _OffbeatShellState extends State<_OffbeatShell>
     _weatherSub = weatherStream.listen((weather) {
       if (mounted) setState(() => _weather = weather);
     });
-
-    _navController.forward(from: 0.0);
 
     // Connect to the Festival DO WebSocket relay in the background
     _connectToRelay(fest.id);
@@ -386,6 +415,8 @@ class _OffbeatShellState extends State<_OffbeatShell>
   Future<void> _connectToRelay(String festivalId) async {
     final node = _node;
     if (node == null) return;
+    if (_relayFestivalId == festivalId) return;
+    _relayFestivalId = festivalId;
 
     try {
       // Fetch the festival DO's public key BEFORE connecting so the
@@ -569,6 +600,7 @@ class _OffbeatShellState extends State<_OffbeatShell>
     _lineupSub = null;
     _weatherSub?.cancel();
     _weatherSub = null;
+    _relayFestivalId = null;
     _navController.reverse().then((_) {
       if (!mounted) return;
       setState(() {
@@ -612,6 +644,11 @@ class _OffbeatShellState extends State<_OffbeatShell>
               syncing: _isSyncing,
               relayConnected: _relayConnected,
               blePeerCount: _blePeerCount,
+              onConnectionTap: () => showConnectionDrawer(
+                context,
+                status: _transportStatus,
+                onStartBle: _restartNode,
+              ),
               rightWidgets: [
                 // Crossfade between settings (lobby) and search+admin (festival)
                 AnimatedBuilder(
@@ -727,48 +764,36 @@ class _OffbeatShellState extends State<_OffbeatShell>
     }
 
     final inFestival = _selectedFestival != null;
-    final isAnimating = _navController.isAnimating;
 
-    // Simple case: no animation, just show current view
-    if (!isAnimating && !inFestival) {
-      return FestivalListScreen(
-        festivals: _festivals,
-        loading: _festivalsLoading,
-        error: _festivalsError,
-        onRefresh: _loadFestivals,
-        onFestivalTap: (fest) => _onFestivalTap(fest),
-      );
-    }
-
-    if (!isAnimating && inFestival) {
-      return _buildFestivalContent();
-    }
-
-    // During animation: show both in a Stack
+    // Always use the same widget tree structure to avoid remounts.
+    // When not animating, the SlideTransitions are at rest positions
+    // (Offset.zero for the visible one, off-screen for the hidden one).
     return AnimatedBuilder(
       animation: _navController,
       builder: (context, _) {
         return Stack(
           children: [
             // Lobby (slides out to left)
-            SlideTransition(
-              position: _slideOut,
-              child: FestivalListScreen(
-                festivals: _festivals,
-                loading: _festivalsLoading,
-                error: _festivalsError,
-                onRefresh: _loadFestivals,
-                onFestivalTap: (fest) => _onFestivalTap(fest),
+            if (!inFestival || _navController.isAnimating)
+              SlideTransition(
+                position: _slideOut,
+                child: FestivalListScreen(
+                  festivals: _festivals,
+                  loading: _festivalsLoading,
+                  error: _festivalsError,
+                  onRefresh: _loadFestivals,
+                  onFestivalTap: (fest) => _onFestivalTap(fest),
+                ),
               ),
-            ),
             // Festival (slides in from right)
-            SlideTransition(
-              position: _slideIn,
-              child: Container(
-                color: colorBg,
-                child: _buildFestivalContent(),
+            if (inFestival)
+              SlideTransition(
+                position: _slideIn,
+                child: Container(
+                  color: colorBg,
+                  child: _buildFestivalContent(),
+                ),
               ),
-            ),
           ],
         );
       },
@@ -807,6 +832,7 @@ class _OffbeatShellState extends State<_OffbeatShell>
         'label': d.label,
         'num': d.num,
         'month': d.month,
+        'year': d.year,
       })).toList();
 
       sets = lineup.sets.map((s) => FestSet.fromJson({
@@ -819,9 +845,11 @@ class _OffbeatShellState extends State<_OffbeatShell>
         'genre': s.genre,
         'cancelled': s.cancelled,
       })).toList();
+
     }
 
     return FestivalDetailScreen(
+      key: _festivalContentKey,
       festival: _selectedFestival!,
       now: _now,
       stages: stages,

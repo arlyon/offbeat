@@ -1,0 +1,19 @@
+syntax = "proto3";
+package offbeat.v1;
+
+message SignedUpdate {
+  bytes update = 1;       // raw Yrs update bytes
+  string author = 2;
+  bytes signature = 3;    // raw Ed25519 signature bytes
+}
+
+message ChatMessage {
+  string id = 1;
+  string user_id = 2;
+  string display_name = 3;
+  string text = 4;
+  string topic = 5;
+  optional string stage_id = 6;
+  string timestamp = 7;   // ISO 8601
+  uint64 writer_seq = 8;
+}

@@ -1,6 +1,6 @@
 // OFFBEAT StatusBar — 28px strip
 // Left: time (mono, 12px, bold)
-// Right: signal dots + "OFFBEAT" + battery % (mono, 11px)
+// Right: BLE indicator + relay indicator + "OFFBEAT" + battery % (mono, 11px)
 
 import 'package:flutter/material.dart';
 import '../theme/tokens.dart';
@@ -9,12 +9,18 @@ class OffbeatStatusBar extends StatelessWidget {
   final String time;
   final String carrier;
   final String battery;
+  final bool relayConnected;
+  final bool bleActive;
+  final int blePeerCount;
 
   const OffbeatStatusBar({
     super.key,
     this.time = '20:30',
     this.carrier = 'OFFBEAT',
     this.battery = '87%',
+    this.relayConnected = false,
+    this.bleActive = false,
+    this.blePeerCount = 0,
   });
 
   @override
@@ -38,16 +44,28 @@ class OffbeatStatusBar extends StatelessWidget {
                 height: 1,
               ),
             ),
-            // Right: signal + carrier + battery
+            // Right: transports + carrier + battery
             Row(
               children: [
+                if (bleActive) ...[
+                  Text(
+                    'BLE:$blePeerCount',
+                    style: const TextStyle(
+                      fontFamily: 'JetBrainsMono',
+                      fontSize: 11,
+                      color: colorCoAccent,
+                      height: 1,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                ],
+                // Relay dot: green=connected, red=disconnected
                 Text(
-                  '●●●',
-                  style: const TextStyle(
+                  '●',
+                  style: TextStyle(
                     fontFamily: 'JetBrainsMono',
                     fontSize: 11,
-                    color: colorFg,
-                    letterSpacing: 2,
+                    color: relayConnected ? colorOk : colorErr,
                     height: 1,
                   ),
                 ),

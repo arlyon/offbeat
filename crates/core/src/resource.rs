@@ -29,199 +29,151 @@ impl Priority {
     pub const LOW: Self = Self(3);
 }
 
-/// Common interface for all syncable resources.
-pub trait Resource: Send + Sync {
-    fn id(&self) -> &str;
-    fn kind(&self) -> ResourceKind;
-    fn visibility(&self) -> Visibility;
-    fn topic(&self) -> TopicId;
-    fn topic_string(&self) -> String;
-    fn priority(&self) -> Priority;
+/// Unified resource enum — replaces the former `Resource` trait + 4 struct types.
+#[derive(Debug, Clone)]
+pub enum Resource {
+    FestivalState {
+        festival_id: String,
+        public_key: [u8; 32],
+    },
+    GroupState {
+        group_id: String,
+        group_key: [u8; 32],
+    },
+    GroupChat {
+        group_id: String,
+        group_key: [u8; 32],
+    },
+    StageChat {
+        festival_id: String,
+        stage_id: String,
+        public_key: [u8; 32],
+    },
+}
+
+impl Resource {
+    pub fn id(&self) -> String {
+        match self {
+            Resource::FestivalState { festival_id, .. } => {
+                format!("festival/{festival_id}/state")
+            }
+            Resource::GroupState { group_id, .. } => {
+                format!("group/{group_id}/state")
+            }
+            Resource::GroupChat { group_id, .. } => {
+                format!("group/{group_id}/chat")
+            }
+            Resource::StageChat {
+                festival_id,
+                stage_id,
+                ..
+            } => {
+                format!("festival/{festival_id}/chat/{stage_id}")
+            }
+        }
+    }
+
+    pub fn kind(&self) -> ResourceKind {
+        match self {
+            Resource::FestivalState { .. } | Resource::GroupState { .. } => ResourceKind::CrdtDoc,
+            Resource::GroupChat { .. } | Resource::StageChat { .. } => ResourceKind::AppendLog,
+        }
+    }
+
+    pub fn visibility(&self) -> Visibility {
+        match self {
+            Resource::FestivalState { public_key, .. }
+            | Resource::StageChat { public_key, .. } => {
+                Visibility::PublicSigned {
+                    public_key: *public_key,
+                }
+            }
+            Resource::GroupState { group_key, .. } | Resource::GroupChat { group_key, .. } => {
+                Visibility::PrivateEncrypted {
+                    group_key: *group_key,
+                }
+            }
+        }
+    }
+
+    pub fn topic(&self) -> TopicId {
+        match self {
+            Resource::FestivalState { festival_id, .. } => {
+                topics::festival_topic(festival_id, "state")
+            }
+            Resource::GroupState { group_key, .. } => topics::group_topic(group_key, "state"),
+            Resource::GroupChat { group_key, .. } => topics::group_topic(group_key, "chat"),
+            Resource::StageChat {
+                festival_id,
+                stage_id,
+                ..
+            } => topics::festival_topic(festival_id, &format!("chat/{stage_id}")),
+        }
+    }
+
+    pub fn topic_string(&self) -> String {
+        match self {
+            Resource::FestivalState { festival_id, .. } => {
+                format!("offbeat/{festival_id}/state")
+            }
+            Resource::GroupState { group_id, .. } => {
+                format!("group/{group_id}/state")
+            }
+            Resource::GroupChat { group_id, .. } => {
+                format!("group/{group_id}/chat")
+            }
+            Resource::StageChat {
+                festival_id,
+                stage_id,
+                ..
+            } => {
+                format!("offbeat/{festival_id}/chat/{stage_id}")
+            }
+        }
+    }
+
+    pub fn priority(&self) -> Priority {
+        match self {
+            Resource::FestivalState { .. } => Priority::CRITICAL,
+            Resource::GroupState { .. } => Priority::HIGH,
+            Resource::GroupChat { .. } => Priority::MEDIUM,
+            Resource::StageChat { .. } => Priority::LOW,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
-// FestivalState
+// Convenience constructors
 // ---------------------------------------------------------------------------
 
-/// Festival lineup/stage state — CRDT doc, publicly signed, critical priority.
-pub struct FestivalState {
-    festival_id: String,
-    public_key: [u8; 32],
-    id_string: String,
-}
-
-impl FestivalState {
-    pub fn new(festival_id: impl Into<String>, public_key: [u8; 32]) -> Self {
-        let festival_id = festival_id.into();
-        let id_string = format!("festival/{festival_id}/state");
-        Self { festival_id, public_key, id_string }
-    }
-}
-
-impl Resource for FestivalState {
-    fn id(&self) -> &str {
-        &self.id_string
+impl Resource {
+    pub fn festival_state(festival_id: impl Into<String>, public_key: [u8; 32]) -> Self {
+        Self::FestivalState {
+            festival_id: festival_id.into(),
+            public_key,
+        }
     }
 
-    fn kind(&self) -> ResourceKind {
-        ResourceKind::CrdtDoc
-    }
-
-    fn visibility(&self) -> Visibility {
-        Visibility::PublicSigned { public_key: self.public_key }
-    }
-
-    fn topic(&self) -> TopicId {
-        topics::festival_topic(&self.festival_id, "state")
-    }
-
-    fn topic_string(&self) -> String {
-        format!("offbeat/{}/state", self.festival_id)
-    }
-
-    fn priority(&self) -> Priority {
-        Priority::CRITICAL
-    }
-}
-
-// ---------------------------------------------------------------------------
-// GroupState
-// ---------------------------------------------------------------------------
-
-/// Group membership/presence state — CRDT doc, privately encrypted, high priority.
-pub struct GroupState {
-    group_key: [u8; 32],
-    group_id: String,
-    id_string: String,
-}
-
-impl GroupState {
-    pub fn new(group_key: [u8; 32]) -> Self {
+    pub fn group_state(group_key: [u8; 32]) -> Self {
         let group_id = crypto::group_id_from_key(&group_key);
-        let id_string = format!("group/{group_id}/state");
-        Self { group_key, group_id, id_string }
-    }
-}
-
-impl Resource for GroupState {
-    fn id(&self) -> &str {
-        &self.id_string
+        Self::GroupState { group_id, group_key }
     }
 
-    fn kind(&self) -> ResourceKind {
-        ResourceKind::CrdtDoc
-    }
-
-    fn visibility(&self) -> Visibility {
-        Visibility::PrivateEncrypted { group_key: self.group_key }
-    }
-
-    fn topic(&self) -> TopicId {
-        topics::group_topic(&self.group_key, "state")
-    }
-
-    fn topic_string(&self) -> String {
-        format!("group/{}/state", self.group_id)
-    }
-
-    fn priority(&self) -> Priority {
-        Priority::HIGH
-    }
-}
-
-// ---------------------------------------------------------------------------
-// GroupChat
-// ---------------------------------------------------------------------------
-
-/// Group chat messages — append-log, privately encrypted, medium priority.
-pub struct GroupChat {
-    group_key: [u8; 32],
-    group_id: String,
-    id_string: String,
-}
-
-impl GroupChat {
-    pub fn new(group_key: [u8; 32]) -> Self {
+    pub fn group_chat(group_key: [u8; 32]) -> Self {
         let group_id = crypto::group_id_from_key(&group_key);
-        let id_string = format!("group/{group_id}/chat");
-        Self { group_key, group_id, id_string }
-    }
-}
-
-impl Resource for GroupChat {
-    fn id(&self) -> &str {
-        &self.id_string
+        Self::GroupChat { group_id, group_key }
     }
 
-    fn kind(&self) -> ResourceKind {
-        ResourceKind::AppendLog
-    }
-
-    fn visibility(&self) -> Visibility {
-        Visibility::PrivateEncrypted { group_key: self.group_key }
-    }
-
-    fn topic(&self) -> TopicId {
-        topics::group_topic(&self.group_key, "chat")
-    }
-
-    fn topic_string(&self) -> String {
-        format!("group/{}/chat", self.group_id)
-    }
-
-    fn priority(&self) -> Priority {
-        Priority::MEDIUM
-    }
-}
-
-// ---------------------------------------------------------------------------
-// StageChat
-// ---------------------------------------------------------------------------
-
-/// Stage-specific chat messages — append-log, publicly signed, low priority.
-pub struct StageChat {
-    festival_id: String,
-    stage_id: String,
-    public_key: [u8; 32],
-    id_string: String,
-}
-
-impl StageChat {
-    pub fn new(
+    pub fn stage_chat(
         festival_id: impl Into<String>,
         stage_id: impl Into<String>,
         public_key: [u8; 32],
     ) -> Self {
-        let festival_id = festival_id.into();
-        let stage_id = stage_id.into();
-        let id_string = format!("festival/{festival_id}/chat/{stage_id}");
-        Self { festival_id, stage_id, public_key, id_string }
-    }
-}
-
-impl Resource for StageChat {
-    fn id(&self) -> &str {
-        &self.id_string
-    }
-
-    fn kind(&self) -> ResourceKind {
-        ResourceKind::AppendLog
-    }
-
-    fn visibility(&self) -> Visibility {
-        Visibility::PublicSigned { public_key: self.public_key }
-    }
-
-    fn topic(&self) -> TopicId {
-        topics::festival_topic(&self.festival_id, &format!("chat/{}", self.stage_id))
-    }
-
-    fn topic_string(&self) -> String {
-        format!("offbeat/{}/chat/{}", self.festival_id, self.stage_id)
-    }
-
-    fn priority(&self) -> Priority {
-        Priority::LOW
+        Self::StageChat {
+            festival_id: festival_id.into(),
+            stage_id: stage_id.into(),
+            public_key,
+        }
     }
 }
 
@@ -231,17 +183,19 @@ impl Resource for StageChat {
 
 /// Registry of all active syncable resources, keyed by resource ID.
 pub struct ResourceRegistry {
-    resources: HashMap<String, Box<dyn Resource>>,
+    resources: HashMap<String, Resource>,
 }
 
 impl ResourceRegistry {
     pub fn new() -> Self {
-        Self { resources: HashMap::new() }
+        Self {
+            resources: HashMap::new(),
+        }
     }
 
     /// Register a resource. Replaces any existing resource with the same ID.
-    pub fn register(&mut self, resource: Box<dyn Resource>) {
-        self.resources.insert(resource.id().to_owned(), resource);
+    pub fn register(&mut self, resource: Resource) {
+        self.resources.insert(resource.id(), resource);
     }
 
     /// Remove a resource by ID.
@@ -250,18 +204,18 @@ impl ResourceRegistry {
     }
 
     /// Look up a resource by ID.
-    pub fn get(&self, id: &str) -> Option<&dyn Resource> {
-        self.resources.get(id).map(|r| r.as_ref())
+    pub fn get(&self, id: &str) -> Option<&Resource> {
+        self.resources.get(id)
     }
 
     /// Register a festival's state resource (CRDT doc, critical priority).
     pub fn register_festival(&mut self, festival_id: &str, public_key: [u8; 32]) {
-        self.register(Box::new(FestivalState::new(festival_id, public_key)));
+        self.register(Resource::festival_state(festival_id, public_key));
     }
 
     /// Return all resources sorted by priority (lowest value first).
-    pub fn by_priority(&self) -> Vec<&dyn Resource> {
-        let mut v: Vec<&dyn Resource> = self.resources.values().map(|r| r.as_ref()).collect();
+    pub fn by_priority(&self) -> Vec<&Resource> {
+        let mut v: Vec<&Resource> = self.resources.values().collect();
         v.sort_by_key(|r| r.priority());
         v
     }
@@ -284,124 +238,75 @@ mod tests {
     const PK: [u8; 32] = [1u8; 32];
     const GK: [u8; 32] = [2u8; 32];
 
-    // --- FestivalState ---
-
     #[test]
     fn festival_state_kind_and_priority() {
-        let r = FestivalState::new("fest-2026", PK);
+        let r = Resource::festival_state("fest-2026", PK);
         assert_eq!(r.kind(), ResourceKind::CrdtDoc);
         assert_eq!(r.priority(), Priority::CRITICAL);
     }
 
     #[test]
     fn festival_state_topic_matches_topics_module() {
-        let r = FestivalState::new("fest-2026", PK);
+        let r = Resource::festival_state("fest-2026", PK);
         assert_eq!(r.topic(), topics::festival_topic("fest-2026", "state"));
     }
 
     #[test]
     fn festival_state_topic_string() {
-        let r = FestivalState::new("fest-2026", PK);
+        let r = Resource::festival_state("fest-2026", PK);
         assert_eq!(r.topic_string(), "offbeat/fest-2026/state");
     }
 
     #[test]
     fn festival_state_id() {
-        let r = FestivalState::new("fest-2026", PK);
+        let r = Resource::festival_state("fest-2026", PK);
         assert_eq!(r.id(), "festival/fest-2026/state");
     }
 
-    // --- GroupState ---
-
     #[test]
     fn group_state_kind_and_priority() {
-        let r = GroupState::new(GK);
+        let r = Resource::group_state(GK);
         assert_eq!(r.kind(), ResourceKind::CrdtDoc);
         assert_eq!(r.priority(), Priority::HIGH);
     }
 
     #[test]
     fn group_state_topic_matches_topics_module() {
-        let r = GroupState::new(GK);
+        let r = Resource::group_state(GK);
         assert_eq!(r.topic(), topics::group_topic(&GK, "state"));
     }
 
     #[test]
     fn group_state_topic_string() {
-        let r = GroupState::new(GK);
+        let r = Resource::group_state(GK);
         let group_id = crypto::group_id_from_key(&GK);
         assert_eq!(r.topic_string(), format!("group/{group_id}/state"));
     }
 
     #[test]
-    fn group_state_id() {
-        let r = GroupState::new(GK);
-        let group_id = crypto::group_id_from_key(&GK);
-        assert_eq!(r.id(), format!("group/{group_id}/state"));
-    }
-
-    // --- GroupChat ---
-
-    #[test]
     fn group_chat_kind_and_priority() {
-        let r = GroupChat::new(GK);
+        let r = Resource::group_chat(GK);
         assert_eq!(r.kind(), ResourceKind::AppendLog);
         assert_eq!(r.priority(), Priority::MEDIUM);
     }
 
     #[test]
-    fn group_chat_topic_matches_topics_module() {
-        let r = GroupChat::new(GK);
-        assert_eq!(r.topic(), topics::group_topic(&GK, "chat"));
-    }
-
-    #[test]
-    fn group_chat_topic_string() {
-        let r = GroupChat::new(GK);
-        let group_id = crypto::group_id_from_key(&GK);
-        assert_eq!(r.topic_string(), format!("group/{group_id}/chat"));
-    }
-
-    #[test]
-    fn group_chat_id() {
-        let r = GroupChat::new(GK);
-        let group_id = crypto::group_id_from_key(&GK);
-        assert_eq!(r.id(), format!("group/{group_id}/chat"));
-    }
-
-    // --- StageChat ---
-
-    #[test]
     fn stage_chat_kind_and_priority() {
-        let r = StageChat::new("fest-2026", "main-stage", PK);
+        let r = Resource::stage_chat("fest-2026", "main-stage", PK);
         assert_eq!(r.kind(), ResourceKind::AppendLog);
         assert_eq!(r.priority(), Priority::LOW);
     }
 
     #[test]
     fn stage_chat_topic_matches_topics_module() {
-        let r = StageChat::new("fest-2026", "main-stage", PK);
+        let r = Resource::stage_chat("fest-2026", "main-stage", PK);
         assert_eq!(r.topic(), topics::festival_topic("fest-2026", "chat/main-stage"));
     }
 
     #[test]
-    fn stage_chat_topic_string() {
-        let r = StageChat::new("fest-2026", "main-stage", PK);
-        assert_eq!(r.topic_string(), "offbeat/fest-2026/chat/main-stage");
-    }
-
-    #[test]
-    fn stage_chat_id() {
-        let r = StageChat::new("fest-2026", "main-stage", PK);
-        assert_eq!(r.id(), "festival/fest-2026/chat/main-stage");
-    }
-
-    // --- ResourceRegistry ---
-
-    #[test]
     fn registry_register_and_get() {
         let mut reg = ResourceRegistry::new();
-        reg.register(Box::new(FestivalState::new("fest-2026", PK)));
+        reg.register(Resource::festival_state("fest-2026", PK));
         assert!(reg.get("festival/fest-2026/state").is_some());
         assert!(reg.get("nonexistent").is_none());
     }
@@ -409,7 +314,7 @@ mod tests {
     #[test]
     fn registry_deregister() {
         let mut reg = ResourceRegistry::new();
-        reg.register(Box::new(FestivalState::new("fest-2026", PK)));
+        reg.register(Resource::festival_state("fest-2026", PK));
         reg.deregister("festival/fest-2026/state");
         assert!(reg.get("festival/fest-2026/state").is_none());
     }
@@ -417,22 +322,19 @@ mod tests {
     #[test]
     fn registry_by_priority_ordering() {
         let mut reg = ResourceRegistry::new();
-        // Insert in non-priority order
-        reg.register(Box::new(StageChat::new("fest-2026", "main-stage", PK)));
-        reg.register(Box::new(GroupChat::new(GK)));
-        reg.register(Box::new(GroupState::new(GK)));
-        reg.register(Box::new(FestivalState::new("fest-2026", PK)));
+        reg.register(Resource::stage_chat("fest-2026", "main-stage", PK));
+        reg.register(Resource::group_chat(GK));
+        reg.register(Resource::group_state(GK));
+        reg.register(Resource::festival_state("fest-2026", PK));
 
         let ordered = reg.by_priority();
         assert_eq!(ordered.len(), 4);
 
         let priorities: Vec<Priority> = ordered.iter().map(|r| r.priority()).collect();
-        // Must be non-decreasing
         for window in priorities.windows(2) {
             assert!(window[0] <= window[1], "priorities not sorted: {:?}", priorities);
         }
 
-        // First must be CRITICAL, last must be LOW
         assert_eq!(priorities[0], Priority::CRITICAL);
         assert_eq!(priorities[3], Priority::LOW);
     }
@@ -440,9 +342,8 @@ mod tests {
     #[test]
     fn registry_replace_existing() {
         let mut reg = ResourceRegistry::new();
-        reg.register(Box::new(FestivalState::new("fest-2026", PK)));
-        reg.register(Box::new(FestivalState::new("fest-2026", [9u8; 32])));
-        // Still one entry
+        reg.register(Resource::festival_state("fest-2026", PK));
+        reg.register(Resource::festival_state("fest-2026", [9u8; 32]));
         assert_eq!(reg.by_priority().len(), 1);
     }
 

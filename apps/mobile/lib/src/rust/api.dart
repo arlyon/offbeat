@@ -6,7 +6,7 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `convert_sync_status`, `parse_json_array`, `read_lineup_from_doc`
+// These functions are ignored because they are not marked as `pub`: `convert_sync_status`, `parse_json_array`, `read_lineup_from_doc`, `read_weather_from_doc`, `snapshot_transport`
 
 /// Generate a fresh random 32-byte group key.
 Future<Uint8List> generateGroupKey() =>
@@ -38,7 +38,8 @@ abstract class AppNode implements RustOpaqueInterface {
   /// verifying signed updates. Call `set_festival_public_key` first.
   Future<void> connectRelay({required String url, required String festivalId});
 
-  /// Open (or create) the node database at `db_path`.
+  /// Open (or create) the node database at `db_path` with full networking
+  /// (iroh endpoint, gossip, and BLE transport if available).
   static Future<AppNode> create({required String dbPath}) =>
       RustLib.instance.api.crateApiAppNodeCreate(dbPath: dbPath);
 
@@ -102,6 +103,14 @@ abstract class AppNode implements RustOpaqueInterface {
 
   /// Return the set IDs that are starred for the given festival.
   Future<List<String>> getStars({required String festivalId});
+
+  /// Get a snapshot of transport status (no rate computation).
+  Future<TransportStatusDto> getTransportStatus();
+
+  /// Read the weather forecast from the local Yrs doc for a festival.
+  ///
+  /// Returns `None` if no weather data has synced yet.
+  Future<WeatherForecastDto?> getWeather({required String festivalId});
 
   /// Join an existing group from an invite payload.
   Future<GroupJoinResultDto> joinGroup({
@@ -168,6 +177,9 @@ abstract class AppNode implements RustOpaqueInterface {
 
   /// Subscribe to the gossip topic for a festival and perform a state vector
   /// exchange with the DO so we only receive updates we don't already have.
+  ///
+  /// Registers the festival as a resource in the registry, then delegates
+  /// subscribe + catch-up to the SyncOrchestrator.
   Future<void> subscribeFestival({required String festivalId});
 
   /// Toggle a star on a set. Returns the new starred state (`true` = now starred).
@@ -196,6 +208,15 @@ abstract class AppNode implements RustOpaqueInterface {
 
   /// Watch sync status — emits current status, then updates on changes.
   Future<Stream<SyncStatusDto>> watchSyncStatus();
+
+  /// Watch transport status — emits relay + BLE state with bandwidth
+  /// rates computed by diffing cumulative counters every second.
+  Future<Stream<TransportStatusDto>> watchTransportStatus();
+
+  /// Watch weather forecast — emits current forecast, then updates on changes.
+  Future<Stream<WeatherForecastDto?>> watchWeather({
+    required String festivalId,
+  });
 }
 
 class AttestationDto {
@@ -238,6 +259,49 @@ class AuthStateDto {
           runtimeType == other.runtimeType &&
           state == other.state &&
           expiresAt == other.expiresAt;
+}
+
+class BleStatusDto {
+  final bool active;
+  final int peerCount;
+
+  /// Aggregate BLE bytes per second sent.
+  final BigInt txBytesPerSec;
+
+  /// Aggregate BLE bytes per second received.
+  final BigInt rxBytesPerSec;
+  final BigInt retransmits;
+  final List<TransportPeerDto> peers;
+
+  const BleStatusDto({
+    required this.active,
+    required this.peerCount,
+    required this.txBytesPerSec,
+    required this.rxBytesPerSec,
+    required this.retransmits,
+    required this.peers,
+  });
+
+  @override
+  int get hashCode =>
+      active.hashCode ^
+      peerCount.hashCode ^
+      txBytesPerSec.hashCode ^
+      rxBytesPerSec.hashCode ^
+      retransmits.hashCode ^
+      peers.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is BleStatusDto &&
+          runtimeType == other.runtimeType &&
+          active == other.active &&
+          peerCount == other.peerCount &&
+          txBytesPerSec == other.txBytesPerSec &&
+          rxBytesPerSec == other.rxBytesPerSec &&
+          retransmits == other.retransmits &&
+          peers == other.peers;
 }
 
 class ChatMessageDto {
@@ -425,6 +489,41 @@ class GroupStateDto {
           pins == other.pins;
 }
 
+class HourlyWeatherDto {
+  final List<String> time;
+  final Float64List temperature2M;
+  final Float64List precipitationProbability;
+  final Uint32List weatherCode;
+  final Float64List windSpeed10M;
+
+  const HourlyWeatherDto({
+    required this.time,
+    required this.temperature2M,
+    required this.precipitationProbability,
+    required this.weatherCode,
+    required this.windSpeed10M,
+  });
+
+  @override
+  int get hashCode =>
+      time.hashCode ^
+      temperature2M.hashCode ^
+      precipitationProbability.hashCode ^
+      weatherCode.hashCode ^
+      windSpeed10M.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is HourlyWeatherDto &&
+          runtimeType == other.runtimeType &&
+          time == other.time &&
+          temperature2M == other.temperature2M &&
+          precipitationProbability == other.precipitationProbability &&
+          weatherCode == other.weatherCode &&
+          windSpeed10M == other.windSpeed10M;
+}
+
 class IdentityDto {
   final String userId;
   final String? displayName;
@@ -448,17 +547,23 @@ class LineupDayDto {
   final String label;
   final int num;
   final String month;
+  final int year;
 
   const LineupDayDto({
     required this.id,
     required this.label,
     required this.num,
     required this.month,
+    required this.year,
   });
 
   @override
   int get hashCode =>
-      id.hashCode ^ label.hashCode ^ num.hashCode ^ month.hashCode;
+      id.hashCode ^
+      label.hashCode ^
+      num.hashCode ^
+      month.hashCode ^
+      year.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -468,7 +573,8 @@ class LineupDayDto {
           id == other.id &&
           label == other.label &&
           num == other.num &&
-          month == other.month;
+          month == other.month &&
+          year == other.year;
 }
 
 class LineupDto {
@@ -577,6 +683,41 @@ class LineupStageDto {
           order == other.order;
 }
 
+class RelayStatusDto {
+  final bool connected;
+  final bool authenticated;
+
+  /// Bytes per second sent to the relay (computed over last interval).
+  final BigInt txBytesPerSec;
+
+  /// Bytes per second received from the relay.
+  final BigInt rxBytesPerSec;
+
+  const RelayStatusDto({
+    required this.connected,
+    required this.authenticated,
+    required this.txBytesPerSec,
+    required this.rxBytesPerSec,
+  });
+
+  @override
+  int get hashCode =>
+      connected.hashCode ^
+      authenticated.hashCode ^
+      txBytesPerSec.hashCode ^
+      rxBytesPerSec.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is RelayStatusDto &&
+          runtimeType == other.runtimeType &&
+          connected == other.connected &&
+          authenticated == other.authenticated &&
+          txBytesPerSec == other.txBytesPerSec &&
+          rxBytesPerSec == other.rxBytesPerSec;
+}
+
 /// Per-resource sync status.
 class ResourceSyncStatusDto {
   final String id;
@@ -630,4 +771,84 @@ class SyncStatusDto {
           syncing == other.syncing &&
           resources == other.resources &&
           pendingOps == other.pendingOps;
+}
+
+class TransportPeerDto {
+  final String deviceId;
+  final String phase;
+  final String? connectPath;
+
+  const TransportPeerDto({
+    required this.deviceId,
+    required this.phase,
+    this.connectPath,
+  });
+
+  @override
+  int get hashCode => deviceId.hashCode ^ phase.hashCode ^ connectPath.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is TransportPeerDto &&
+          runtimeType == other.runtimeType &&
+          deviceId == other.deviceId &&
+          phase == other.phase &&
+          connectPath == other.connectPath;
+}
+
+class TransportStatusDto {
+  /// Relay (Festival DO WebSocket) connection status.
+  final RelayStatusDto relay;
+
+  /// BLE transport status.
+  final BleStatusDto ble;
+
+  const TransportStatusDto({required this.relay, required this.ble});
+
+  @override
+  int get hashCode => relay.hashCode ^ ble.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is TransportStatusDto &&
+          runtimeType == other.runtimeType &&
+          relay == other.relay &&
+          ble == other.ble;
+}
+
+class WeatherForecastDto {
+  final String updatedAt;
+  final double lat;
+  final double lon;
+  final String timezone;
+  final HourlyWeatherDto hourly;
+
+  const WeatherForecastDto({
+    required this.updatedAt,
+    required this.lat,
+    required this.lon,
+    required this.timezone,
+    required this.hourly,
+  });
+
+  @override
+  int get hashCode =>
+      updatedAt.hashCode ^
+      lat.hashCode ^
+      lon.hashCode ^
+      timezone.hashCode ^
+      hourly.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is WeatherForecastDto &&
+          runtimeType == other.runtimeType &&
+          updatedAt == other.updatedAt &&
+          lat == other.lat &&
+          lon == other.lon &&
+          timezone == other.timezone &&
+          hourly == other.hourly;
 }

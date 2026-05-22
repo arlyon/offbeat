@@ -307,7 +307,7 @@ mod tests {
         use yrs::{Doc, Map, ReadTxn, Transact, StateVector};
 
         let db = Arc::new(Database::new_in_memory().unwrap());
-        let mut dm = DocManager::new(db);
+        let dm = DocManager::new(db);
         let notifier = ResourceNotifier::new();
 
         let doc_id = "festival/chain-test/state";

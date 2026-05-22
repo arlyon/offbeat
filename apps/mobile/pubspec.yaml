@@ -42,6 +42,7 @@ dependencies:
   offbeat_bridge:
     path: rust_builder
   qr_flutter: ^4.1.0
+  permission_handler: ^12.0.0
 dev_dependencies:
   flutter_test:
     sdk: flutter

@@ -6,7 +6,7 @@
 
 import 'dart:async';
 import 'package:flutter/material.dart';
-import '../../data/mock_data.dart';
+import '../../data/models.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/live_dot.dart';
 import '../../widgets/dotted_border.dart';
@@ -43,10 +43,24 @@ class _NowStripViewState extends State<NowStripView> {
 
   Map<String, Stage> get _stageById => {for (final s in widget.stages) s.id: s};
 
+  /// Current day id based on real time (matches Day.id format).
+  String get _todayId {
+    const dow = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+    return dow[DateTime.now().weekday - 1];
+  }
+
+  /// Minutes since midnight right now.
+  int get _nowMin {
+    final now = DateTime.now();
+    return now.hour * 60 + now.minute;
+  }
+
   @override
   Widget build(BuildContext context) {
     final stageById = _stageById;
-    final sets = widget.sets.where((s) => s.day == kNowDay).toList();
+    final nowT = _nowMin;
+    // Show all sets for today (best-effort match on day id)
+    final sets = widget.sets.where((s) => s.day == _todayId).toList();
     final live = sets.cast<FestSet?>().firstWhere(
       (s) => s!.live,
       orElse: () => null,
@@ -55,14 +69,14 @@ class _NowStripViewState extends State<NowStripView> {
 
     // Next 4 hours of sets
     final upcoming =
-        sets.where((s) => s.t > kNowT && s.t < kNowT + 240).toList()
+        sets.where((s) => s.t > nowT && s.t < nowT + 240).toList()
           ..sort((a, b) => a.t.compareTo(b.t));
 
     // Next starred set
-    final nextStarred = sets.where((s) => s.starred && s.t > kNowT).toList()
+    final nextStarred = sets.where((s) => s.starred && s.t > nowT).toList()
       ..sort((a, b) => a.t.compareTo(b.t));
     final next = nextStarred.isEmpty ? null : nextStarred.first;
-    final diff = next != null ? next.t - kNowT : 0;
+    final diff = next != null ? next.t - nowT : 0;
     final hh = (diff ~/ 60).toString().padLeft(2, '0');
     final mm = (diff % 60).toString().padLeft(2, '0');
     final ss = _seconds.toString().padLeft(2, '0');
@@ -106,7 +120,7 @@ class _NowStripViewState extends State<NowStripView> {
         // Departure rows
         ...upcoming.take(8).map((s) {
           final stage = stageById[s.stage]!;
-          final inMin = s.t - kNowT;
+          final inMin = s.t - nowT;
           String status;
           Color statusColor;
 

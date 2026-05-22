@@ -60,18 +60,12 @@ class _StarButtonState extends State<StarButton>
         animation: _scale,
         builder: (context, child) => Transform.scale(
           scale: _scale.value,
-          child: SizedBox(
-            width: tapMin,
-            height: tapMin,
-            child: Center(
-              child: Text(
-                widget.starred ? '★' : '☆',
-                style: TextStyle(
-                  fontSize: widget.size,
-                  color: widget.starred ? colorAccent : colorFg4,
-                  height: 1,
-                ),
-              ),
+          child: Text(
+            widget.starred ? '★' : '☆',
+            style: TextStyle(
+              fontSize: widget.size,
+              color: widget.starred ? colorAccent : colorFg4,
+              height: 1,
             ),
           ),
         ),

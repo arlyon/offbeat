@@ -63,9 +63,17 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   dco_decode_StreamSink_opt_box_autoadd_lineup_dto_Sse(dynamic raw);
 
   @protected
+  RustStreamSink<WeatherForecastDto?>
+  dco_decode_StreamSink_opt_box_autoadd_weather_forecast_dto_Sse(dynamic raw);
+
+  @protected
   RustStreamSink<SyncStatusDto> dco_decode_StreamSink_sync_status_dto_Sse(
     dynamic raw,
   );
+
+  @protected
+  RustStreamSink<TransportStatusDto>
+  dco_decode_StreamSink_transport_status_dto_Sse(dynamic raw);
 
   @protected
   String dco_decode_String(dynamic raw);
@@ -75,6 +83,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   AuthStateDto dco_decode_auth_state_dto(dynamic raw);
+
+  @protected
+  BleStatusDto dco_decode_ble_status_dto(dynamic raw);
 
   @protected
   bool dco_decode_bool(dynamic raw);
@@ -89,7 +100,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   LineupDto dco_decode_box_autoadd_lineup_dto(dynamic raw);
 
   @protected
+  WeatherForecastDto dco_decode_box_autoadd_weather_forecast_dto(dynamic raw);
+
+  @protected
   ChatMessageDto dco_decode_chat_message_dto(dynamic raw);
+
+  @protected
+  double dco_decode_f_64(dynamic raw);
 
   @protected
   GroupCreateResultDto dco_decode_group_create_result_dto(dynamic raw);
@@ -108,6 +125,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   GroupStateDto dco_decode_group_state_dto(dynamic raw);
+
+  @protected
+  HourlyWeatherDto dco_decode_hourly_weather_dto(dynamic raw);
 
   @protected
   int dco_decode_i_32(dynamic raw);
@@ -152,6 +172,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<LineupStageDto> dco_decode_list_lineup_stage_dto(dynamic raw);
 
   @protected
+  Float64List dco_decode_list_prim_f_64_strict(dynamic raw);
+
+  @protected
+  Uint32List dco_decode_list_prim_u_32_strict(dynamic raw);
+
+  @protected
   List<int> dco_decode_list_prim_u_8_loose(dynamic raw);
 
   @protected
@@ -163,6 +189,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  List<TransportPeerDto> dco_decode_list_transport_peer_dto(dynamic raw);
+
+  @protected
   String? dco_decode_opt_String(dynamic raw);
 
   @protected
@@ -172,13 +201,30 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   LineupDto? dco_decode_opt_box_autoadd_lineup_dto(dynamic raw);
 
   @protected
+  WeatherForecastDto? dco_decode_opt_box_autoadd_weather_forecast_dto(
+    dynamic raw,
+  );
+
+  @protected
+  RelayStatusDto dco_decode_relay_status_dto(dynamic raw);
+
+  @protected
   ResourceSyncStatusDto dco_decode_resource_sync_status_dto(dynamic raw);
 
   @protected
   SyncStatusDto dco_decode_sync_status_dto(dynamic raw);
 
   @protected
+  TransportPeerDto dco_decode_transport_peer_dto(dynamic raw);
+
+  @protected
+  TransportStatusDto dco_decode_transport_status_dto(dynamic raw);
+
+  @protected
   int dco_decode_u_32(dynamic raw);
+
+  @protected
+  BigInt dco_decode_u_64(dynamic raw);
 
   @protected
   int dco_decode_u_8(dynamic raw);
@@ -188,6 +234,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   BigInt dco_decode_usize(dynamic raw);
+
+  @protected
+  WeatherForecastDto dco_decode_weather_forecast_dto(dynamic raw);
 
   @protected
   AnyhowException sse_decode_AnyhowException(SseDeserializer deserializer);
@@ -232,9 +281,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  RustStreamSink<WeatherForecastDto?>
+  sse_decode_StreamSink_opt_box_autoadd_weather_forecast_dto_Sse(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   RustStreamSink<SyncStatusDto> sse_decode_StreamSink_sync_status_dto_Sse(
     SseDeserializer deserializer,
   );
+
+  @protected
+  RustStreamSink<TransportStatusDto>
+  sse_decode_StreamSink_transport_status_dto_Sse(SseDeserializer deserializer);
 
   @protected
   String sse_decode_String(SseDeserializer deserializer);
@@ -244,6 +303,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   AuthStateDto sse_decode_auth_state_dto(SseDeserializer deserializer);
+
+  @protected
+  BleStatusDto sse_decode_ble_status_dto(SseDeserializer deserializer);
 
   @protected
   bool sse_decode_bool(SseDeserializer deserializer);
@@ -262,7 +324,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   LineupDto sse_decode_box_autoadd_lineup_dto(SseDeserializer deserializer);
 
   @protected
+  WeatherForecastDto sse_decode_box_autoadd_weather_forecast_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   ChatMessageDto sse_decode_chat_message_dto(SseDeserializer deserializer);
+
+  @protected
+  double sse_decode_f_64(SseDeserializer deserializer);
 
   @protected
   GroupCreateResultDto sse_decode_group_create_result_dto(
@@ -285,6 +355,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   GroupStateDto sse_decode_group_state_dto(SseDeserializer deserializer);
+
+  @protected
+  HourlyWeatherDto sse_decode_hourly_weather_dto(SseDeserializer deserializer);
 
   @protected
   int sse_decode_i_32(SseDeserializer deserializer);
@@ -339,6 +412,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  Float64List sse_decode_list_prim_f_64_strict(SseDeserializer deserializer);
+
+  @protected
+  Uint32List sse_decode_list_prim_u_32_strict(SseDeserializer deserializer);
+
+  @protected
   List<int> sse_decode_list_prim_u_8_loose(SseDeserializer deserializer);
 
   @protected
@@ -346,6 +425,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<ResourceSyncStatusDto> sse_decode_list_resource_sync_status_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<TransportPeerDto> sse_decode_list_transport_peer_dto(
     SseDeserializer deserializer,
   );
 
@@ -363,6 +447,14 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  WeatherForecastDto? sse_decode_opt_box_autoadd_weather_forecast_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  RelayStatusDto sse_decode_relay_status_dto(SseDeserializer deserializer);
+
+  @protected
   ResourceSyncStatusDto sse_decode_resource_sync_status_dto(
     SseDeserializer deserializer,
   );
@@ -371,7 +463,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   SyncStatusDto sse_decode_sync_status_dto(SseDeserializer deserializer);
 
   @protected
+  TransportPeerDto sse_decode_transport_peer_dto(SseDeserializer deserializer);
+
+  @protected
+  TransportStatusDto sse_decode_transport_status_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   int sse_decode_u_32(SseDeserializer deserializer);
+
+  @protected
+  BigInt sse_decode_u_64(SseDeserializer deserializer);
 
   @protected
   int sse_decode_u_8(SseDeserializer deserializer);
@@ -381,6 +484,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   BigInt sse_decode_usize(SseDeserializer deserializer);
+
+  @protected
+  WeatherForecastDto sse_decode_weather_forecast_dto(
+    SseDeserializer deserializer,
+  );
 
   @protected
   void sse_encode_AnyhowException(
@@ -435,8 +543,20 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_StreamSink_opt_box_autoadd_weather_forecast_dto_Sse(
+    RustStreamSink<WeatherForecastDto?> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_StreamSink_sync_status_dto_Sse(
     RustStreamSink<SyncStatusDto> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_StreamSink_transport_status_dto_Sse(
+    RustStreamSink<TransportStatusDto> self,
     SseSerializer serializer,
   );
 
@@ -451,6 +571,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_auth_state_dto(AuthStateDto self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_ble_status_dto(BleStatusDto self, SseSerializer serializer);
 
   @protected
   void sse_encode_bool(bool self, SseSerializer serializer);
@@ -474,10 +597,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_box_autoadd_weather_forecast_dto(
+    WeatherForecastDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_chat_message_dto(
     ChatMessageDto self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_f_64(double self, SseSerializer serializer);
 
   @protected
   void sse_encode_group_create_result_dto(
@@ -505,6 +637,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_group_state_dto(GroupStateDto self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_hourly_weather_dto(
+    HourlyWeatherDto self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_i_32(int self, SseSerializer serializer);
@@ -573,6 +711,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_prim_f_64_strict(
+    Float64List self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_prim_u_32_strict(
+    Uint32List self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_prim_u_8_loose(List<int> self, SseSerializer serializer);
 
   @protected
@@ -584,6 +734,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_list_resource_sync_status_dto(
     List<ResourceSyncStatusDto> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_transport_peer_dto(
+    List<TransportPeerDto> self,
     SseSerializer serializer,
   );
 
@@ -603,6 +759,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_opt_box_autoadd_weather_forecast_dto(
+    WeatherForecastDto? self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_relay_status_dto(
+    RelayStatusDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_resource_sync_status_dto(
     ResourceSyncStatusDto self,
     SseSerializer serializer,
@@ -612,7 +780,22 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_sync_status_dto(SyncStatusDto self, SseSerializer serializer);
 
   @protected
+  void sse_encode_transport_peer_dto(
+    TransportPeerDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_transport_status_dto(
+    TransportStatusDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_u_32(int self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_u_64(BigInt self, SseSerializer serializer);
 
   @protected
   void sse_encode_u_8(int self, SseSerializer serializer);
@@ -622,6 +805,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_usize(BigInt self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_weather_forecast_dto(
+    WeatherForecastDto self,
+    SseSerializer serializer,
+  );
 }
 
 // Section: wire_class

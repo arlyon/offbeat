@@ -4,6 +4,7 @@ type Env = {
 	Bindings: {
 		MAIN_DO: DurableObjectNamespace;
 		FESTIVAL_DO: DurableObjectNamespace;
+		ADMIN_SECRET_KEY?: string;
 	};
 };
 
@@ -77,9 +78,27 @@ app.delete("/festivals/:id", (c) => {
 });
 
 // PUT /festivals/:id/lineup — replace lineup (admin-only)
-app.put("/festivals/:id/lineup", (c) => {
+app.put("/festivals/:id/lineup", async (c) => {
 	const id = c.req.param("id");
-	return forwardToMainDO(c.env, `/festivals/${id}/lineup`, c.req.raw);
+	const resp = await forwardToMainDO(c.env, `/festivals/${id}/lineup`, c.req.raw);
+	if (!resp.ok) return resp;
+
+	// Forward the updated lineup to the Festival DO if it's already configured
+	const doId = c.env.FESTIVAL_DO.idFromName(id);
+	const stub = c.env.FESTIVAL_DO.get(doId);
+	const configResp = await stub.fetch(new Request("http://internal/config", { method: "GET" }));
+	const config = (await configResp.json()) as { opensAt: string | null; closesAt: string | null };
+	if (config.opensAt && config.closesAt) {
+		const lineup = await resp.json();
+		await (
+			stub as unknown as {
+				updateLineup(festivalId: string, lineup: unknown): Promise<void>;
+			}
+		).updateLineup(id, lineup);
+		return Response.json(lineup);
+	}
+
+	return resp;
 });
 
 // GET /auth/public-key — MainDO's attestation issuer key
@@ -255,7 +274,11 @@ async function ensureFestivalConfig(env: Env["Bindings"], festivalId: string) {
 	const configUrl = new URL("http://internal/config");
 	const existing = await stub.fetch(new Request(configUrl.toString(), { method: "GET" }));
 	const config = (await existing.json()) as { opensAt: string | null; closesAt: string | null };
-	if (config.opensAt && config.closesAt) return;
+	if (config.opensAt && config.closesAt) {
+		// Already configured — still ensure weather alarm is armed (idempotent)
+		await (stub as unknown as { armWeatherAlarm(): Promise<void> }).armWeatherAlarm();
+		return;
+	}
 
 	// Fetch festival metadata from MainDO
 	const mainStub = getMainDO(env);
@@ -263,7 +286,12 @@ async function ensureFestivalConfig(env: Env["Bindings"], festivalId: string) {
 	const festResp = await mainStub.fetch(new Request(festUrl.toString()));
 	if (!festResp.ok) return;
 
-	const fest = (await festResp.json()) as { startDate: string; endDate: string };
+	const fest = (await festResp.json()) as {
+		startDate: string;
+		endDate: string;
+		lat?: number;
+		lon?: number;
+	};
 
 	// ±1 day from start/end
 	const opens = new Date(fest.startDate);
@@ -279,6 +307,9 @@ async function ensureFestivalConfig(env: Env["Bindings"], festivalId: string) {
 			body: JSON.stringify({
 				opensAt: opens.toISOString(),
 				closesAt: closes.toISOString(),
+				festivalId,
+				lat: fest.lat,
+				lon: fest.lon,
 			}),
 			headers: { "Content-Type": "application/json" },
 		}),
@@ -296,6 +327,9 @@ async function ensureFestivalConfig(env: Env["Bindings"], festivalId: string) {
 			stub as unknown as { seedLineup(festivalId: string, lineup: unknown): Promise<void> }
 		).seedLineup(festivalId, lineup);
 	}
+
+	// Arm weather alarm (fetches weather on a 6h schedule)
+	await (stub as unknown as { armWeatherAlarm(): Promise<void> }).armWeatherAlarm();
 }
 
 /** Push global admin keys from MainDO into the Festival DO's admin table. */

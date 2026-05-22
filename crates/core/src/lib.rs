@@ -134,7 +134,7 @@ impl OffbeatNode {
     ///
     /// This binds an iroh `Endpoint`, spawns the gossip actor (using the
     /// standard `GOSSIP_ALPN`), and wires up a `GossipManager`.
-    pub async fn new_with_networking(db_path: &Path, festival_public_key: [u8; 32]) -> anyhow::Result<Self> {
+    pub async fn new_with_networking(db_path: &Path) -> anyhow::Result<Self> {
         let db = Arc::new(Database::new(db_path)?);
         let doc_manager = Arc::new(DocManager::new(db.clone()));
         let group_manager = Arc::new(GroupManager::new(db.clone(), doc_manager.clone()));
@@ -171,13 +171,6 @@ impl OffbeatNode {
 
         let gossip_manager = Arc::new(Mutex::new(GossipManager::new(gossip.clone())));
 
-        // Store the festival public key for later use
-        let mut festival_public_keys = HashMap::new();
-        festival_public_keys.insert("default".to_string(), festival_public_key);
-
-        // Also register with sync orchestrator
-        sync_orchestrator.set_festival_public_key("default", festival_public_key);
-
         Ok(Self {
             doc_manager,
             db,
@@ -191,7 +184,7 @@ impl OffbeatNode {
             endpoint: Some(endpoint),
             ble_transport,
             ws_relay: Arc::new(parking_lot::RwLock::new(None)),
-            festival_public_keys,
+            festival_public_keys: HashMap::new(),
         })
     }
 }

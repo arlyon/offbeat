@@ -5,11 +5,12 @@ use bytes::Bytes;
 use iroh::EndpointId;
 use iroh_gossip::net::Gossip;
 use iroh_gossip::proto::TopicId;
-use tokio::sync::Mutex;
+use prost::Message;
 
 use crate::crypto;
 use crate::db::Database;
 use crate::doc_manager::DocManager;
+use crate::proto;
 use crate::types::{ChatMessage, SignedUpdate};
 
 // ---------------------------------------------------------------------------
@@ -56,25 +57,7 @@ pub enum GossipMessage {
 }
 
 // ---------------------------------------------------------------------------
-// Wire format — serialised over gossip / WS relay
-// ---------------------------------------------------------------------------
-
-/// Flat wire message that travels over iroh-gossip or the WS relay.
-#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
-pub struct GossipWireMessage {
-    /// Discriminator: "festival_update" | "group_update" | "chat" | "encrypted_chat"
-    ///               | "sync_request" | "sync_response" | "sync_update"
-    pub kind: String,
-    /// Document ID for CRDT-backed messages.
-    pub doc_id: Option<String>,
-    /// Base64-encoded binary payload or JSON string.
-    pub payload: String,
-    /// Base64-encoded group key ID so the receiver can look up the right key.
-    pub group_key_id: Option<String>,
-}
-
-// ---------------------------------------------------------------------------
-// dispatch_message — unchanged from Phase 4
+// dispatch_message
 // ---------------------------------------------------------------------------
 
 /// Dispatch an incoming gossip message to the appropriate handler.
@@ -84,7 +67,7 @@ pub struct GossipWireMessage {
 /// - `Chat`           → persists to the database.
 /// - `EncryptedChat`  → decrypts with the group key, deserialises, and persists.
 pub fn dispatch_message(
-    doc_manager: &mut DocManager,
+    doc_manager: &DocManager,
     db: &Database,
     msg: GossipMessage,
     festival_public_key: &[u8; 32],
@@ -146,7 +129,7 @@ pub fn dispatch_message(
 }
 
 // ---------------------------------------------------------------------------
-// GossipManager — iroh-gossip networking layer (simplified)
+// GossipManager — iroh-gossip networking layer
 // ---------------------------------------------------------------------------
 
 /// Receiver handle for gossip events on a topic.
@@ -174,9 +157,6 @@ impl GossipManager {
     }
 
     /// Join a gossip topic and return a receiver for events.
-    ///
-    /// `bootstrap` is the list of peer endpoint IDs already on the topic.
-    /// The caller is responsible for draining the receiver.
     pub async fn subscribe(
         &mut self,
         topic_id: TopicId,
@@ -185,13 +165,11 @@ impl GossipManager {
         let topic = self.gossip.subscribe(topic_id, bootstrap).await?;
         let (sender, receiver) = topic.split();
         self.subscriptions.insert(topic_id, sender);
-        // Return a clone of the receiver
         Ok(receiver)
     }
 
     /// Leave a previously joined gossip topic.
     pub fn unsubscribe(&mut self, topic_id: TopicId) {
-        // Dropping the sender causes the gossip actor to leave the topic.
         self.subscriptions.remove(&topic_id);
         self.receivers.remove(&topic_id);
     }
@@ -206,14 +184,14 @@ impl GossipManager {
         Ok(())
     }
 
-    /// Encode a `GossipMessage` and broadcast it on the given topic.
+    /// Encode a `GossipMessage` as protobuf and broadcast it on the given topic.
     pub async fn broadcast_message(
         &mut self,
         topic_id: TopicId,
         msg: &GossipMessage,
     ) -> anyhow::Result<()> {
-        let wire = encode_gossip_message(msg)?;
-        let bytes = serde_json::to_vec(&wire)?;
+        let envelope = proto::GossipEnvelope::from_gossip_message(msg);
+        let bytes = envelope.encode_to_vec();
         self.broadcast(topic_id, bytes).await
     }
 
@@ -227,210 +205,139 @@ impl GossipManager {
 // Wire encoding / decoding helpers
 // ---------------------------------------------------------------------------
 
-/// Encode a `GossipMessage` into the wire format.  Exposed for use by the
-/// bridge and other crates.
-pub fn encode_gossip_message_pub(msg: &GossipMessage) -> anyhow::Result<GossipWireMessage> {
-    encode_gossip_message(msg)
-}
-
-fn encode_gossip_message(msg: &GossipMessage) -> anyhow::Result<GossipWireMessage> {
-    use base64::Engine as _;
-    let b64 = base64::engine::general_purpose::STANDARD;
-
-    match msg {
-        GossipMessage::FestivalUpdate {
-            doc_id,
-            signed_update,
-        } => Ok(GossipWireMessage {
-            kind: "festival_update".to_string(),
-            doc_id: Some(doc_id.clone()),
-            payload: serde_json::to_string(signed_update)?,
-            group_key_id: None,
-        }),
-
-        GossipMessage::GroupUpdate {
-            doc_id,
-            encrypted,
-            group_key,
-        } => Ok(GossipWireMessage {
-            kind: "group_update".to_string(),
-            doc_id: Some(doc_id.clone()),
-            payload: b64.encode(encrypted),
-            group_key_id: Some(crypto::group_id_from_key(group_key)),
-        }),
-
-        GossipMessage::Chat(chat) => Ok(GossipWireMessage {
-            kind: "chat".to_string(),
-            doc_id: None,
-            payload: serde_json::to_string(chat)?,
-            group_key_id: None,
-        }),
-
-        GossipMessage::EncryptedChat { group_key, encrypted } => Ok(GossipWireMessage {
-            kind: "encrypted_chat".to_string(),
-            doc_id: None,
-            payload: b64.encode(encrypted),
-            group_key_id: Some(crypto::group_id_from_key(group_key)),
-        }),
-
-        GossipMessage::SyncRequest {
-            doc_id,
-            encrypted_sv,
-            group_key,
-        } => Ok(GossipWireMessage {
-            kind: "sync_request".to_string(),
-            doc_id: Some(doc_id.clone()),
-            payload: b64.encode(encrypted_sv),
-            group_key_id: Some(crypto::group_id_from_key(group_key)),
-        }),
-
-        GossipMessage::SyncResponse {
-            doc_id,
-            encrypted_diff,
-            group_key,
-        } => Ok(GossipWireMessage {
-            kind: "sync_response".to_string(),
-            doc_id: Some(doc_id.clone()),
-            payload: b64.encode(encrypted_diff),
-            group_key_id: Some(crypto::group_id_from_key(group_key)),
-        }),
-
-        GossipMessage::SyncUpdate {
-            doc_id,
-            encrypted_diff,
-            group_key,
-        } => Ok(GossipWireMessage {
-            kind: "sync_update".to_string(),
-            doc_id: Some(doc_id.clone()),
-            payload: b64.encode(encrypted_diff),
-            group_key_id: Some(crypto::group_id_from_key(group_key)),
-        }),
-    }
+/// Encode a `GossipMessage` into protobuf bytes.
+pub fn encode_gossip_message(msg: &GossipMessage) -> Vec<u8> {
+    let envelope = proto::GossipEnvelope::from_gossip_message(msg);
+    envelope.encode_to_vec()
 }
 
 /// Public entry point for `ws_relay` and other callers that receive raw
 /// wire bytes and need to dispatch them.
 pub async fn handle_wire_bytes_pub(
     raw: &[u8],
-    doc_manager: &Arc<Mutex<DocManager>>,
+    doc_manager: &Arc<DocManager>,
     db: &Arc<Database>,
     festival_public_key: [u8; 32],
 ) -> anyhow::Result<()> {
     handle_wire_bytes(raw, doc_manager, db, festival_public_key).await
 }
 
-/// Decode a `GossipWireMessage` from raw bytes and dispatch it.
-///
-/// `festival_public_key` is needed only for `festival_update` messages.
-///
-/// DB calls are wrapped in `spawn_blocking` to avoid blocking the tokio
-/// runtime on synchronous SQLite I/O.
+/// Decode a `GossipEnvelope` from raw bytes and dispatch it.
 async fn handle_wire_bytes(
     raw: &[u8],
-    doc_manager: &Arc<Mutex<DocManager>>,
+    doc_manager: &Arc<DocManager>,
     db: &Arc<Database>,
     festival_public_key: [u8; 32],
 ) -> anyhow::Result<()> {
-    let wire: GossipWireMessage = serde_json::from_slice(raw)
-        .map_err(|e| anyhow::anyhow!("deserialise wire message: {e}"))?;
-
-    let gossip_msg = decode_wire_message(wire, db).await?;
+    let envelope = proto::decode_envelope(raw)?;
+    let gossip_msg = decode_envelope_to_message(&envelope, db).await?;
     let gossip_msg = match gossip_msg {
         Some(m) => m,
         None => return Ok(()),
     };
 
-    let mut dm = doc_manager.lock().await;
-    dispatch_message(&mut dm, db, gossip_msg, &festival_public_key)
+    dispatch_message(doc_manager, db, gossip_msg, &festival_public_key)
 }
 
-/// Decode a wire message into a GossipMessage, performing DB key lookups
+/// Decode a GossipEnvelope into a GossipMessage, performing DB key lookups
 /// via spawn_blocking. Returns None for messages that should be skipped.
-async fn decode_wire_message(
-    wire: GossipWireMessage,
+pub async fn decode_envelope_to_message(
+    envelope: &proto::GossipEnvelope,
     db: &Arc<Database>,
 ) -> anyhow::Result<Option<GossipMessage>> {
-    match wire.kind.as_str() {
-        "festival_update" => {
-            let signed_update: SignedUpdate = serde_json::from_str(&wire.payload)?;
+    use proto::gossip_envelope::Payload;
+
+    let payload = envelope
+        .payload
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("empty gossip envelope"))?;
+
+    match payload {
+        Payload::FestivalUpdate(fu) => {
+            let signed = fu
+                .signed_update
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("festival_update missing signed_update"))?;
             Ok(Some(GossipMessage::FestivalUpdate {
-                doc_id: wire
-                    .doc_id
-                    .ok_or_else(|| anyhow::anyhow!("festival_update missing doc_id"))?,
-                signed_update,
+                doc_id: fu.doc_id.clone(),
+                signed_update: SignedUpdate {
+                    update: signed.update.clone(),
+                    author: signed.author.clone(),
+                    signature: signed.signature.clone(),
+                },
             }))
         }
-        "chat" => {
-            let chat: ChatMessage = serde_json::from_str(&wire.payload)?;
-            Ok(Some(GossipMessage::Chat(chat)))
+
+        Payload::Chat(chat) => {
+            Ok(Some(GossipMessage::Chat(chat.clone().into())))
         }
-        "group_update" => {
-            use base64::Engine as _;
-            let b64 = base64::engine::general_purpose::STANDARD;
 
-            let key_id = wire
-                .group_key_id
-                .as_deref()
-                .ok_or_else(|| anyhow::anyhow!("group_update missing group_key_id"))?
-                .to_string();
-
+        Payload::GroupUpdate(gu) => {
             let db_clone = Arc::clone(db);
-            let key_id_clone = key_id.clone();
+            let key_id = gu.group_key_id.clone();
             let group_key = tokio::task::spawn_blocking(move || {
-                db_clone.load_group_key(&key_id_clone)
+                db_clone.load_group_key(&key_id)
             })
             .await??
-            .ok_or_else(|| anyhow::anyhow!("group_update: unknown group key {key_id}"))?;
-
-            let encrypted = b64
-                .decode(&wire.payload)
-                .map_err(|e| anyhow::anyhow!("group_update: base64 decode: {e}"))?;
+            .ok_or_else(|| anyhow::anyhow!("group_update: unknown group key {}", gu.group_key_id))?;
 
             Ok(Some(GossipMessage::GroupUpdate {
-                doc_id: wire
-                    .doc_id
-                    .ok_or_else(|| anyhow::anyhow!("group_update missing doc_id"))?,
-                encrypted,
+                doc_id: gu.doc_id.clone(),
+                encrypted: gu.encrypted.clone(),
                 group_key,
             }))
         }
 
-        "encrypted_chat" => {
-            use base64::Engine as _;
-            let b64 = base64::engine::general_purpose::STANDARD;
-
-            let key_id = wire
-                .group_key_id
-                .as_deref()
-                .ok_or_else(|| anyhow::anyhow!("encrypted_chat missing group_key_id"))?
-                .to_string();
-
+        Payload::EncryptedChat(ec) => {
             let db_clone = Arc::clone(db);
-            let key_id_clone = key_id.clone();
+            let key_id = ec.group_key_id.clone();
             let group_key = tokio::task::spawn_blocking(move || {
-                db_clone.load_group_key(&key_id_clone)
+                db_clone.load_group_key(&key_id)
             })
             .await??
-            .ok_or_else(|| anyhow::anyhow!("encrypted_chat: unknown group key {key_id}"))?;
+            .ok_or_else(|| anyhow::anyhow!("encrypted_chat: unknown group key {}", ec.group_key_id))?;
 
-            let encrypted = b64
-                .decode(&wire.payload)
-                .map_err(|e| anyhow::anyhow!("encrypted_chat: base64 decode: {e}"))?;
-
-            Ok(Some(GossipMessage::EncryptedChat { group_key, encrypted }))
+            Ok(Some(GossipMessage::EncryptedChat {
+                group_key,
+                encrypted: ec.encrypted.clone(),
+            }))
         }
 
-        "sync_request" | "sync_response" | "sync_update" => {
-            tracing::warn!(
-                "gossip: {} requires group key lookup (key_id={:?}); skipping in generic wire path",
-                wire.kind,
-                wire.group_key_id
-            );
+        Payload::SyncRequest(_) => {
+            tracing::debug!("sync_request received; handled at higher level");
             Ok(None)
         }
-        other => {
-            tracing::warn!("gossip: unknown message kind: {other}; skipping");
-            Ok(None)
+
+        Payload::SyncResponse(sr) => {
+            let db_clone = Arc::clone(db);
+            let key_id = sr.group_key_id.clone();
+            let group_key = tokio::task::spawn_blocking(move || {
+                db_clone.load_group_key(&key_id)
+            })
+            .await??
+            .ok_or_else(|| anyhow::anyhow!("sync_response: unknown group key {}", sr.group_key_id))?;
+
+            Ok(Some(GossipMessage::SyncResponse {
+                doc_id: sr.doc_id.clone(),
+                encrypted_diff: sr.encrypted_diff.clone(),
+                group_key,
+            }))
+        }
+
+        Payload::SyncUpdate(su) => {
+            let db_clone = Arc::clone(db);
+            let key_id = su.group_key_id.clone();
+            let group_key = tokio::task::spawn_blocking(move || {
+                db_clone.load_group_key(&key_id)
+            })
+            .await??
+            .ok_or_else(|| anyhow::anyhow!("sync_update: unknown group key {}", su.group_key_id))?;
+
+            Ok(Some(GossipMessage::SyncUpdate {
+                doc_id: su.doc_id.clone(),
+                encrypted_diff: su.encrypted_diff.clone(),
+                group_key,
+            }))
         }
     }
 }
@@ -443,7 +350,6 @@ async fn decode_wire_message(
 mod tests {
     use super::*;
     use crate::signing;
-    use base64::Engine as _;
     use std::sync::Arc;
     use yrs::{Doc, Map, ReadTxn, StateVector, Transact};
 
@@ -454,7 +360,7 @@ mod tests {
     #[test]
     fn test_dispatch_chat_stored() {
         let db_arc = test_db();
-        let mut doc_mgr = DocManager::new(db_arc.clone());
+        let doc_mgr = DocManager::new(db_arc.clone());
 
         let msg = ChatMessage {
             id: "m1".to_string(),
@@ -469,7 +375,7 @@ mod tests {
 
         let dummy_pk = [0u8; 32];
         dispatch_message(
-            &mut doc_mgr,
+            &doc_mgr,
             &db_arc,
             GossipMessage::Chat(msg.clone()),
             &dummy_pk,
@@ -484,12 +390,11 @@ mod tests {
     #[test]
     fn test_dispatch_festival_update_valid_sig() {
         let db_arc = test_db();
-        let mut doc_mgr = DocManager::new(db_arc.clone());
+        let doc_mgr = DocManager::new(db_arc.clone());
 
         let signing_key = signing::generate_signing_key();
         let public_key: [u8; 32] = signing_key.verifying_key().to_bytes();
 
-        // Build a Yrs update
         let update_doc = Doc::new();
         let map = update_doc.get_or_insert_map("root");
         {
@@ -500,16 +405,15 @@ mod tests {
             .transact()
             .encode_state_as_update_v1(&StateVector::default());
 
-        let engine = base64::engine::general_purpose::STANDARD;
         let sig = signing::sign(&signing_key, &update_bytes);
         let signed = SignedUpdate {
-            update: engine.encode(&update_bytes),
+            update: update_bytes,
             author: "organiser".to_string(),
-            signature: engine.encode(&sig),
+            signature: sig,
         };
 
         dispatch_message(
-            &mut doc_mgr,
+            &doc_mgr,
             &db_arc,
             GossipMessage::FestivalUpdate {
                 doc_id: "fest-doc".to_string(),
@@ -526,11 +430,10 @@ mod tests {
     #[test]
     fn test_dispatch_group_update() {
         let db_arc = test_db();
-        let mut doc_mgr = DocManager::new(db_arc.clone());
+        let doc_mgr = DocManager::new(db_arc.clone());
 
         let group_key = crypto::generate_group_key();
 
-        // Build a Yrs update
         let update_doc = Doc::new();
         let map = update_doc.get_or_insert_map("root");
         {
@@ -545,7 +448,7 @@ mod tests {
 
         let dummy_pk = [0u8; 32];
         dispatch_message(
-            &mut doc_mgr,
+            &doc_mgr,
             &db_arc,
             GossipMessage::GroupUpdate {
                 doc_id: "group-doc".to_string(),
@@ -561,7 +464,7 @@ mod tests {
     }
 
     #[test]
-    fn test_wire_roundtrip_chat() {
+    fn test_protobuf_roundtrip_chat() {
         let chat = ChatMessage {
             id: "w1".to_string(),
             user_id: "u2".to_string(),
@@ -572,38 +475,45 @@ mod tests {
             timestamp: "2026-06-14T21:00:00Z".to_string(),
             writer_seq: 0,
         };
-        let wire = encode_gossip_message(&GossipMessage::Chat(chat.clone())).unwrap();
-        assert_eq!(wire.kind, "chat");
-        let decoded: ChatMessage = serde_json::from_str(&wire.payload).unwrap();
-        assert_eq!(decoded.text, chat.text);
+        let bytes = encode_gossip_message(&GossipMessage::Chat(chat.clone()));
+        let envelope = proto::decode_envelope(&bytes).unwrap();
+        match &envelope.payload {
+            Some(proto::gossip_envelope::Payload::Chat(c)) => {
+                assert_eq!(c.text, chat.text);
+                assert_eq!(c.id, chat.id);
+            }
+            other => panic!("expected Chat, got {other:?}"),
+        }
     }
 
     #[test]
-    fn test_wire_roundtrip_festival_update() {
+    fn test_protobuf_roundtrip_festival_update() {
         let signing_key = signing::generate_signing_key();
-        let update_bytes = b"fake-yrs-update";
-        let engine = base64::engine::general_purpose::STANDARD;
-        let sig = signing::sign(&signing_key, update_bytes);
+        let update_bytes = b"fake-yrs-update".to_vec();
+        let sig = signing::sign(&signing_key, &update_bytes);
         let signed = SignedUpdate {
-            update: engine.encode(update_bytes),
+            update: update_bytes,
             author: "organiser".to_string(),
-            signature: engine.encode(&sig),
+            signature: sig,
         };
-        let wire = encode_gossip_message(&GossipMessage::FestivalUpdate {
+        let bytes = encode_gossip_message(&GossipMessage::FestivalUpdate {
             doc_id: "doc-1".to_string(),
             signed_update: signed.clone(),
-        })
-        .unwrap();
-        assert_eq!(wire.kind, "festival_update");
-        assert_eq!(wire.doc_id.as_deref(), Some("doc-1"));
-        let decoded: SignedUpdate = serde_json::from_str(&wire.payload).unwrap();
-        assert_eq!(decoded.author, signed.author);
+        });
+        let envelope = proto::decode_envelope(&bytes).unwrap();
+        match &envelope.payload {
+            Some(proto::gossip_envelope::Payload::FestivalUpdate(fu)) => {
+                assert_eq!(fu.doc_id, "doc-1");
+                let su = fu.signed_update.as_ref().unwrap();
+                assert_eq!(su.author, signed.author);
+                assert_eq!(su.update, signed.update);
+            }
+            other => panic!("expected FestivalUpdate, got {other:?}"),
+        }
     }
 
     #[test]
-    fn test_wire_roundtrip_sync_request() {
-        use crate::crypto;
-
+    fn test_protobuf_roundtrip_sync_request() {
         let group_key = crypto::generate_group_key();
         let fake_sv = b"fake-yrs-sv-bytes";
         let encrypted_sv = crypto::encrypt(&group_key, fake_sv).unwrap();
@@ -613,30 +523,21 @@ mod tests {
             encrypted_sv: encrypted_sv.clone(),
             group_key,
         };
-        let wire = encode_gossip_message(&msg).unwrap();
-        assert_eq!(wire.kind, "sync_request");
-        assert_eq!(wire.doc_id.as_deref(), Some("group/doc-1"));
-        assert!(wire.group_key_id.is_some());
-
-        // The payload round-trips through base64.
-        let decoded_sv = base64::engine::general_purpose::STANDARD
-            .decode(&wire.payload)
-            .unwrap();
-        let plaintext = crypto::decrypt(&group_key, &decoded_sv).unwrap();
-        assert_eq!(plaintext, fake_sv);
-
-        // JSON serialise / deserialise.
-        let json = serde_json::to_vec(&wire).unwrap();
-        let wire2: GossipWireMessage = serde_json::from_slice(&json).unwrap();
-        assert_eq!(wire2.kind, "sync_request");
-        assert_eq!(wire2.doc_id, wire.doc_id);
-        assert_eq!(wire2.payload, wire.payload);
+        let bytes = encode_gossip_message(&msg);
+        let envelope = proto::decode_envelope(&bytes).unwrap();
+        match &envelope.payload {
+            Some(proto::gossip_envelope::Payload::SyncRequest(sr)) => {
+                assert_eq!(sr.doc_id, "group/doc-1");
+                assert_eq!(sr.encrypted_sv, encrypted_sv);
+                let plaintext = crypto::decrypt(&group_key, &sr.encrypted_sv).unwrap();
+                assert_eq!(plaintext, fake_sv);
+            }
+            other => panic!("expected SyncRequest, got {other:?}"),
+        }
     }
 
     #[test]
-    fn test_wire_roundtrip_sync_response() {
-        use crate::crypto;
-
+    fn test_protobuf_roundtrip_sync_response() {
         let group_key = crypto::generate_group_key();
         let fake_diff = b"fake-yrs-diff-bytes";
         let encrypted_diff = crypto::encrypt(&group_key, fake_diff).unwrap();
@@ -646,21 +547,15 @@ mod tests {
             encrypted_diff: encrypted_diff.clone(),
             group_key,
         };
-        let wire = encode_gossip_message(&msg).unwrap();
-        assert_eq!(wire.kind, "sync_response");
-        assert_eq!(wire.doc_id.as_deref(), Some("group/doc-2"));
-
-        let decoded_diff = base64::engine::general_purpose::STANDARD
-            .decode(&wire.payload)
-            .unwrap();
-        let plaintext = crypto::decrypt(&group_key, &decoded_diff).unwrap();
-        assert_eq!(plaintext, fake_diff);
-
-        // JSON round-trip.
-        let json = serde_json::to_vec(&wire).unwrap();
-        let wire2: GossipWireMessage = serde_json::from_slice(&json).unwrap();
-        assert_eq!(wire2.kind, "sync_response");
-        assert_eq!(wire2.doc_id, wire.doc_id);
-        assert_eq!(wire2.payload, wire.payload);
+        let bytes = encode_gossip_message(&msg);
+        let envelope = proto::decode_envelope(&bytes).unwrap();
+        match &envelope.payload {
+            Some(proto::gossip_envelope::Payload::SyncResponse(sr)) => {
+                assert_eq!(sr.doc_id, "group/doc-2");
+                let plaintext = crypto::decrypt(&group_key, &sr.encrypted_diff).unwrap();
+                assert_eq!(plaintext, fake_diff);
+            }
+            other => panic!("expected SyncResponse, got {other:?}"),
+        }
     }
 }

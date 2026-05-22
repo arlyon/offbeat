@@ -6,7 +6,7 @@
 // Lineup with BigCard components
 
 import 'package:flutter/material.dart';
-import '../../data/mock_data.dart';
+import '../../data/models.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/dotted_border.dart';
 import '../../widgets/star_button.dart';
@@ -118,7 +118,7 @@ class _StageTabsViewState extends State<StageTabsView> {
                     ),
                     Text(
                       '${widget.days.firstWhere((d) => d.id == _day).label} '
-                      '${widget.days.firstWhere((d) => d.id == _day).num}',
+                      '${widget.days.firstWhere((d) => d.id == _day).dayNum}',
                       style: const TextStyle(
                         fontFamily: 'JetBrainsMono',
                         fontSize: 10,
@@ -188,7 +188,7 @@ class _DayPillRow extends StatelessWidget {
               (d) => Padding(
                 padding: const EdgeInsets.only(left: 8),
                 child: MonoChip(
-                  label: '${d.label} ${d.num}',
+                  label: '${d.label} ${d.dayNum}',
                   active: d.id == activeDay,
                   onTap: () => onDayChanged(d.id),
                 ),

@@ -22,7 +22,36 @@ pub fn init_app() {
     // Install rustls crypto provider before anything else — both ring and aws-lc-rs
     // are in the dep tree, so rustls can't auto-detect.
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    // Set up logging BEFORE FRB's setup_default_user_utils (which installs
+    // its own subscriber — ours must win).
+    #[cfg(target_os = "android")]
+    {
+        android_logger::init_once(
+            android_logger::Config::default()
+                .with_max_level(log::LevelFilter::Info)
+                .with_filter(
+                    android_logger::FilterBuilder::new()
+                        .parse("offbeat_core=info,iroh_ble_transport=info,blew=warn,iroh=warn,iroh_gossip=info,info")
+                        .build(),
+                )
+                .with_tag("offbeat"),
+        );
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                    tracing_subscriber::EnvFilter::new(
+                        "offbeat_core=info,iroh_ble_transport=info,blew=warn,iroh=warn,iroh_gossip=info,info",
+                    )
+                }),
+            )
+            .try_init();
+    }
+
     flutter_rust_bridge::setup_default_user_utils();
+
     // Force lazy initialization of the runtime
     let _ = &*RUNTIME;
 }
@@ -105,6 +134,7 @@ pub struct LineupDayDto {
     pub label: String,
     pub num: i32,
     pub month: String,
+    pub year: i32,
 }
 
 pub struct LineupSetDto {
@@ -203,10 +233,11 @@ pub struct AppNode {
 }
 
 impl AppNode {
-    /// Open (or create) the node database at `db_path`.
-    pub fn create(db_path: String) -> anyhow::Result<AppNode> {
+    /// Open (or create) the node database at `db_path` with full networking
+    /// (iroh endpoint, gossip, and BLE transport if available).
+    pub async fn create(db_path: String) -> anyhow::Result<AppNode> {
         let path = std::path::Path::new(&db_path);
-        let inner = OffbeatNode::new(path)?;
+        let inner = OffbeatNode::new_with_networking(path).await?;
         Ok(AppNode { inner })
     }
 
@@ -253,6 +284,7 @@ impl AppNode {
                 label: d.get("label")?.as_str()?.to_string(),
                 num: d.get("num")?.as_i64()? as i32,
                 month: d.get("month")?.as_str()?.to_string(),
+                year: d.get("year")?.as_i64().unwrap_or(0) as i32,
             })
         });
 
@@ -1385,6 +1417,7 @@ fn read_lineup_from_doc(
             label: d.get("label")?.as_str()?.to_string(),
             num: d.get("num")?.as_i64()? as i32,
             month: d.get("month")?.as_str()?.to_string(),
+            year: d.get("year")?.as_i64().unwrap_or(0) as i32,
         })
     });
 
