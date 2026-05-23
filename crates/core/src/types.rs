@@ -177,6 +177,24 @@ pub struct WeatherForecast {
     pub hourly: HourlyWeather,
 }
 
+/// A peer endpoint discovered from the festival CRDT document.
+///
+/// The server writes these under a `"peers"` YMap in the root map, keyed by
+/// the 64-char hex endpoint ID. Each value is a JSON string with fields
+/// `relay_url`, `last_seen`, and `user_id`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct PeerInfo {
+    /// 64-char hex iroh endpoint ID.
+    pub endpoint_id: String,
+    /// Relay URL the peer is reachable through, if any.
+    pub relay_url: Option<String>,
+    /// Unix timestamp (seconds) of the last check-in.
+    pub last_seen: u64,
+    /// Authenticated user ID of the peer.
+    pub user_id: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

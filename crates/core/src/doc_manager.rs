@@ -186,6 +186,81 @@ impl DocManager {
         out
     }
 
+    // --- Peer list helpers ---
+
+    /// Parse the peer list from a festival's CRDT document.
+    ///
+    /// Reads the `"peers"` YMap from the document's root map, deserialises each
+    /// JSON entry, filters out `own_endpoint_id`, and skips malformed entries
+    /// with a warning log.
+    pub fn parse_peer_list(
+        &self,
+        festival_id: &str,
+        own_endpoint_id: &str,
+    ) -> Vec<crate::types::PeerInfo> {
+        let doc_arc = self.get_or_create(festival_id);
+        let doc = match doc_arc.read() {
+            Ok(d) => d,
+            Err(_) => return vec![],
+        };
+        let root = doc.get_or_insert_map("root");
+        let txn = doc.transact();
+
+        // The server stores "peers" as a nested YMap.
+        let peers_map = match root.get(&txn, "peers") {
+            Some(Out::YMap(map_ref)) => map_ref,
+            _ => return vec![],
+        };
+
+        let mut result = Vec::new();
+        for (key, value) in peers_map.iter(&txn) {
+            let endpoint_id = key.to_string();
+
+            // Skip our own endpoint
+            if endpoint_id == own_endpoint_id {
+                continue;
+            }
+
+            let json_str = match value {
+                Out::Any(Any::String(s)) => s.to_string(),
+                _ => {
+                    tracing::warn!(
+                        endpoint_id = %endpoint_id,
+                        "skipping peer entry: value is not a string"
+                    );
+                    continue;
+                }
+            };
+
+            #[derive(serde::Deserialize)]
+            struct RawPeerEntry {
+                relay_url: Option<String>,
+                last_seen: u64,
+                user_id: String,
+            }
+
+            match serde_json::from_str::<RawPeerEntry>(&json_str) {
+                Ok(entry) => {
+                    result.push(crate::types::PeerInfo {
+                        endpoint_id,
+                        relay_url: entry.relay_url,
+                        last_seen: entry.last_seen,
+                        user_id: entry.user_id,
+                    });
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        endpoint_id = %endpoint_id,
+                        error = %e,
+                        "skipping peer entry: failed to parse JSON"
+                    );
+                }
+            }
+        }
+
+        result
+    }
+
     // --- Group doc helpers ---
 
     /// Decrypt and apply an encrypted update.
