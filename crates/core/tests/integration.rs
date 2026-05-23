@@ -7,17 +7,10 @@
 //!
 //! ## Protocol
 //!
-//! The DO speaks a unified GossipWireMessage protocol:
+//! The DO speaks binary protobuf over WebSocket:
 //!
-//! **Client→DO:**
-//! - `{ type: "subscribe", topics: [...] }`
-//! - `{ type: "gossip", topic: "...", message: GossipWireMessage }`
-//! - `{ type: "catchup", topic: "...", sinceSeq: 0 }`
-//!
-//! **DO→Client:**
-//! - `{ type: "subscribed", topics: [...] }`
-//! - `{ type: "gossip", topic: "...", seq: N, message: GossipWireMessage }`
-//! - `{ type: "catchup", topic: "...", messages: [{ seq, message, timestamp }] }`
+//! **Client→DO:** `RelayClientMessage` (auth, subscribe, gossip, catchup, etc.)
+//! **DO→Client:** `RelayServerMessage` (auth_ok, subscribed, gossip, catchup, error)
 
 mod harness;
 
@@ -25,6 +18,8 @@ use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use harness::DevServer;
+use offbeat_core::proto::{self, relay_client_message, relay_server_message};
+use prost::Message as ProstMessage;
 use serde_json::{json, Value};
 use tokio::time::timeout;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
@@ -33,6 +28,14 @@ use yrs::updates::decoder::Decode;
 /// Convert bytes to hex string
 fn bytes_to_hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Convert hex string to bytes
+fn hex_to_bytes(hex: &str) -> Vec<u8> {
+    (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+        .collect()
 }
 
 type WsSinkType = futures_util::stream::SplitSink<
@@ -57,6 +60,132 @@ async fn connect_to_festival(
     Ok(ws_stream.split())
 }
 
+/// Send a binary protobuf RelayClientMessage over WebSocket.
+async fn send_client_msg(
+    sink: &mut WsSinkType,
+    msg: proto::RelayClientMessage,
+) -> Result<(), anyhow::Error> {
+    let bytes = msg.encode_to_vec();
+    sink.send(Message::Binary(bytes.into()))
+        .await
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    Ok(())
+}
+
+/// Receive a binary protobuf RelayServerMessage with timeout.
+async fn recv_server_msg(
+    stream: &mut WsStreamType,
+    timeout_secs: u64,
+) -> Result<proto::RelayServerMessage, anyhow::Error> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(timeout_secs);
+    loop {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            anyhow::bail!("Timeout waiting for server message");
+        }
+        let msg = timeout(remaining, stream.next()).await?;
+        match msg {
+            Some(Ok(Message::Binary(data))) => {
+                return proto::decode_server_msg(&data);
+            }
+            Some(Ok(Message::Ping(_) | Message::Pong(_))) => continue,
+            Some(Ok(Message::Close(_))) => anyhow::bail!("WebSocket closed"),
+            Some(Ok(other)) => anyhow::bail!("Unexpected message type: {:?}", other),
+            Some(Err(e)) => anyhow::bail!("WebSocket error: {}", e),
+            None => anyhow::bail!("WebSocket closed unexpectedly"),
+        }
+    }
+}
+
+/// Wait for a specific server message variant. Returns the matched Msg.
+async fn wait_for_msg(
+    stream: &mut WsStreamType,
+    matcher: impl Fn(&relay_server_message::Msg) -> bool,
+    label: &str,
+    timeout_secs: u64,
+) -> Result<relay_server_message::Msg, anyhow::Error> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(timeout_secs);
+    loop {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            anyhow::bail!("Timeout waiting for {label}");
+        }
+        let server_msg = recv_server_msg(stream, remaining.as_secs().max(1)).await?;
+        if let Some(ref msg) = server_msg.msg {
+            if matcher(msg) {
+                return Ok(msg.clone());
+            }
+        }
+    }
+}
+
+/// Wait for an AuthOk message.
+async fn wait_for_auth_ok(stream: &mut WsStreamType) -> Result<proto::AuthOk, anyhow::Error> {
+    let msg = wait_for_msg(
+        stream,
+        |m| matches!(m, relay_server_message::Msg::AuthOk(_)),
+        "auth_ok",
+        5,
+    )
+    .await?;
+    match msg {
+        relay_server_message::Msg::AuthOk(ok) => Ok(ok),
+        _ => unreachable!(),
+    }
+}
+
+/// Wait for a Subscribed message.
+async fn wait_for_subscribed(
+    stream: &mut WsStreamType,
+) -> Result<proto::Subscribed, anyhow::Error> {
+    let msg = wait_for_msg(
+        stream,
+        |m| matches!(m, relay_server_message::Msg::Subscribed(_)),
+        "subscribed",
+        5,
+    )
+    .await?;
+    match msg {
+        relay_server_message::Msg::Subscribed(s) => Ok(s),
+        _ => unreachable!(),
+    }
+}
+
+/// Wait for a GossipBroadcast message.
+async fn wait_for_gossip(
+    stream: &mut WsStreamType,
+    timeout_secs: u64,
+) -> Result<proto::GossipBroadcast, anyhow::Error> {
+    let msg = wait_for_msg(
+        stream,
+        |m| matches!(m, relay_server_message::Msg::Gossip(_)),
+        "gossip",
+        timeout_secs,
+    )
+    .await?;
+    match msg {
+        relay_server_message::Msg::Gossip(g) => Ok(g),
+        _ => unreachable!(),
+    }
+}
+
+/// Wait for a CatchupResponse message.
+async fn wait_for_catchup(
+    stream: &mut WsStreamType,
+) -> Result<proto::CatchupResponse, anyhow::Error> {
+    let msg = wait_for_msg(
+        stream,
+        |m| matches!(m, relay_server_message::Msg::Catchup(_)),
+        "catchup",
+        5,
+    )
+    .await?;
+    match msg {
+        relay_server_message::Msg::Catchup(c) => Ok(c),
+        _ => unreachable!(),
+    }
+}
+
 /// Connect to a festival's WebSocket endpoint and authenticate (can read + write)
 async fn connect_and_auth(
     server: &DevServer,
@@ -69,12 +198,12 @@ async fn connect_and_auth(
     };
     let pubkey_hex = bytes_to_hex(&signing_key.verifying_key().to_bytes());
 
-    // Register and get attestation
-    let attestation = register_and_get_attestation(&server.http_url(), &pubkey_hex).await?;
+    // Register and get attestation (HTTP/JSON)
+    let attestation_json = register_and_get_attestation(&server.http_url(), &pubkey_hex).await?;
 
     let (mut sink, mut stream) = connect_to_festival(&server.ws_url(), festival_id).await?;
 
-    // Authenticate
+    // Build protobuf auth request
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
         .as_secs()
@@ -82,79 +211,30 @@ async fn connect_and_auth(
     let session_msg = format!("session:{timestamp}");
     use ed25519_dalek::Signer;
     let sig = signing_key.sign(session_msg.as_bytes());
-    let sig_hex = bytes_to_hex(&sig.to_bytes());
 
-    send_json(
+    let att_msg = attestation_json["message"].as_str().unwrap_or("").to_string();
+    let att_sig = hex_to_bytes(attestation_json["signature"].as_str().unwrap_or(""));
+    let att_issuer = hex_to_bytes(attestation_json["issuer"].as_str().unwrap_or(""));
+
+    send_client_msg(
         &mut sink,
-        &json!({
-            "type": "auth",
-            "publicKey": pubkey_hex,
-            "attestation": attestation,
-            "signature": sig_hex,
-            "timestamp": timestamp
-        }),
+        proto::RelayClientMessage {
+            msg: Some(relay_client_message::Msg::Auth(proto::AuthRequest {
+                public_key: signing_key.verifying_key().to_bytes().to_vec(),
+                attestation: Some(proto::Attestation {
+                    message: att_msg,
+                    signature: att_sig,
+                    issuer: att_issuer,
+                }),
+                signature: sig.to_bytes().to_vec(),
+                timestamp,
+            })),
+        },
     )
     .await?;
-    wait_for_message_type(&mut stream, "auth_ok", 5).await?;
+    wait_for_auth_ok(&mut stream).await?;
 
     Ok((sink, stream))
-}
-
-/// Send a JSON message over WebSocket
-async fn send_json<S>(sink: &mut S, value: &Value) -> Result<(), anyhow::Error>
-where
-    S: SinkExt<Message> + Unpin,
-    S::Error: std::error::Error + Send + Sync + 'static,
-{
-    let msg = Message::Text(value.to_string().into());
-    sink.send(msg).await.map_err(|e| anyhow::anyhow!("{}", e))?;
-    Ok(())
-}
-
-/// Receive a JSON message from WebSocket with timeout
-#[allow(dead_code)]
-async fn recv_json<S>(stream: &mut S, timeout_secs: u64) -> Result<Value, anyhow::Error>
-where
-    S: StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
-{
-    let result = timeout(Duration::from_secs(timeout_secs), stream.next()).await?;
-    match result {
-        Some(Ok(Message::Text(text))) => Ok(serde_json::from_str(&text)?),
-        Some(Ok(msg)) => anyhow::bail!("Unexpected message type: {:?}", msg),
-        Some(Err(e)) => anyhow::bail!("WebSocket error: {}", e),
-        None => anyhow::bail!("WebSocket closed unexpectedly"),
-    }
-}
-
-/// Wait for a message with a specific type
-async fn wait_for_message_type<S>(
-    stream: &mut S,
-    expected_type: &str,
-    timeout_secs: u64,
-) -> Result<Value, anyhow::Error>
-where
-    S: StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
-{
-    let deadline = std::time::Instant::now() + Duration::from_secs(timeout_secs);
-    loop {
-        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-        if remaining.is_zero() {
-            anyhow::bail!("Timeout waiting for message type: {}", expected_type);
-        }
-
-        let msg = timeout(remaining, stream.next()).await?;
-        match msg {
-            Some(Ok(Message::Text(text))) => {
-                let value: Value = serde_json::from_str(&text)?;
-                if value.get("type").and_then(|t| t.as_str()) == Some(expected_type) {
-                    return Ok(value);
-                }
-            }
-            Some(Ok(_)) => continue,
-            Some(Err(e)) => anyhow::bail!("WebSocket error: {}", e),
-            None => anyhow::bail!("WebSocket closed unexpectedly"),
-        }
-    }
 }
 
 // For timestamp generation in tests
@@ -175,26 +255,80 @@ mod chrono {
     }
 }
 
-/// Build a GossipWireMessage for a chat message
-fn chat_wire_message(
+/// Build a GossipEnvelope for a chat message
+fn chat_envelope(
     id: &str,
     user_id: &str,
     display_name: &str,
     text: &str,
     topic: &str,
-) -> Value {
-    json!({
-        "kind": "chat",
-        "payload": serde_json::to_string(&json!({
-            "id": id,
-            "userId": user_id,
-            "displayName": display_name,
-            "text": text,
-            "topic": topic,
-            "timestamp": chrono::Utc::now().to_rfc3339()
-        })).unwrap(),
-        "group_key_id": null
-    })
+) -> proto::GossipEnvelope {
+    proto::GossipEnvelope {
+        payload: Some(proto::gossip_envelope::Payload::Chat(proto::ChatMessage {
+            id: id.to_string(),
+            user_id: user_id.to_string(),
+            display_name: display_name.to_string(),
+            text: text.to_string(),
+            topic: topic.to_string(),
+            stage_id: None,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            writer_seq: 0,
+        })),
+    }
+}
+
+/// Send a gossip envelope on a topic.
+async fn send_gossip(
+    sink: &mut WsSinkType,
+    topic: &str,
+    envelope: proto::GossipEnvelope,
+) -> Result<(), anyhow::Error> {
+    send_client_msg(
+        sink,
+        proto::RelayClientMessage {
+            msg: Some(relay_client_message::Msg::Gossip(proto::GossipRelay {
+                topic: topic.to_string(),
+                message: Some(envelope),
+            })),
+        },
+    )
+    .await
+}
+
+/// Send a subscribe request.
+async fn send_subscribe(
+    sink: &mut WsSinkType,
+    topics: &[&str],
+) -> Result<(), anyhow::Error> {
+    send_client_msg(
+        sink,
+        proto::RelayClientMessage {
+            msg: Some(relay_client_message::Msg::Subscribe(
+                proto::SubscribeRequest {
+                    topics: topics.iter().map(|t| t.to_string()).collect(),
+                },
+            )),
+        },
+    )
+    .await
+}
+
+/// Send a catchup request.
+async fn send_catchup(
+    sink: &mut WsSinkType,
+    topic: &str,
+    since_seq: u64,
+) -> Result<(), anyhow::Error> {
+    send_client_msg(
+        sink,
+        proto::RelayClientMessage {
+            msg: Some(relay_client_message::Msg::Catchup(proto::CatchupRequest {
+                topic: topic.to_string(),
+                since_seq,
+            })),
+        },
+    )
+    .await
 }
 
 /// Register with the MainDO and get an attestation for the given Ed25519 keypair.
@@ -236,15 +370,8 @@ async fn connect_and_subscribe(
     topic: &str,
 ) -> Result<(WsSinkType, WsStreamType), anyhow::Error> {
     let (mut sink, mut stream) = connect_and_auth(server, festival_id).await?;
-    send_json(
-        &mut sink,
-        &json!({
-            "type": "subscribe",
-            "topics": [topic]
-        }),
-    )
-    .await?;
-    wait_for_message_type(&mut stream, "subscribed", 5).await?;
+    send_subscribe(&mut sink, &[topic]).await?;
+    wait_for_subscribed(&mut stream).await?;
     Ok((sink, stream))
 }
 
@@ -257,21 +384,10 @@ async fn test_single_client_subscribe() {
     let server = DevServer::start().await;
     let (mut sink, mut stream) = connect_and_auth(&server, "rust-test-1").await.unwrap();
 
-    send_json(
-        &mut sink,
-        &json!({
-            "type": "subscribe",
-            "topics": ["festival/rust-test-1/chat"]
-        }),
-    )
-    .await
-    .unwrap();
+    send_subscribe(&mut sink, &["festival/rust-test-1/chat"]).await.unwrap();
 
-    let response = wait_for_message_type(&mut stream, "subscribed", 5).await.unwrap();
-    assert_eq!(response["type"], "subscribed");
-
-    let topics = response["topics"].as_array().unwrap();
-    assert!(topics.iter().any(|t| t == "festival/rust-test-1/chat"));
+    let response = wait_for_subscribed(&mut stream).await.unwrap();
+    assert!(response.topics.iter().any(|t| t == "festival/rust-test-1/chat"));
 }
 
 // =============================================================================
@@ -283,58 +399,36 @@ async fn test_single_client_chat_and_catchup() {
     let server = DevServer::start().await;
     let (mut sink, mut stream) = connect_and_auth(&server, "rust-test-2").await.unwrap();
 
-    send_json(
-        &mut sink,
-        &json!({
-            "type": "subscribe",
-            "topics": ["festival/rust-test-2/chat"]
-        }),
-    )
-    .await
-    .unwrap();
-    wait_for_message_type(&mut stream, "subscribed", 5).await.unwrap();
+    send_subscribe(&mut sink, &["festival/rust-test-2/chat"]).await.unwrap();
+    wait_for_subscribed(&mut stream).await.unwrap();
 
     let msg_id = uuid::Uuid::new_v4().to_string();
-    let wire = chat_wire_message(&msg_id, "rust-user-1", "Rust User", "Hello from Rust!", "festival/rust-test-2/chat");
-    send_json(
-        &mut sink,
-        &json!({
-            "type": "gossip",
-            "topic": "festival/rust-test-2/chat",
-            "message": wire
-        }),
-    )
-    .await
-    .unwrap();
+    let envelope = chat_envelope(&msg_id, "rust-user-1", "Rust User", "Hello from Rust!", "festival/rust-test-2/chat");
+    send_gossip(&mut sink, "festival/rust-test-2/chat", envelope).await.unwrap();
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    send_json(
-        &mut sink,
-        &json!({
-            "type": "catchup",
-            "topic": "festival/rust-test-2/chat",
-            "sinceSeq": 0
-        }),
-    )
-    .await
-    .unwrap();
+    send_catchup(&mut sink, "festival/rust-test-2/chat", 0).await.unwrap();
 
-    let catchup = wait_for_message_type(&mut stream, "catchup", 5).await.unwrap();
-    assert_eq!(catchup["type"], "catchup");
-    assert_eq!(catchup["topic"], "festival/rust-test-2/chat");
+    let catchup = wait_for_catchup(&mut stream).await.unwrap();
+    assert_eq!(catchup.topic, "festival/rust-test-2/chat");
 
-    let messages = catchup["messages"].as_array().unwrap();
-    assert!(!messages.is_empty());
+    assert!(!catchup.messages.is_empty());
 
-    let our_msg = messages
+    let our_msg = catchup
+        .messages
         .iter()
-        .find(|m| {
-            let payload: Value = serde_json::from_str(m["message"]["payload"].as_str().unwrap_or("")).unwrap_or_default();
-            payload["id"] == msg_id
+        .find(|e| {
+            matches!(
+                e.message.as_ref().and_then(|m| m.payload.as_ref()),
+                Some(proto::gossip_envelope::Payload::Chat(chat)) if chat.id == msg_id
+            )
         })
         .expect("Our message should be in catchup");
-    assert_eq!(our_msg["message"]["kind"], "chat");
+    assert!(matches!(
+        our_msg.message.as_ref().and_then(|m| m.payload.as_ref()),
+        Some(proto::gossip_envelope::Payload::Chat(_))
+    ));
 }
 
 // =============================================================================
@@ -350,23 +444,16 @@ async fn test_two_clients_relay() {
     let (_sink_b, mut stream_b) = connect_and_subscribe(&server, "rust-test-3", topic).await.unwrap();
 
     let msg_id = uuid::Uuid::new_v4().to_string();
-    let wire = chat_wire_message(&msg_id, "client-a", "Client A", "Message from A to B via DO relay", topic);
-    send_json(
-        &mut sink_a,
-        &json!({
-            "type": "gossip",
-            "topic": topic,
-            "message": wire
-        }),
-    )
-    .await
-    .unwrap();
+    let envelope = chat_envelope(&msg_id, "client-a", "Client A", "Message from A to B via DO relay", topic);
+    send_gossip(&mut sink_a, topic, envelope).await.unwrap();
 
-    let received = wait_for_message_type(&mut stream_b, "gossip", 5).await.unwrap();
-    assert_eq!(received["type"], "gossip");
-    assert_eq!(received["topic"], topic);
-    assert_eq!(received["message"]["kind"], "chat");
-    assert!(received["seq"].as_i64().is_some());
+    let received = wait_for_gossip(&mut stream_b, 5).await.unwrap();
+    assert_eq!(received.topic, topic);
+    assert!(matches!(
+        received.message.as_ref().and_then(|m| m.payload.as_ref()),
+        Some(proto::gossip_envelope::Payload::Chat(_))
+    ));
+    assert!(received.seq > 0);
 }
 
 // =============================================================================
@@ -381,32 +468,22 @@ async fn test_p2p_relay_update() {
     let (mut sink_a, _stream_a) = connect_and_subscribe(&server, "rust-test-4", topic).await.unwrap();
     let (_sink_b, mut stream_b) = connect_and_subscribe(&server, "rust-test-4", topic).await.unwrap();
 
-    let relay_data = base64::Engine::encode(
-        &base64::engine::general_purpose::STANDARD,
-        b"crdt-update-from-p2p-client",
-    );
-    let wire = json!({
-        "kind": "group_update",
-        "doc_id": "test-doc",
-        "payload": relay_data,
-        "group_key_id": "test-key-id"
-    });
-    send_json(
-        &mut sink_a,
-        &json!({
-            "type": "gossip",
-            "topic": topic,
-            "message": wire
-        }),
-    )
-    .await
-    .unwrap();
+    let envelope = proto::GossipEnvelope {
+        payload: Some(proto::gossip_envelope::Payload::GroupUpdate(proto::GroupUpdate {
+            doc_id: "test-doc".to_string(),
+            encrypted: b"crdt-update-from-p2p-client".to_vec(),
+            group_key_id: "test-key-id".to_string(),
+        })),
+    };
+    send_gossip(&mut sink_a, topic, envelope).await.unwrap();
 
-    let received = wait_for_message_type(&mut stream_b, "gossip", 5).await.unwrap();
-    assert_eq!(received["type"], "gossip");
-    assert_eq!(received["topic"], topic);
-    assert_eq!(received["message"]["kind"], "group_update");
-    assert!(received["seq"].as_i64().is_some());
+    let received = wait_for_gossip(&mut stream_b, 5).await.unwrap();
+    assert_eq!(received.topic, topic);
+    assert!(matches!(
+        received.message.as_ref().and_then(|m| m.payload.as_ref()),
+        Some(proto::gossip_envelope::Payload::GroupUpdate(_))
+    ));
+    assert!(received.seq > 0);
 }
 
 // =============================================================================
@@ -416,7 +493,6 @@ async fn test_p2p_relay_update() {
 #[tokio::test]
 async fn test_yrs_crdt_sync_via_relay() {
     let server = DevServer::start().await;
-    use base64::Engine;
     use yrs::{Doc, GetString, ReadTxn, Text, Transact};
 
     let topic = "festival/rust-test-5/state";
@@ -429,40 +505,30 @@ async fn test_yrs_crdt_sync_via_relay() {
     }
 
     let update_a = doc_a.transact().encode_state_as_update_v1(&yrs::StateVector::default());
-    let encoded_update = base64::engine::general_purpose::STANDARD.encode(&update_a);
 
     let (mut sink_a, _stream_a) = connect_and_subscribe(&server, "rust-test-5", topic).await.unwrap();
     let (_sink_b, mut stream_b) = connect_and_subscribe(&server, "rust-test-5", topic).await.unwrap();
 
-    let wire = json!({
-        "kind": "group_update",
-        "doc_id": "test-crdt-doc",
-        "payload": encoded_update,
-        "group_key_id": null
-    });
-    send_json(
-        &mut sink_a,
-        &json!({
-            "type": "gossip",
-            "topic": topic,
-            "message": wire
-        }),
-    )
-    .await
-    .unwrap();
+    let envelope = proto::GossipEnvelope {
+        payload: Some(proto::gossip_envelope::Payload::GroupUpdate(proto::GroupUpdate {
+            doc_id: "test-crdt-doc".to_string(),
+            encrypted: update_a.clone(),
+            group_key_id: String::new(),
+        })),
+    };
+    send_gossip(&mut sink_a, topic, envelope).await.unwrap();
 
-    let received = wait_for_message_type(&mut stream_b, "gossip", 5).await.unwrap();
-    let received_payload = received["message"]["payload"].as_str().unwrap();
-
-    let decoded_update = base64::engine::general_purpose::STANDARD
-        .decode(received_payload)
-        .unwrap();
+    let received = wait_for_gossip(&mut stream_b, 5).await.unwrap();
+    let gu = match received.message.as_ref().and_then(|m| m.payload.as_ref()) {
+        Some(proto::gossip_envelope::Payload::GroupUpdate(gu)) => gu,
+        other => panic!("expected GroupUpdate, got {other:?}"),
+    };
 
     let doc_b = Doc::new();
     let text_b = doc_b.get_or_insert_text("content");
     {
         let mut txn = doc_b.transact_mut();
-        txn.apply_update(yrs::Update::decode_v1(&decoded_update).unwrap()).unwrap();
+        txn.apply_update(yrs::Update::decode_v1(&gu.encrypted).unwrap()).unwrap();
     }
 
     let content_b = {
@@ -484,45 +550,31 @@ async fn test_late_joiner_catchup() {
     let (mut sink_a, _stream_a) = connect_and_subscribe(&server, "rust-test-6", topic).await.unwrap();
 
     let msg_id = uuid::Uuid::new_v4().to_string();
-    let wire = chat_wire_message(&msg_id, "early-user", "Early User", "Message sent before late joiner", topic);
-    send_json(
-        &mut sink_a,
-        &json!({
-            "type": "gossip",
-            "topic": topic,
-            "message": wire
-        }),
-    )
-    .await
-    .unwrap();
+    let envelope = chat_envelope(&msg_id, "early-user", "Early User", "Message sent before late joiner", topic);
+    send_gossip(&mut sink_a, topic, envelope).await.unwrap();
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     let (mut sink_b, mut stream_b) = connect_and_subscribe(&server, "rust-test-6", topic).await.unwrap();
 
-    send_json(
-        &mut sink_b,
-        &json!({
-            "type": "catchup",
-            "topic": topic,
-            "sinceSeq": 0
-        }),
-    )
-    .await
-    .unwrap();
+    send_catchup(&mut sink_b, topic, 0).await.unwrap();
 
-    let catchup = wait_for_message_type(&mut stream_b, "catchup", 5).await.unwrap();
-    assert_eq!(catchup["type"], "catchup");
+    let catchup = wait_for_catchup(&mut stream_b).await.unwrap();
 
-    let messages = catchup["messages"].as_array().unwrap();
-    let our_msg = messages
+    let our_msg = catchup
+        .messages
         .iter()
-        .find(|m| {
-            let payload: Value = serde_json::from_str(m["message"]["payload"].as_str().unwrap_or("")).unwrap_or_default();
-            payload["id"] == msg_id
+        .find(|e| {
+            matches!(
+                e.message.as_ref().and_then(|m| m.payload.as_ref()),
+                Some(proto::gossip_envelope::Payload::Chat(chat)) if chat.id == msg_id
+            )
         })
         .expect("Missed message should be in catchup");
-    assert_eq!(our_msg["message"]["kind"], "chat");
+    assert!(matches!(
+        our_msg.message.as_ref().and_then(|m| m.payload.as_ref()),
+        Some(proto::gossip_envelope::Payload::Chat(_))
+    ));
 }
 
 // =============================================================================
@@ -539,29 +591,25 @@ async fn test_d1_d2_s1_relay_chat() {
 
     // D1 → D2
     let msg_id_1 = uuid::Uuid::new_v4().to_string();
-    let wire = chat_wire_message(&msg_id_1, "d1", "D1", "Hello from D1", topic);
-    send_json(
-        &mut sink_d1,
-        &json!({ "type": "gossip", "topic": topic, "message": wire }),
-    )
-    .await
-    .unwrap();
+    let envelope = chat_envelope(&msg_id_1, "d1", "D1", "Hello from D1", topic);
+    send_gossip(&mut sink_d1, topic, envelope).await.unwrap();
 
-    let recv_d2 = wait_for_message_type(&mut stream_d2, "gossip", 5).await.unwrap();
-    assert_eq!(recv_d2["message"]["kind"], "chat");
+    let recv_d2 = wait_for_gossip(&mut stream_d2, 5).await.unwrap();
+    assert!(matches!(
+        recv_d2.message.as_ref().and_then(|m| m.payload.as_ref()),
+        Some(proto::gossip_envelope::Payload::Chat(_))
+    ));
 
     // D2 → D1
     let msg_id_2 = uuid::Uuid::new_v4().to_string();
-    let wire2 = chat_wire_message(&msg_id_2, "d2", "D2", "Hello from D2", topic);
-    send_json(
-        &mut sink_d2,
-        &json!({ "type": "gossip", "topic": topic, "message": wire2 }),
-    )
-    .await
-    .unwrap();
+    let envelope2 = chat_envelope(&msg_id_2, "d2", "D2", "Hello from D2", topic);
+    send_gossip(&mut sink_d2, topic, envelope2).await.unwrap();
 
-    let recv_d1 = wait_for_message_type(&mut stream_d1, "gossip", 5).await.unwrap();
-    assert_eq!(recv_d1["message"]["kind"], "chat");
+    let recv_d1 = wait_for_gossip(&mut stream_d1, 5).await.unwrap();
+    assert!(matches!(
+        recv_d1.message.as_ref().and_then(|m| m.payload.as_ref()),
+        Some(proto::gossip_envelope::Payload::Chat(_))
+    ));
 }
 
 // =============================================================================
@@ -571,7 +619,6 @@ async fn test_d1_d2_s1_relay_chat() {
 #[tokio::test]
 async fn test_d1_d2_s1_relay_crdt_update() {
     let server = DevServer::start().await;
-    use base64::Engine as _;
     use offbeat_core::crypto;
     use yrs::{Doc, Map, ReadTxn, StateVector, Transact};
 
@@ -587,29 +634,26 @@ async fn test_d1_d2_s1_relay_crdt_update() {
     }
     let update_bytes = doc_d1.transact().encode_state_as_update_v1(&StateVector::default());
     let encrypted = crypto::encrypt(&group_key, &update_bytes).unwrap();
-    let encoded = base64::engine::general_purpose::STANDARD.encode(&encrypted);
 
     let (mut sink_d1, _stream_d1) = connect_and_subscribe(&server, "relay-test-2", topic).await.unwrap();
     let (_sink_d2, mut stream_d2) = connect_and_subscribe(&server, "relay-test-2", topic).await.unwrap();
 
-    let wire = json!({
-        "kind": "group_update",
-        "doc_id": "group-doc",
-        "payload": encoded,
-        "group_key_id": crypto::group_id_from_key(&group_key)
-    });
-    send_json(
-        &mut sink_d1,
-        &json!({ "type": "gossip", "topic": topic, "message": wire }),
-    )
-    .await
-    .unwrap();
+    let envelope = proto::GossipEnvelope {
+        payload: Some(proto::gossip_envelope::Payload::GroupUpdate(proto::GroupUpdate {
+            doc_id: "group-doc".to_string(),
+            encrypted: encrypted.clone(),
+            group_key_id: crypto::group_id_from_key(&group_key),
+        })),
+    };
+    send_gossip(&mut sink_d1, topic, envelope).await.unwrap();
 
-    let recv = wait_for_message_type(&mut stream_d2, "gossip", 5).await.unwrap();
-    let received_data = recv["message"]["payload"].as_str().unwrap();
+    let recv = wait_for_gossip(&mut stream_d2, 5).await.unwrap();
+    let gu = match recv.message.as_ref().and_then(|m| m.payload.as_ref()) {
+        Some(proto::gossip_envelope::Payload::GroupUpdate(gu)) => gu,
+        other => panic!("expected GroupUpdate, got {other:?}"),
+    };
 
-    let received_encrypted = base64::engine::general_purpose::STANDARD.decode(received_data).unwrap();
-    let decrypted = crypto::decrypt(&group_key, &received_encrypted).unwrap();
+    let decrypted = crypto::decrypt(&group_key, &gu.encrypted).unwrap();
 
     let doc_d2 = Doc::new();
     let map_d2 = doc_d2.get_or_insert_map("root");
@@ -640,13 +684,8 @@ async fn test_d1_disconnect_d2_sends_d1_catchup() {
     let (mut sink_d1, stream_d1) = connect_and_subscribe(&server, "relay-test-3", topic).await.unwrap();
 
     let initial_msg_id = uuid::Uuid::new_v4().to_string();
-    let wire = chat_wire_message(&initial_msg_id, "d1", "D1", "D1 initial message", topic);
-    send_json(
-        &mut sink_d1,
-        &json!({ "type": "gossip", "topic": topic, "message": wire }),
-    )
-    .await
-    .unwrap();
+    let envelope = chat_envelope(&initial_msg_id, "d1", "D1", "D1 initial message", topic);
+    send_gossip(&mut sink_d1, topic, envelope).await.unwrap();
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
@@ -659,37 +698,20 @@ async fn test_d1_disconnect_d2_sends_d1_catchup() {
     for i in 1..=3 {
         let msg_id = uuid::Uuid::new_v4().to_string();
         d2_msg_ids.push(msg_id.clone());
-        let wire = chat_wire_message(&msg_id, "d2", "D2", &format!("D2 message {i}"), topic);
-        send_json(
-            &mut sink_d2,
-            &json!({ "type": "gossip", "topic": topic, "message": wire }),
-        )
-        .await
-        .unwrap();
+        let envelope = chat_envelope(&msg_id, "d2", "D2", &format!("D2 message {i}"), topic);
+        send_gossip(&mut sink_d2, topic, envelope).await.unwrap();
     }
 
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     let (mut sink_d1_new, mut stream_d1_new) = connect_and_subscribe(&server, "relay-test-3", topic).await.unwrap();
 
-    send_json(
-        &mut sink_d1_new,
-        &json!({
-            "type": "catchup",
-            "topic": topic,
-            "sinceSeq": 0
-        }),
-    )
-    .await
-    .unwrap();
+    send_catchup(&mut sink_d1_new, topic, 0).await.unwrap();
 
-    let catchup = wait_for_message_type(&mut stream_d1_new, "catchup", 5).await.unwrap();
-    assert_eq!(catchup["type"], "catchup");
+    let catchup = wait_for_catchup(&mut stream_d1_new).await.unwrap();
 
-    let messages = catchup["messages"].as_array().unwrap();
-
-    // All messages should be present (parsed from payload)
-    assert!(messages.len() >= 4, "should have at least 4 messages in catchup");
+    // All messages should be present
+    assert!(catchup.messages.len() >= 4, "should have at least 4 messages in catchup");
 
     drop(sink_d1_new);
     drop(sink_d2);
@@ -702,7 +724,6 @@ async fn test_d1_disconnect_d2_sends_d1_catchup() {
 #[tokio::test]
 async fn test_group_encrypted_state_sync_via_relay() {
     let server = DevServer::start().await;
-    use base64::Engine as _;
     use offbeat_core::{OffbeatNode, crypto};
 
     let festival_id = "relay-group-test-1";

@@ -149,8 +149,20 @@ impl OffbeatNode {
             notifier.clone(),
         ));
 
-        // Build endpoint, optionally with BLE transport if hardware available.
-        let secret_key = iroh::SecretKey::generate();
+        // Load a persisted iroh secret key so the EndpointId is stable across
+        // restarts.  If none exists yet, generate a fresh one and persist it.
+        let secret_key = match db.load_iroh_secret_key()? {
+            Some(key) => {
+                tracing::info!("loaded persisted iroh secret key");
+                key
+            }
+            None => {
+                let key = iroh::SecretKey::generate();
+                db.save_iroh_secret_key(&key)?;
+                tracing::info!("generated and persisted new iroh secret key");
+                key
+            }
+        };
         let ble_transport = transport::ble::try_build_ble(secret_key.public()).await;
 
         let mut builder = iroh::Endpoint::builder(presets::N0)

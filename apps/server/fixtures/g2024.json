@@ -1,0 +1,11 @@
+{
+	"id": "g2024",
+	"name": "Glastonbury 2024",
+	"location": "Worthy Farm, Pilton, Somerset",
+	"city": "Pilton",
+	"country": "GB",
+	"genres": ["Rock", "Pop", "Electronic", "Hip-Hop", "Folk", "Dance"],
+	"clashfinderId": "g2024",
+	"lat": 51.1594,
+	"lon": -2.5856
+}

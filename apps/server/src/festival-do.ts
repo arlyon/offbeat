@@ -110,6 +110,82 @@ export class FestivalDO extends DurableObject {
 		this.#sendServerMsg(ws, { msg: { case: "error", value: { error, code } } });
 	}
 
+	/**
+	 * Verify attestation-based auth from request headers.
+	 * Expects:
+	 *   X-Attestation-Message: the attestation message string
+	 *   X-Attestation-Signature: hex-encoded attestation signature
+	 *   X-Attestation-Issuer: hex-encoded issuer public key
+	 *   X-Session-PublicKey: hex-encoded Ed25519 public key
+	 *   X-Session-Signature: hex-encoded session signature
+	 *   X-Session-Timestamp: timestamp used in session signature
+	 *
+	 * Returns the user's public key hex on success, or an error Response.
+	 */
+	async #requireAuth(
+		request: Request,
+	): Promise<{ publicKey: string } | Response> {
+		const attMessage = request.headers.get("X-Attestation-Message");
+		const attSignature = request.headers.get("X-Attestation-Signature");
+		const attIssuer = request.headers.get("X-Attestation-Issuer");
+		const sessionPubKey = request.headers.get("X-Session-PublicKey");
+		const sessionSig = request.headers.get("X-Session-Signature");
+		const sessionTimestamp = request.headers.get("X-Session-Timestamp");
+
+		if (
+			!attMessage ||
+			!attSignature ||
+			!attIssuer ||
+			!sessionPubKey ||
+			!sessionSig ||
+			!sessionTimestamp
+		) {
+			return new Response("Auth headers required", { status: 401 });
+		}
+
+		// Verify attestation signature against issuer
+		const attMsgBytes = new TextEncoder().encode(attMessage);
+		const attValid = await verify(
+			hexToBytes(attIssuer),
+			attMsgBytes,
+			hexToBytes(attSignature),
+		);
+		if (!attValid) {
+			return new Response("Invalid attestation signature", { status: 401 });
+		}
+
+		// Check attestation expiry (with 7-day grace period)
+		const parts = attMessage.split(":");
+		const expiresAt = Number.parseInt(parts[4], 10);
+		const graceExpiry = expiresAt + 7 * 24 * 60 * 60;
+		if (Date.now() / 1000 > graceExpiry) {
+			return new Response("Attestation expired", { status: 401 });
+		}
+
+		// Verify the attestation binds to this public key
+		const attPubKey = parts[2];
+		if (attPubKey !== sessionPubKey) {
+			return new Response("Attestation does not match session key", {
+				status: 401,
+			});
+		}
+
+		// Verify session signature (proves ownership of the Ed25519 key)
+		const sessionMsg = new TextEncoder().encode(
+			`session:${sessionTimestamp}`,
+		);
+		const sessionValid = await verify(
+			hexToBytes(sessionPubKey),
+			sessionMsg,
+			hexToBytes(sessionSig),
+		);
+		if (!sessionValid) {
+			return new Response("Invalid session signature", { status: 401 });
+		}
+
+		return { publicKey: sessionPubKey };
+	}
+
 	async fetch(request: Request): Promise<Response> {
 		const url = new URL(request.url);
 
@@ -370,6 +446,34 @@ export class FestivalDO extends DurableObject {
 				},
 				publicKey: bytesToHex(this.#publicKey),
 			});
+		}
+
+		// POST /checkin — register a peer's endpoint ID in the CRDT
+		if (request.method === "POST" && url.pathname === "/checkin") {
+			const authResult = await this.#requireAuth(request);
+			if (authResult instanceof Response) return authResult;
+			const userId = authResult.publicKey;
+
+			const body = (await request.json()) as {
+				endpoint_id?: string;
+				relay_url?: string | null;
+			};
+
+			if (!body.endpoint_id || !/^[0-9a-f]{64}$/.test(body.endpoint_id)) {
+				return new Response("endpoint_id must be exactly 64 hex characters", { status: 400 });
+			}
+
+			if (!this.#festivalId) {
+				return new Response("Festival not configured", { status: 500 });
+			}
+
+			const peerCount = await this.#writePeerCheckin(
+				body.endpoint_id,
+				body.relay_url ?? null,
+				userId,
+			);
+
+			return Response.json({ ttl: 7200, peer_count: peerCount });
 		}
 
 		const upgradeHeader = request.headers.get("Upgrade");
@@ -941,17 +1045,285 @@ export class FestivalDO extends DurableObject {
 	}
 
 	// -----------------------------------------------------------------------
-	// Weather alarm
+	// Peer checkin helpers
 	// -----------------------------------------------------------------------
 
-	/** DO alarm handler — fetches weather and writes to Yrs doc. */
-	async alarm() {
-		// Guard: bail if not configured
-		if (!this.#lat || !this.#lon || !this.#festivalId) {
-			console.log("[alarm] skipping — no lat/lon/festivalId configured");
+	/**
+	 * Write a peer checkin to the Yrs doc and broadcast the update.
+	 * Also prunes stale entries (last_seen > 2 hours ago).
+	 * Returns the count of active peers after the operation.
+	 */
+	async #writePeerCheckin(
+		endpointId: string,
+		relayUrl: string | null,
+		userId: string,
+	): Promise<number> {
+		if (!this.#secretKey || !this.#publicKey || !this.#festivalId) {
+			throw new Error("Not configured for peer checkin");
+		}
+
+		const docId = `festival/${this.#festivalId}/state`;
+		const topic = docId;
+		const nowSec = Math.floor(Date.now() / 1000);
+
+		// Load existing Yrs doc
+		const doc = new Y.Doc();
+		const stored = this.sql.exec("SELECT data FROM yrs_docs WHERE doc_id = ?", docId).toArray() as {
+			data: ArrayBuffer;
+		}[];
+
+		if (stored.length > 0) {
+			Y.applyUpdate(doc, new Uint8Array(stored[0].data));
+		}
+
+		// Replay gossip_log entries
+		const logEntries = this.sql
+			.exec("SELECT message FROM gossip_log WHERE topic = ? ORDER BY seq", topic)
+			.toArray() as { message: ArrayBuffer }[];
+
+		for (const entry of logEntries) {
+			const envelope = fromBinary(GossipEnvelopeSchema, new Uint8Array(entry.message));
+			if (envelope.payload.case === "festivalUpdate" && envelope.payload.value.signedUpdate) {
+				Y.applyUpdate(doc, envelope.payload.value.signedUpdate.update);
+			}
+		}
+
+		// Get previous state vector for incremental diff
+		const prevSV = Y.encodeStateVector(doc);
+
+		// Get or create the "peers" YMap under root
+		const root = doc.getMap("root");
+		let peers = root.get("peers") as Y.Map<string> | undefined;
+		if (!peers || !(peers instanceof Y.Map)) {
+			peers = new Y.Map<string>();
+			root.set("peers", peers);
+		}
+
+		// Set this peer's entry
+		peers.set(
+			endpointId,
+			JSON.stringify({ relay_url: relayUrl, last_seen: nowSec, user_id: userId }),
+		);
+
+		// Prune stale entries (older than 2 hours)
+		const cutoff = nowSec - 7200;
+		const keysToDelete: string[] = [];
+		for (const [key, value] of peers.entries()) {
+			try {
+				const entry = JSON.parse(value) as { last_seen: number };
+				if (entry.last_seen < cutoff) {
+					keysToDelete.push(key);
+				}
+			} catch {
+				keysToDelete.push(key);
+			}
+		}
+		for (const key of keysToDelete) {
+			peers.delete(key);
+		}
+
+		const peerCount = peers.size;
+
+		// Encode incremental update
+		const update = Y.encodeStateAsUpdate(doc, prevSV);
+
+		// Sign with DO's Ed25519 key
+		const signature = await sign(this.#secretKey, update);
+
+		// Build the GossipEnvelope as protobuf
+		const envelope = create(GossipEnvelopeSchema, {
+			payload: {
+				case: "festivalUpdate",
+				value: {
+					docId,
+					signedUpdate: {
+						update,
+						author: "festival-do",
+						signature,
+					},
+				},
+			},
+		});
+
+		// Store envelope as BLOB in gossip_log
+		const envelopeBytes = toBinary(GossipEnvelopeSchema, envelope);
+		const result = this.sql
+			.exec(
+				"INSERT INTO gossip_log (topic, message) VALUES (?, ?) RETURNING seq",
+				topic,
+				envelopeBytes,
+			)
+			.one() as { seq: number };
+
+		// Persist consolidated doc
+		const fullState = Y.encodeStateAsUpdate(doc);
+		this.sql.exec(
+			"INSERT OR REPLACE INTO yrs_docs (doc_id, data, updated_at) VALUES (?, ?, datetime('now'))",
+			docId,
+			fullState,
+		);
+
+		// Broadcast to subscribed WS clients
+		const broadcastMsg = create(RelayServerMessageSchema, {
+			msg: {
+				case: "gossip",
+				value: {
+					topic,
+					seq: BigInt(result.seq),
+					message: envelope,
+				},
+			},
+		});
+		const broadcastBytes = toBinary(RelayServerMessageSchema, broadcastMsg);
+		for (const [ws, sess] of this.#sessions) {
+			if (sess.topics.has(topic)) {
+				ws.send(broadcastBytes);
+			}
+		}
+
+		console.log(
+			`[writePeerCheckin] peer ${endpointId.slice(0, 8)}… checked in for ${docId}, ${peerCount} active peers`,
+		);
+
+		return peerCount;
+	}
+
+	/**
+	 * Prune stale peer entries from the Yrs doc.
+	 * Called by the alarm handler every 15 minutes.
+	 */
+	async #pruneStalePeers(): Promise<void> {
+		if (!this.#secretKey || !this.#publicKey || !this.#festivalId) {
 			return;
 		}
 
+		const docId = `festival/${this.#festivalId}/state`;
+		const topic = docId;
+		const nowSec = Math.floor(Date.now() / 1000);
+		const cutoff = nowSec - 7200;
+
+		// Load existing Yrs doc
+		const doc = new Y.Doc();
+		const stored = this.sql.exec("SELECT data FROM yrs_docs WHERE doc_id = ?", docId).toArray() as {
+			data: ArrayBuffer;
+		}[];
+
+		if (stored.length > 0) {
+			Y.applyUpdate(doc, new Uint8Array(stored[0].data));
+		}
+
+		// Replay gossip_log entries
+		const logEntries = this.sql
+			.exec("SELECT message FROM gossip_log WHERE topic = ? ORDER BY seq", topic)
+			.toArray() as { message: ArrayBuffer }[];
+
+		for (const entry of logEntries) {
+			const envelope = fromBinary(GossipEnvelopeSchema, new Uint8Array(entry.message));
+			if (envelope.payload.case === "festivalUpdate" && envelope.payload.value.signedUpdate) {
+				Y.applyUpdate(doc, envelope.payload.value.signedUpdate.update);
+			}
+		}
+
+		// Check if there's a peers map at all
+		const root = doc.getMap("root");
+		const peers = root.get("peers") as Y.Map<string> | undefined;
+		if (!peers || !(peers instanceof Y.Map) || peers.size === 0) {
+			return;
+		}
+
+		// Find stale entries
+		const keysToDelete: string[] = [];
+		for (const [key, value] of peers.entries()) {
+			try {
+				const entry = JSON.parse(value) as { last_seen: number };
+				if (entry.last_seen < cutoff) {
+					keysToDelete.push(key);
+				}
+			} catch {
+				keysToDelete.push(key);
+			}
+		}
+
+		if (keysToDelete.length === 0) {
+			return;
+		}
+
+		// Get previous state vector for incremental diff
+		const prevSV = Y.encodeStateVector(doc);
+
+		// Delete stale entries
+		for (const key of keysToDelete) {
+			peers.delete(key);
+		}
+
+		// Encode incremental update
+		const update = Y.encodeStateAsUpdate(doc, prevSV);
+
+		// Sign with DO's Ed25519 key
+		const signature = await sign(this.#secretKey, update);
+
+		// Build the GossipEnvelope as protobuf
+		const envelope = create(GossipEnvelopeSchema, {
+			payload: {
+				case: "festivalUpdate",
+				value: {
+					docId,
+					signedUpdate: {
+						update,
+						author: "festival-do",
+						signature,
+					},
+				},
+			},
+		});
+
+		// Store envelope as BLOB in gossip_log
+		const envelopeBytes = toBinary(GossipEnvelopeSchema, envelope);
+		const result = this.sql
+			.exec(
+				"INSERT INTO gossip_log (topic, message) VALUES (?, ?) RETURNING seq",
+				topic,
+				envelopeBytes,
+			)
+			.one() as { seq: number };
+
+		// Persist consolidated doc
+		const fullState = Y.encodeStateAsUpdate(doc);
+		this.sql.exec(
+			"INSERT OR REPLACE INTO yrs_docs (doc_id, data, updated_at) VALUES (?, ?, datetime('now'))",
+			docId,
+			fullState,
+		);
+
+		// Broadcast to subscribed WS clients
+		const broadcastMsg = create(RelayServerMessageSchema, {
+			msg: {
+				case: "gossip",
+				value: {
+					topic,
+					seq: BigInt(result.seq),
+					message: envelope,
+				},
+			},
+		});
+		const broadcastBytes = toBinary(RelayServerMessageSchema, broadcastMsg);
+		for (const [ws, sess] of this.#sessions) {
+			if (sess.topics.has(topic)) {
+				ws.send(broadcastBytes);
+			}
+		}
+
+		console.log(
+			`[pruneStalePeers] pruned ${keysToDelete.length} stale peers for ${docId}, ${peers.size} remaining`,
+		);
+	}
+
+	// -----------------------------------------------------------------------
+	// Weather alarm + peer pruning
+	// -----------------------------------------------------------------------
+
+	/** DO alarm handler — fetches weather, prunes stale peers, and reschedules. */
+	async alarm() {
 		const now = new Date();
 
 		// Guard: stop if past closesAt (festival over)
@@ -971,18 +1343,32 @@ export class FestivalDO extends DurableObject {
 			}
 		}
 
-		// Fetch and write weather
+		// Always prune stale peers (every 15 min)
 		try {
-			const weather = await this.#fetchWeather();
-			await this.#writeWeatherToDoc(weather);
-			console.log(`[alarm] weather updated for ${this.#festivalId}`);
+			await this.#pruneStalePeers();
 		} catch (err) {
-			console.error("[alarm] weather fetch/write failed:", err);
+			console.error("[alarm] peer pruning failed:", err);
 		}
 
-		// Reschedule in 6 hours if still within window
-		const SIX_HOURS = 6 * 60 * 60 * 1000;
-		const next = new Date(now.getTime() + SIX_HOURS);
+		// Fetch weather every 6 hours (check last weather update time)
+		if (this.#lat && this.#lon && this.#festivalId) {
+			const lastWeather = (await this.ctx.storage.get("last_weather_alarm")) as number | undefined;
+			const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
+			if (!lastWeather || now.getTime() - lastWeather >= SIX_HOURS_MS) {
+				try {
+					const weather = await this.#fetchWeather();
+					await this.#writeWeatherToDoc(weather);
+					await this.ctx.storage.put("last_weather_alarm", now.getTime());
+					console.log(`[alarm] weather updated for ${this.#festivalId}`);
+				} catch (err) {
+					console.error("[alarm] weather fetch/write failed:", err);
+				}
+			}
+		}
+
+		// Reschedule in 15 minutes if still within window
+		const FIFTEEN_MIN = 15 * 60 * 1000;
+		const next = new Date(now.getTime() + FIFTEEN_MIN);
 		if (!this.#closesAt || next.toISOString() <= this.#closesAt) {
 			await this.ctx.storage.setAlarm(next.getTime());
 			console.log(`[alarm] next alarm at ${next.toISOString()}`);

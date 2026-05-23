@@ -248,6 +248,34 @@ app.delete("/festivals/:id/reset", async (c) => {
 	return stub.fetch(new Request(url.toString(), { method: "DELETE" }));
 });
 
+// POST /festivals/:id/checkin — register a peer's endpoint in the CRDT
+app.post("/festivals/:id/checkin", async (c) => {
+	const id = c.req.param("id");
+
+	// Auto-configure the DO's event window on first checkin
+	await ensureFestivalConfig(c.env, id);
+
+	const doId = c.env.FESTIVAL_DO.idFromName(id);
+	const stub = c.env.FESTIVAL_DO.get(doId);
+	const url = new URL(c.req.url);
+	url.pathname = "/checkin";
+	return stub.fetch(
+		new Request(url.toString(), {
+			method: "POST",
+			body: await c.req.text(),
+			headers: {
+				"Content-Type": "application/json",
+				"X-Attestation-Message": c.req.header("X-Attestation-Message") ?? "",
+				"X-Attestation-Signature": c.req.header("X-Attestation-Signature") ?? "",
+				"X-Attestation-Issuer": c.req.header("X-Attestation-Issuer") ?? "",
+				"X-Session-PublicKey": c.req.header("X-Session-PublicKey") ?? "",
+				"X-Session-Signature": c.req.header("X-Session-Signature") ?? "",
+				"X-Session-Timestamp": c.req.header("X-Session-Timestamp") ?? "",
+			},
+		}),
+	);
+});
+
 // POST /festivals/:id/sign-update — sign + broadcast a Yrs update via the DO
 app.post("/festivals/:id/sign-update", async (c) => {
 	const id = c.req.param("id");

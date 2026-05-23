@@ -373,6 +373,33 @@ impl Database {
         Ok(())
     }
 
+    // --- iroh secret key ---
+
+    /// Credential key used to persist the iroh node secret key.
+    const IROH_SECRET_KEY: &str = "iroh_secret_key";
+
+    /// Load a previously persisted iroh `SecretKey`, if any.
+    pub fn load_iroh_secret_key(&self) -> Result<Option<iroh::SecretKey>> {
+        let blob = self.get_credential(Self::IROH_SECRET_KEY)?;
+        match blob {
+            Some(bytes) => {
+                let arr: [u8; 32] = bytes
+                    .try_into()
+                    .map_err(|v: Vec<u8>| anyhow::anyhow!(
+                        "iroh secret key has wrong length: expected 32 bytes, got {}",
+                        v.len()
+                    ))?;
+                Ok(Some(iroh::SecretKey::from_bytes(&arr)))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Persist an iroh `SecretKey` so it survives restarts.
+    pub fn save_iroh_secret_key(&self, key: &iroh::SecretKey) -> Result<()> {
+        self.set_credential(Self::IROH_SECRET_KEY, &key.to_bytes())
+    }
+
     // --- group key lookup ---
 
     /// Load the AES key for a group, returning None if not found.
@@ -800,5 +827,56 @@ mod tests {
         let timeout: i64 =
             conn.pragma_query_value(None, "busy_timeout", |row| row.get(0)).unwrap();
         assert!(timeout >= 5000, "busy_timeout should be at least 5000ms, got {timeout}");
+    }
+
+    #[test]
+    fn test_iroh_secret_key_roundtrip_in_memory() {
+        let db = test_db();
+
+        // Initially no key stored.
+        assert!(db.load_iroh_secret_key().unwrap().is_none());
+
+        // Save a key and reload it.
+        let key = iroh::SecretKey::generate();
+        db.save_iroh_secret_key(&key).unwrap();
+
+        let loaded = db.load_iroh_secret_key().unwrap().expect("key should exist");
+        assert_eq!(
+            key.public(),
+            loaded.public(),
+            "loaded key must produce the same public key"
+        );
+    }
+
+    #[test]
+    fn test_secret_key_persistence() {
+        // Verify that closing and re-opening the same on-disk database
+        // produces the same iroh EndpointId (i.e. the secret key survives).
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("persist.db");
+
+        // First open: generate & store a key.
+        let public_key_1 = {
+            let db = Database::new(&path).unwrap();
+            assert!(db.load_iroh_secret_key().unwrap().is_none());
+            let key = iroh::SecretKey::generate();
+            db.save_iroh_secret_key(&key).unwrap();
+            key.public()
+        }; // db dropped, connection closed
+
+        // Second open: key should be loaded from the database.
+        let public_key_2 = {
+            let db = Database::new(&path).unwrap();
+            let loaded = db
+                .load_iroh_secret_key()
+                .unwrap()
+                .expect("key should survive across reopens");
+            loaded.public()
+        };
+
+        assert_eq!(
+            public_key_1, public_key_2,
+            "EndpointId must be identical after database reopen"
+        );
     }
 }
