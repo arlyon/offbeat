@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use dashmap::DashMap;
 use parking_lot::RwLock;
 use tokio::sync::watch;
 
@@ -24,6 +25,10 @@ pub struct ResourceSyncStatus {
     pub last_synced: Option<String>,
     /// Error message if last sync failed.
     pub error: Option<String>,
+    /// Number of messages received on this resource.
+    pub messages_received: u32,
+    /// Number of messages sent on this resource.
+    pub messages_sent: u32,
 }
 
 /// Overall sync status.
@@ -58,6 +63,9 @@ pub struct ResourceNotifier {
 
     /// Global sync status receiver (for cloning).
     sync_status_rx: watch::Receiver<SyncStatus>,
+
+    /// Per-resource message counters: resource_id → (received, sent).
+    message_counters: DashMap<String, (u32, u32)>,
 }
 
 impl ResourceNotifier {
@@ -69,6 +77,7 @@ impl ResourceNotifier {
             chat_senders: RwLock::new(HashMap::new()),
             sync_status_tx,
             sync_status_rx,
+            message_counters: DashMap::new(),
         }
     }
 
@@ -166,6 +175,34 @@ impl ResourceNotifier {
         let mut status = self.sync_status_rx.borrow().clone();
         status.syncing = false;
         let _ = self.sync_status_tx.send(status);
+    }
+
+    // -----------------------------------------------------------------------
+    // Message counters
+    // -----------------------------------------------------------------------
+
+    /// Record a received message for a resource.
+    pub fn record_received(&self, resource_id: &str) {
+        self.message_counters
+            .entry(resource_id.to_string())
+            .and_modify(|(rx, _)| *rx += 1)
+            .or_insert((1, 0));
+    }
+
+    /// Record a sent message for a resource.
+    pub fn record_sent(&self, resource_id: &str) {
+        self.message_counters
+            .entry(resource_id.to_string())
+            .and_modify(|(_, tx)| *tx += 1)
+            .or_insert((0, 1));
+    }
+
+    /// Get (received, sent) counters for a resource.
+    pub fn get_counters(&self, resource_id: &str) -> (u32, u32) {
+        self.message_counters
+            .get(resource_id)
+            .map(|r| *r.value())
+            .unwrap_or((0, 0))
     }
 
     // -----------------------------------------------------------------------

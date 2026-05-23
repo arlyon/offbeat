@@ -724,17 +724,26 @@ class ResourceSyncStatusDto {
   final bool syncing;
   final String? lastSynced;
   final String? error;
+  final int messagesReceived;
+  final int messagesSent;
 
   const ResourceSyncStatusDto({
     required this.id,
     required this.syncing,
     this.lastSynced,
     this.error,
+    required this.messagesReceived,
+    required this.messagesSent,
   });
 
   @override
   int get hashCode =>
-      id.hashCode ^ syncing.hashCode ^ lastSynced.hashCode ^ error.hashCode;
+      id.hashCode ^
+      syncing.hashCode ^
+      lastSynced.hashCode ^
+      error.hashCode ^
+      messagesReceived.hashCode ^
+      messagesSent.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -744,7 +753,9 @@ class ResourceSyncStatusDto {
           id == other.id &&
           syncing == other.syncing &&
           lastSynced == other.lastSynced &&
-          error == other.error;
+          error == other.error &&
+          messagesReceived == other.messagesReceived &&
+          messagesSent == other.messagesSent;
 }
 
 /// Overall sync status for the node.

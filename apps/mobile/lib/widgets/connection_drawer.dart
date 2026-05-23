@@ -10,6 +10,7 @@ import '../src/rust/api.dart';
 void showConnectionDrawer(
   BuildContext context, {
   required TransportStatusDto? status,
+  SyncStatusDto? syncStatus,
   required VoidCallback onStartBle,
 }) {
   showModalBottomSheet(
@@ -23,6 +24,7 @@ void showConnectionDrawer(
       expand: false,
       builder: (context, scrollController) => _ConnectionContent(
         status: status,
+        syncStatus: syncStatus,
         scrollController: scrollController,
         onStartBle: onStartBle,
       ),
@@ -32,11 +34,13 @@ void showConnectionDrawer(
 
 class _ConnectionContent extends StatefulWidget {
   final TransportStatusDto? status;
+  final SyncStatusDto? syncStatus;
   final ScrollController scrollController;
   final VoidCallback onStartBle;
 
   const _ConnectionContent({
     required this.status,
+    this.syncStatus,
     required this.scrollController,
     required this.onStartBle,
   });
@@ -115,6 +119,24 @@ class _ConnectionContentState extends State<_ConnectionContent> {
               ),
               const SizedBox(height: 12),
               _buildBleCard(ble, bleActive),
+              if (widget.syncStatus != null &&
+                  widget.syncStatus!.resources.isNotEmpty) ...[
+                const SizedBox(height: 20),
+                const Text(
+                  'SUBSCRIPTIONS',
+                  style: TextStyle(
+                    fontFamily: 'JetBrainsMono',
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: trMeta * 11,
+                    color: colorFg,
+                    height: 1,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                ...widget.syncStatus!.resources.map(
+                    (r) => _SubscriptionRow(resource: r)),
+              ],
             ],
           ),
         ),
@@ -416,6 +438,106 @@ class _ChannelCard extends StatelessWidget {
                   ),
                 )),
           ],
+        ],
+      ),
+    );
+  }
+}
+
+class _SubscriptionRow extends StatelessWidget {
+  final ResourceSyncStatusDto resource;
+
+  const _SubscriptionRow({required this.resource});
+
+  Color get _dotColor {
+    if (resource.error != null) return colorErr;
+    if (resource.syncing) return colorWarn;
+    if (resource.lastSynced != null) return colorOk;
+    return colorFg4;
+  }
+
+  /// Shorten resource IDs for display: "festival/glastonbury-2026/state" → "fest/glastonbury-2026/state"
+  String get _displayId {
+    var id = resource.id;
+    if (id.startsWith('festival/')) {
+      id = 'fest/${id.substring('festival/'.length)}';
+    } else if (id.startsWith('group/')) {
+      // Truncate long group hashes
+      final parts = id.split('/');
+      if (parts.length >= 2 && parts[1].length > 8) {
+        parts[1] = '${parts[1].substring(0, 8)}..';
+        id = parts.join('/');
+      }
+    }
+    return id;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        children: [
+          Icon(Icons.circle, size: 5, color: _dotColor),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _displayId,
+                  style: const TextStyle(
+                    fontFamily: 'JetBrainsMono',
+                    fontSize: 10,
+                    color: colorFg2,
+                    height: 1,
+                  ),
+                ),
+                if (resource.error != null) ...[
+                  const SizedBox(height: 3),
+                  Text(
+                    resource.error!,
+                    style: const TextStyle(
+                      fontFamily: 'JetBrainsMono',
+                      fontSize: 9,
+                      color: colorErr,
+                      height: 1.3,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ],
+            ),
+          ),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (resource.syncing)
+                const Padding(
+                  padding: EdgeInsets.only(right: 8),
+                  child: Text(
+                    'SYNCING',
+                    style: TextStyle(
+                      fontFamily: 'JetBrainsMono',
+                      fontSize: 9,
+                      letterSpacing: trMeta * 9,
+                      color: colorWarn,
+                      height: 1,
+                    ),
+                  ),
+                ),
+              Text(
+                '${resource.messagesReceived}\u2193 ${resource.messagesSent}\u2191',
+                style: const TextStyle(
+                  fontFamily: 'JetBrainsMono',
+                  fontSize: 9,
+                  color: colorFg3,
+                  height: 1,
+                ),
+              ),
+            ],
+          ),
         ],
       ),
     );

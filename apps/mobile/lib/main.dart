@@ -16,6 +16,7 @@ import 'screens/festival_detail/festival_detail_screen.dart';
 import 'screens/festival_detail/admin_panel.dart';
 import 'screens/you/registration_screen.dart';
 import 'screens/you/you_screen.dart';
+import 'screens/social/social_screen.dart';
 import 'services/auth_service.dart';
 import 'services/admin_service.dart';
 import 'services/festival_admin_service.dart';
@@ -104,6 +105,7 @@ class _OffbeatShellState extends State<_OffbeatShell>
 
   // Sync status
   bool _isSyncing = false;
+  SyncStatusDto? _syncStatus;
 
   // Transport status
   StreamSubscription<TransportStatusDto>? _transportSub;
@@ -203,7 +205,10 @@ class _OffbeatShellState extends State<_OffbeatShell>
     // Listen to sync status changes
     syncStream.listen((status) {
       if (mounted) {
-        setState(() => _isSyncing = status.syncing);
+        setState(() {
+          _isSyncing = status.syncing;
+          _syncStatus = status;
+        });
       }
     });
 
@@ -647,6 +652,7 @@ class _OffbeatShellState extends State<_OffbeatShell>
               onConnectionTap: () => showConnectionDrawer(
                 context,
                 status: _transportStatus,
+                syncStatus: _syncStatus,
                 onStartBle: _restartNode,
               ),
               rightWidgets: [
@@ -806,8 +812,17 @@ class _OffbeatShellState extends State<_OffbeatShell>
         return _buildScheduleTab();
       case AppTab.now:
         return _NowTabContent(festivalName: _selectedFestival!.name);
-      case AppTab.you:
-        return _buildYouContent();
+      case AppTab.social:
+        if (_authState == 'unregistered') {
+          return RegistrationScreen(onRegister: _handleRegister);
+        }
+        return SocialScreen(
+          node: _node!,
+          festivalId: _selectedFestival!.id,
+          festivalName: _selectedFestival!.name,
+          userId: _userId,
+          displayName: _displayName,
+        );
     }
   }
 

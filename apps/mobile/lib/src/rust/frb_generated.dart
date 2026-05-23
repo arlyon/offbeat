@@ -2425,13 +2425,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ResourceSyncStatusDto dco_decode_resource_sync_status_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 4)
-      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    if (arr.length != 6)
+      throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
     return ResourceSyncStatusDto(
       id: dco_decode_String(arr[0]),
       syncing: dco_decode_bool(arr[1]),
       lastSynced: dco_decode_opt_String(arr[2]),
       error: dco_decode_opt_String(arr[3]),
+      messagesReceived: dco_decode_u_32(arr[4]),
+      messagesSent: dco_decode_u_32(arr[5]),
     );
   }
 
@@ -3141,11 +3143,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_syncing = sse_decode_bool(deserializer);
     var var_lastSynced = sse_decode_opt_String(deserializer);
     var var_error = sse_decode_opt_String(deserializer);
+    var var_messagesReceived = sse_decode_u_32(deserializer);
+    var var_messagesSent = sse_decode_u_32(deserializer);
     return ResourceSyncStatusDto(
       id: var_id,
       syncing: var_syncing,
       lastSynced: var_lastSynced,
       error: var_error,
+      messagesReceived: var_messagesReceived,
+      messagesSent: var_messagesSent,
     );
   }
 
@@ -3853,6 +3859,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_bool(self.syncing, serializer);
     sse_encode_opt_String(self.lastSynced, serializer);
     sse_encode_opt_String(self.error, serializer);
+    sse_encode_u_32(self.messagesReceived, serializer);
+    sse_encode_u_32(self.messagesSent, serializer);
   }
 
   @protected

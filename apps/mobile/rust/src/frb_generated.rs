@@ -3029,11 +3029,15 @@ impl SseDecode for crate::api::ResourceSyncStatusDto {
         let mut var_syncing = <bool>::sse_decode(deserializer);
         let mut var_lastSynced = <Option<String>>::sse_decode(deserializer);
         let mut var_error = <Option<String>>::sse_decode(deserializer);
+        let mut var_messagesReceived = <u32>::sse_decode(deserializer);
+        let mut var_messagesSent = <u32>::sse_decode(deserializer);
         return crate::api::ResourceSyncStatusDto {
             id: var_id,
             syncing: var_syncing,
             last_synced: var_lastSynced,
             error: var_error,
+            messages_received: var_messagesReceived,
+            messages_sent: var_messagesSent,
         };
     }
 }
@@ -3552,6 +3556,8 @@ impl flutter_rust_bridge::IntoDart for crate::api::ResourceSyncStatusDto {
             self.syncing.into_into_dart().into_dart(),
             self.last_synced.into_into_dart().into_dart(),
             self.error.into_into_dart().into_dart(),
+            self.messages_received.into_into_dart().into_dart(),
+            self.messages_sent.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -4103,6 +4109,8 @@ impl SseEncode for crate::api::ResourceSyncStatusDto {
         <bool>::sse_encode(self.syncing, serializer);
         <Option<String>>::sse_encode(self.last_synced, serializer);
         <Option<String>>::sse_encode(self.error, serializer);
+        <u32>::sse_encode(self.messages_received, serializer);
+        <u32>::sse_encode(self.messages_sent, serializer);
     }
 }
 

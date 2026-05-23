@@ -176,6 +176,8 @@ pub struct ResourceSyncStatusDto {
     pub syncing: bool,
     pub last_synced: Option<String>,
     pub error: Option<String>,
+    pub messages_received: u32,
+    pub messages_sent: u32,
 }
 
 /// Overall sync status for the node.
@@ -406,6 +408,8 @@ impl AppNode {
             }
         }
 
+        self.inner.notifier.record_sent(&msg.topic);
+
         Ok(ChatMessageDto {
             id: msg.id,
             user_id: msg.user_id,
@@ -471,6 +475,9 @@ impl AppNode {
                 let _ = ws.send_gossip(&topic_str, &envelope).await;
             }
         }
+
+        let resource_id = format!("group/{group_id}/chat");
+        self.inner.notifier.record_sent(&resource_id);
 
         Ok(ChatMessageDto {
             id: msg.id,
@@ -847,6 +854,8 @@ impl AppNode {
                 let topic_str = format!("group/{group_id}/state");
                 let _ = ws.send_gossip(&topic_str, &envelope).await;
             }
+            let resource_id = format!("group/{group_id}/state");
+            self.inner.notifier.record_sent(&resource_id);
         }
         Ok(())
     }
@@ -886,6 +895,8 @@ impl AppNode {
                 let topic_str = format!("group/{group_id}/state");
                 let _ = ws.send_gossip(&topic_str, &envelope).await;
             }
+            let resource_id = format!("group/{group_id}/state");
+            self.inner.notifier.record_sent(&resource_id);
         }
         Ok(())
     }
@@ -927,6 +938,8 @@ impl AppNode {
                 let topic_str = format!("group/{group_id}/state");
                 let _ = ws.send_gossip(&topic_str, &envelope).await;
             }
+            let resource_id = format!("group/{group_id}/state");
+            self.inner.notifier.record_sent(&resource_id);
         }
         Ok(())
     }
@@ -1523,6 +1536,8 @@ fn convert_sync_status(status: &offbeat_core::notifier::SyncStatus) -> SyncStatu
                 syncing: r.syncing,
                 last_synced: r.last_synced.clone(),
                 error: r.error.clone(),
+                messages_received: r.messages_received,
+                messages_sent: r.messages_sent,
             })
             .collect(),
         pending_ops: status.pending_ops,

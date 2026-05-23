@@ -9,7 +9,7 @@ import '../theme/tokens.dart';
 import '../widgets/live_dot.dart';
 import '../widgets/dotted_border.dart';
 
-enum AppTab { schedule, now, you }
+enum AppTab { schedule, now, social }
 
 class OffbeatTabBar extends StatelessWidget {
   final AppTab activeTab;
@@ -44,9 +44,9 @@ class OffbeatTabBar extends StatelessWidget {
               showLiveDot: true,
             ),
             _TabItem(
-              tab: AppTab.you,
-              label: 'YOU',
-              icon: Icons.star_border,
+              tab: AppTab.social,
+              label: 'SOCIAL',
+              icon: Icons.people_outline,
               activeTab: activeTab,
               onTap: onTabChanged,
             ),

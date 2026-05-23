@@ -150,12 +150,44 @@ impl SyncOrchestrator {
         self.festival_public_keys.read().ok()?.get(festival_id).copied()
     }
 
+    /// Build the resources list from the registry for sync status notifications.
+    fn build_resource_statuses(&self) -> Vec<crate::notifier::ResourceSyncStatus> {
+        let Ok(reg) = self.registry.read() else {
+            return vec![];
+        };
+        reg.by_priority()
+            .iter()
+            .map(|r| {
+                let id = r.id();
+                let (received, sent) = self.notifier.get_counters(&id);
+                crate::notifier::ResourceSyncStatus {
+                    id,
+                    syncing: false,
+                    last_synced: None,
+                    error: None,
+                    messages_received: received,
+                    messages_sent: sent,
+                }
+            })
+            .collect()
+    }
+
     /// Run subscribe→catch-up→live for all resources with a peer.
     pub async fn sync_with_peer<P: PeerConnection>(&self, peer: &P) -> anyhow::Result<SyncReport> {
-        self.notifier.sync_started();
+        self.notify_sync_status(true);
         let result = self.sync_with_peer_inner(peer).await;
-        self.notifier.sync_completed();
+        self.notify_sync_status(false);
         result
+    }
+
+    /// Emit a sync status update with the current resource list.
+    fn notify_sync_status(&self, syncing: bool) {
+        let resources = self.build_resource_statuses();
+        self.notifier.notify_sync_status(crate::notifier::SyncStatus {
+            syncing,
+            resources,
+            pending_ops: 0,
+        });
     }
 
     async fn sync_with_peer_inner<P: PeerConnection>(&self, peer: &P) -> anyhow::Result<SyncReport> {
@@ -268,17 +300,20 @@ impl SyncOrchestrator {
         let pk = festival_pk.unwrap_or([0u8; 32]);
         dispatch_message(&self.doc_manager, &self.db, msg.clone(), &pk)?;
 
-        // Notify watchers after successful dispatch
+        // Notify watchers and record counters after successful dispatch
         match msg {
             GossipMessage::FestivalUpdate { doc_id, .. } => {
+                self.notifier.record_received(doc_id);
                 self.notifier.notify_doc(doc_id);
             }
             GossipMessage::GroupUpdate { doc_id, .. }
             | GossipMessage::SyncResponse { doc_id, .. }
             | GossipMessage::SyncUpdate { doc_id, .. } => {
+                self.notifier.record_received(doc_id);
                 self.notifier.notify_doc(doc_id);
             }
             GossipMessage::Chat(chat_msg) => {
+                self.notifier.record_received(&chat_msg.topic);
                 self.notifier.notify_chat(&chat_msg.topic);
             }
             GossipMessage::EncryptedChat { .. } => {
@@ -286,6 +321,9 @@ impl SyncOrchestrator {
             }
             GossipMessage::SyncRequest { .. } => {}
         }
+
+        // Re-emit sync status so the UI picks up updated counters
+        self.notify_sync_status(false);
 
         Ok(())
     }

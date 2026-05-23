@@ -60,8 +60,12 @@ class BlewPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
     external fun init_android(ctx: Context)
 
     override fun onAttachedToEngine(@NonNull binding: FlutterPlugin.FlutterPluginBinding) {
+        val ctx = binding.applicationContext
+        android.util.Log.i("BlewPlugin", "onAttachedToEngine, initializing BLE managers")
+        BleCentralManager.init(ctx)
+        BlePeripheralManager.init(ctx)
         android.util.Log.i("BlewPlugin", "onAttachedToEngine, calling init_android")
-        init_android(binding.applicationContext)
+        init_android(ctx)
         android.util.Log.i("BlewPlugin", "init_android returned")
     }
 

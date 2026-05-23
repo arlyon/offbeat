@@ -54,8 +54,8 @@ class _AppShellState extends State<AppShell> {
         return const _PlaceholderBody(label: 'SCHEDULE');
       case AppTab.now:
         return const _PlaceholderBody(label: 'NOW');
-      case AppTab.you:
-        return const _PlaceholderBody(label: 'YOU');
+      case AppTab.social:
+        return const _PlaceholderBody(label: 'SOCIAL');
     }
   }
 }
