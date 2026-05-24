@@ -4,6 +4,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/dotted_border.dart';
 
@@ -270,13 +271,20 @@ class _InviteSheetState extends State<InviteSheet> {
     );
   }
 
-  /// Generates a grid-pattern placeholder that looks like a QR code.
+  /// Renders a real QR code from the invite payload URI.
   Widget _buildQrPlaceholder() {
-    return SizedBox(
-      width: 200,
-      height: 200,
-      child: CustomPaint(
-        painter: _QrPatternPainter(seed: widget.groupCode),
+    return QrImageView(
+      data: widget.groupCode,
+      version: QrVersions.auto,
+      size: 200,
+      backgroundColor: const Color(0xFFF2F0EA),
+      dataModuleStyle: const QrDataModuleStyle(
+        color: Color(0xFF0B0B0C),
+        dataModuleShape: QrDataModuleShape.square,
+      ),
+      eyeStyle: const QrEyeStyle(
+        color: Color(0xFF0B0B0C),
+        eyeShape: QrEyeShape.square,
       ),
     );
   }
@@ -316,100 +324,3 @@ class _TearPainter extends CustomPainter {
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
-/// Simple deterministic QR-like pattern painter
-class _QrPatternPainter extends CustomPainter {
-  final String seed;
-  _QrPatternPainter({required this.seed});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final cellSize = size.width / 25;
-    final fillPaint = Paint()..color = const Color(0xFF0B0B0C);
-    final bgPaint = Paint()..color = const Color(0xFFF2F0EA);
-
-    // Fill background
-    canvas.drawRect(Offset.zero & size, bgPaint);
-
-    // Simple LCG seeded by string
-    int s = 0;
-    for (int i = 0; i < seed.length; i++) {
-      s = (s * 31 + seed.codeUnitAt(i)) & 0xFFFFFFFF;
-    }
-    int rng() {
-      s = (s * 1664525 + 1013904223) & 0xFFFFFFFF;
-      return s;
-    }
-
-    // Draw finder patterns (3 corners)
-    void drawFinder(int r, int c) {
-      for (int i = 0; i < 7; i++) {
-        for (int j = 0; j < 7; j++) {
-          final border = i == 0 || i == 6 || j == 0 || j == 6;
-          final center = i >= 2 && i <= 4 && j >= 2 && j <= 4;
-          if (border || center) {
-            canvas.drawRect(
-              Rect.fromLTWH(
-                (c + j) * cellSize, (r + i) * cellSize,
-                cellSize, cellSize,
-              ),
-              fillPaint,
-            );
-          }
-        }
-      }
-    }
-
-    drawFinder(0, 0);
-    drawFinder(0, 18);
-    drawFinder(18, 0);
-
-    // Data fill
-    for (int i = 0; i < 25; i++) {
-      for (int j = 0; j < 25; j++) {
-        // Skip finder areas
-        if ((i < 8 && j < 8) || (i < 8 && j >= 17) || (i >= 17 && j < 8)) {
-          continue;
-        }
-        if (rng() % 2 == 0) {
-          canvas.drawRect(
-            Rect.fromLTWH(j * cellSize, i * cellSize, cellSize, cellSize),
-            fillPaint,
-          );
-        }
-      }
-    }
-
-    // Brand mark in center
-    final centerX = size.width / 2;
-    final centerY = size.height / 2;
-    final markSize = cellSize * 5;
-    canvas.drawRect(
-      Rect.fromCenter(center: Offset(centerX, centerY), width: markSize, height: markSize),
-      bgPaint,
-    );
-    final accentPaint = Paint()..color = colorAccent;
-    canvas.drawRect(
-      Rect.fromCenter(center: Offset(centerX, centerY), width: markSize * 0.8, height: markSize * 0.8),
-      accentPaint,
-    );
-    // Small bars inside
-    final barPaint = Paint()..color = const Color(0xFF0B0B0C);
-    final barW = markSize * 0.1;
-    final barGap = markSize * 0.15;
-    canvas.drawRect(
-      Rect.fromLTWH(centerX - barGap - barW, centerY, barW, markSize * 0.25),
-      barPaint,
-    );
-    canvas.drawRect(
-      Rect.fromLTWH(centerX - barW / 2, centerY - markSize * 0.15, barW, markSize * 0.4),
-      barPaint,
-    );
-    canvas.drawRect(
-      Rect.fromLTWH(centerX + barGap, centerY - markSize * 0.05, barW, markSize * 0.3),
-      barPaint,
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant _QrPatternPainter old) => old.seed != seed;
-}

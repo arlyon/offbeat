@@ -1,3 +1,4 @@
+use base64::Engine as _;
 use crate::frb_generated::StreamSink;
 use offbeat_core::OffbeatNode;
 use once_cell::sync::Lazy;
@@ -77,11 +78,13 @@ pub struct ChatMessageDto {
 
 pub struct GroupCreateResultDto {
     pub group_id: String,
+    pub festival_id: String,
     pub invite_payload: String,
 }
 
 pub struct GroupJoinResultDto {
     pub group_id: String,
+    pub festival_id: String,
 }
 
 pub struct GroupMemberDto {
@@ -178,6 +181,8 @@ pub struct ResourceSyncStatusDto {
     pub error: Option<String>,
     pub messages_received: u32,
     pub messages_sent: u32,
+    /// Number of peers subscribed to this topic on the relay.
+    pub peer_count: u32,
 }
 
 /// Overall sync status for the node.
@@ -222,6 +227,21 @@ pub struct TransportPeerDto {
     pub device_id: String,
     pub phase: String,
     pub connect_path: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Peer / Connection Manager DTOs
+// ---------------------------------------------------------------------------
+
+/// A simplified view of a tracked peer for the Flutter UI.
+pub struct PeerStatusInfo {
+    pub endpoint_id: String,
+    /// Discovery source: "crdt", "ble", or "gossip".
+    pub source: String,
+    /// Gossip connection status: "unknown", "joining", "active", or "stale".
+    pub status: String,
+    pub ble_visible: bool,
+    pub relay_url: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -337,6 +357,22 @@ impl AppNode {
             .into_iter()
             .map(|(id, name, _key)| GroupInfo { id, name })
             .collect())
+    }
+
+    /// Reconstruct the invite payload URI for an existing group.
+    ///
+    /// Returns `offbeat://group/{festival_id}/{group_id}/{base64url(key)}`
+    /// or `None` if the group is not found.
+    pub fn get_invite_payload(
+        &self,
+        group_id: String,
+        festival_id: String,
+    ) -> anyhow::Result<Option<String>> {
+        let key = self.inner.db.load_group_key(&group_id)?;
+        Ok(key.map(|k| {
+            let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(k);
+            format!("offbeat://group/{festival_id}/{group_id}/{b64}")
+        }))
     }
 
     /// Delete a group by ID.
@@ -478,6 +514,8 @@ impl AppNode {
 
         let resource_id = format!("group/{group_id}/chat");
         self.inner.notifier.record_sent(&resource_id);
+        // Notify local chat watchers so the UI updates immediately
+        self.inner.notifier.notify_chat(&resource_id);
 
         Ok(ChatMessageDto {
             id: msg.id,
@@ -562,6 +600,7 @@ impl AppNode {
             sync_orchestrator,
             doc_manager,
             notifier,
+            self.inner.connection_manager.clone(),
         )
         .await?;
 
@@ -607,6 +646,43 @@ impl AppNode {
             self.inner.sync_orchestrator.sync_with_peer(ws.as_ref()).await?;
         }
 
+        Ok(())
+    }
+
+    /// Subscribe to all group topics for a festival and sync state.
+    ///
+    /// Loads groups from SQLite, registers their resources (state + chat),
+    /// and triggers a sync via the WS relay if connected.
+    pub async fn subscribe_groups(&mut self, festival_id: String) -> anyhow::Result<()> {
+        let groups = self.inner.db.load_groups(&festival_id)?;
+        if groups.is_empty() {
+            return Ok(());
+        }
+        let pairs: Vec<(String, [u8; 32])> = groups
+            .iter()
+            .filter_map(|g| {
+                let key: [u8; 32] = g.2.clone().try_into().ok()?;
+                Some((g.0.clone(), key))
+            })
+            .collect();
+        {
+            let mut reg = self
+                .inner
+                .resource_registry
+                .write()
+                .map_err(|_| anyhow::anyhow!("resource registry lock poisoned"))?;
+            reg.register_groups(&pairs);
+        }
+        // Populate the key cache so incoming messages can be decoded
+        for (group_id, key) in &pairs {
+            self.inner.sync_orchestrator.cache_group_key(group_id, *key);
+        }
+        if let Some(ws) = { self.inner.ws_relay.read().clone() } {
+            self.inner
+                .sync_orchestrator
+                .sync_with_peer(ws.as_ref())
+                .await?;
+        }
         Ok(())
     }
 
@@ -756,7 +832,8 @@ impl AppNode {
     // Group lifecycle
     // -----------------------------------------------------------------------
 
-    /// Create a new group and return its ID + shareable invite payload.
+    /// Create a new group, register resources, subscribe, and broadcast
+    /// the initial state. Returns the group ID + shareable invite payload.
     pub async fn create_group(
         &self,
         festival_id: String,
@@ -773,13 +850,74 @@ impl AppNode {
             .create_group(&festival_id, &name, &user_id, &display_name)
             .await?;
 
+        // Register resources for the new group
+        let group_key = self
+            .inner
+            .db
+            .load_group_key(&result.group_id)?
+            .ok_or_else(|| anyhow::anyhow!("group key not found after create"))?;
+        {
+            let mut reg = self
+                .inner
+                .resource_registry
+                .write()
+                .map_err(|_| anyhow::anyhow!("resource registry lock poisoned"))?;
+            reg.register_groups(&[(result.group_id.clone(), group_key)]);
+        }
+        self.inner
+            .sync_orchestrator
+            .cache_group_key(&result.group_id, group_key);
+
+        // Subscribe + sync via WS relay if connected
+        if let Some(ws) = { self.inner.ws_relay.read().clone() } {
+            self.inner
+                .sync_orchestrator
+                .sync_with_peer(ws.as_ref())
+                .await?;
+        }
+
+        // Notify local watchers so the UI picks up the new group state
+        let doc_id = format!("group/{}", result.group_id);
+        self.inner.notifier.notify_doc(&doc_id);
+
+        // Broadcast initial state as GroupUpdate
+        {
+            let doc_id = format!("group/{}", result.group_id);
+            // Ensure doc is created so encode_diff works
+            self.inner.doc_manager.get_or_create(&doc_id);
+            // Encode full state as diff from empty SV
+            let diff = self.inner.doc_manager.encode_diff(&doc_id, &[])?;
+            let encrypted = offbeat_core::crypto::encrypt(&group_key, &diff)?;
+
+            use offbeat_core::gossip_manager::{encode_gossip_message, GossipMessage};
+            use offbeat_core::proto::GossipEnvelope;
+            let gossip_msg = GossipMessage::GroupUpdate {
+                doc_id: doc_id.clone(),
+                encrypted: encrypted.clone(),
+                group_key,
+            };
+            let envelope = GossipEnvelope::from_gossip_message(&gossip_msg);
+            let bytes = encode_gossip_message(&gossip_msg);
+
+            if let Some(gm) = &self.inner.gossip_manager {
+                let topic = offbeat_core::topics::group_topic(&group_key, "state");
+                let _ = gm.lock().await.broadcast(topic, bytes).await;
+            }
+            if let Some(ws) = { self.inner.ws_relay.read().clone() } {
+                let topic_str = format!("group/{}/state", result.group_id);
+                let _ = ws.send_gossip(&topic_str, &envelope).await;
+            }
+        }
+
         Ok(GroupCreateResultDto {
             group_id: result.group_id,
+            festival_id: result.festival_id,
             invite_payload: result.invite_payload,
         })
     }
 
-    /// Join an existing group from an invite payload.
+    /// Join an existing group, register resources, subscribe, and trigger
+    /// SV exchange + chat catchup.
     pub async fn join_group(
         &self,
         invite_payload: String,
@@ -795,8 +933,35 @@ impl AppNode {
             .join_group(&invite_payload, &user_id, &display_name)
             .await?;
 
+        // Register resources for the joined group
+        {
+            let mut reg = self
+                .inner
+                .resource_registry
+                .write()
+                .map_err(|_| anyhow::anyhow!("resource registry lock poisoned"))?;
+            reg.register_groups(&[(result.group_id.clone(), result.group_key)]);
+        }
+        self.inner
+            .sync_orchestrator
+            .cache_group_key(&result.group_id, result.group_key);
+
+        // Subscribe + sync (SV exchange + chat catchup) via WS relay
+        if let Some(ws) = { self.inner.ws_relay.read().clone() } {
+            self.inner
+                .sync_orchestrator
+                .sync_with_peer(ws.as_ref())
+                .await?;
+        }
+
+        // Notify local watchers so the UI updates immediately
+        self.inner
+            .notifier
+            .notify_doc(&format!("group/{}", result.group_id));
+
         Ok(GroupJoinResultDto {
             group_id: result.group_id,
+            festival_id: result.festival_id,
         })
     }
 
@@ -810,6 +975,8 @@ impl AppNode {
             .group_manager
             .leave_group(&group_id, &user_id)
             .await?;
+        // Notify local watchers so the UI updates immediately
+        self.inner.notifier.notify_doc(&format!("group/{group_id}"));
         Ok(())
     }
 
@@ -834,6 +1001,9 @@ impl AppNode {
                 custom_location.as_deref(),
             )
             .await?;
+
+        // Notify local watchers so the UI updates immediately
+        self.inner.notifier.notify_doc(&format!("group/{group_id}"));
 
         if let Some(group_key) = self.inner.db.load_group_key(&group_id)? {
             use offbeat_core::gossip_manager::{GossipMessage, encode_gossip_message};
@@ -875,6 +1045,9 @@ impl AppNode {
             .group_manager
             .update_stars(&group_id, &user_id, set_ids)
             .await?;
+
+        // Notify local watchers so the UI updates immediately
+        self.inner.notifier.notify_doc(&format!("group/{group_id}"));
 
         if let Some(group_key) = self.inner.db.load_group_key(&group_id)? {
             use offbeat_core::gossip_manager::{GossipMessage, encode_gossip_message};
@@ -918,6 +1091,9 @@ impl AppNode {
             .group_manager
             .add_pin(&group_id, &pin_id, &label, &location, &user_id)
             .await?;
+
+        // Notify local watchers so the UI updates immediately
+        self.inner.notifier.notify_doc(&format!("group/{group_id}"));
 
         if let Some(group_key) = self.inner.db.load_group_key(&group_id)? {
             use offbeat_core::gossip_manager::{GossipMessage, encode_gossip_message};
@@ -1256,6 +1432,73 @@ impl AppNode {
         snapshot_transport(&self.inner)
     }
 
+    /// Return the number of active direct peers (those with gossip status "active").
+    pub fn get_peer_count(&self) -> anyhow::Result<u32> {
+        match &self.inner.connection_manager {
+            Some(cm) => Ok(cm.active_peer_count()),
+            None => Ok(0),
+        }
+    }
+
+    /// Return a snapshot of all known peers for the UI.
+    pub fn get_peer_list(&self) -> anyhow::Result<Vec<PeerStatusInfo>> {
+        match &self.inner.connection_manager {
+            Some(cm) => Ok(cm
+                .peer_snapshot()
+                .into_iter()
+                .map(peer_entry_to_dto)
+                .collect()),
+            None => Ok(vec![]),
+        }
+    }
+
+    /// Watch the peer list — polls every second and emits whenever the
+    /// snapshot changes (peer count or any entry status).
+    #[flutter_rust_bridge::frb(stream_dart_await)]
+    pub fn watch_peer_list(
+        &self,
+        sink: StreamSink<Vec<PeerStatusInfo>>,
+    ) -> anyhow::Result<()> {
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        let cm = self.inner.connection_manager.clone();
+        let sink = Arc::new(Mutex::new(sink));
+
+        RUNTIME.spawn(async move {
+            let mut prev_snapshot: Vec<String> = vec![];
+
+            loop {
+                let current: Vec<PeerStatusInfo> = match &cm {
+                    Some(cm) => cm
+                        .peer_snapshot()
+                        .into_iter()
+                        .map(peer_entry_to_dto)
+                        .collect(),
+                    None => vec![],
+                };
+
+                // Build a simple fingerprint to detect changes
+                let fingerprint: Vec<String> = current
+                    .iter()
+                    .map(|p| format!("{}:{}:{}", p.endpoint_id, p.source, p.status))
+                    .collect();
+
+                if fingerprint != prev_snapshot {
+                    prev_snapshot = fingerprint;
+                    let sink = sink.lock().await;
+                    if sink.add(current).is_err() {
+                        break;
+                    }
+                }
+
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
+        });
+
+        Ok(())
+    }
+
     /// Watch transport status — emits relay + BLE state with bandwidth
     /// rates computed by diffing cumulative counters every second.
     #[flutter_rust_bridge::frb(stream_dart_await)]
@@ -1476,6 +1719,30 @@ fn read_weather_from_doc(
     })
 }
 
+/// Convert a `PeerEntry` from the connection manager into a DTO for Flutter.
+fn peer_entry_to_dto(entry: offbeat_core::connection_manager::PeerEntry) -> PeerStatusInfo {
+    use offbeat_core::connection_manager::{GossipStatus, PeerSource};
+
+    let source = match entry.source {
+        PeerSource::Crdt => "crdt",
+        PeerSource::Ble => "ble",
+        PeerSource::Gossip => "gossip",
+    };
+    let status = match entry.gossip_status {
+        GossipStatus::Unknown => "unknown",
+        GossipStatus::Joining => "joining",
+        GossipStatus::Active => "active",
+        GossipStatus::Stale => "stale",
+    };
+    PeerStatusInfo {
+        endpoint_id: entry.endpoint_id,
+        source: source.to_string(),
+        status: status.to_string(),
+        ble_visible: entry.ble_prefix_match,
+        relay_url: entry.relay_url,
+    }
+}
+
 /// One-shot transport snapshot (no rate computation — rates are zero).
 fn snapshot_transport(node: &OffbeatNode) -> TransportStatusDto {
     let relay = match &*node.ws_relay.read() {
@@ -1538,6 +1805,7 @@ fn convert_sync_status(status: &offbeat_core::notifier::SyncStatus) -> SyncStatu
                 error: r.error.clone(),
                 messages_received: r.messages_received,
                 messages_sent: r.messages_sent,
+                peer_count: r.peer_count,
             })
             .collect(),
         pending_ops: status.pending_ops,

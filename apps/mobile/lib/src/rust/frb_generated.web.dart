@@ -61,6 +61,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   dco_decode_StreamSink_list_chat_message_dto_Sse(dynamic raw);
 
   @protected
+  RustStreamSink<List<PeerStatusInfo>>
+  dco_decode_StreamSink_list_peer_status_info_Sse(dynamic raw);
+
+  @protected
   RustStreamSink<LineupDto?>
   dco_decode_StreamSink_opt_box_autoadd_lineup_dto_Sse(dynamic raw);
 
@@ -174,6 +178,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<LineupStageDto> dco_decode_list_lineup_stage_dto(dynamic raw);
 
   @protected
+  List<PeerStatusInfo> dco_decode_list_peer_status_info(dynamic raw);
+
+  @protected
   Float64List dco_decode_list_prim_f_64_strict(dynamic raw);
 
   @protected
@@ -206,6 +213,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   WeatherForecastDto? dco_decode_opt_box_autoadd_weather_forecast_dto(
     dynamic raw,
   );
+
+  @protected
+  PeerStatusInfo dco_decode_peer_status_info(dynamic raw);
 
   @protected
   RelayStatusDto dco_decode_relay_status_dto(dynamic raw);
@@ -275,6 +285,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   RustStreamSink<List<ChatMessageDto>>
   sse_decode_StreamSink_list_chat_message_dto_Sse(SseDeserializer deserializer);
+
+  @protected
+  RustStreamSink<List<PeerStatusInfo>>
+  sse_decode_StreamSink_list_peer_status_info_Sse(SseDeserializer deserializer);
 
   @protected
   RustStreamSink<LineupDto?>
@@ -414,6 +428,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  List<PeerStatusInfo> sse_decode_list_peer_status_info(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   Float64List sse_decode_list_prim_f_64_strict(SseDeserializer deserializer);
 
   @protected
@@ -452,6 +471,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   WeatherForecastDto? sse_decode_opt_box_autoadd_weather_forecast_dto(
     SseDeserializer deserializer,
   );
+
+  @protected
+  PeerStatusInfo sse_decode_peer_status_info(SseDeserializer deserializer);
 
   @protected
   RelayStatusDto sse_decode_relay_status_dto(SseDeserializer deserializer);
@@ -535,6 +557,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_StreamSink_list_chat_message_dto_Sse(
     RustStreamSink<List<ChatMessageDto>> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_StreamSink_list_peer_status_info_Sse(
+    RustStreamSink<List<PeerStatusInfo>> self,
     SseSerializer serializer,
   );
 
@@ -713,6 +741,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_peer_status_info(
+    List<PeerStatusInfo> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_prim_f_64_strict(
     Float64List self,
     SseSerializer serializer,
@@ -763,6 +797,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_opt_box_autoadd_weather_forecast_dto(
     WeatherForecastDto? self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_peer_status_info(
+    PeerStatusInfo self,
     SseSerializer serializer,
   );
 

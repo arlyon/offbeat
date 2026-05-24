@@ -47,3 +47,19 @@ message SyncUpdate {
   bytes encrypted_diff = 2;
   string group_key_id = 3;
 }
+
+// P2P group discovery handshake
+message GroupHandshake {
+  bytes session_nonce = 1;          // 16 random bytes
+  repeated bytes tokens = 2;       // blake3(key || "hs" || nonce) per group
+}
+
+message GroupHandshakeResponse {
+  repeated GroupSyncOffer offers = 1;
+}
+
+message GroupSyncOffer {
+  string group_id = 1;
+  bytes encrypted_sv = 2;          // encrypt(group_key, yrs_state_vector)
+  string group_key_id = 3;         // blake3(group_key) first 16 bytes hex
+}

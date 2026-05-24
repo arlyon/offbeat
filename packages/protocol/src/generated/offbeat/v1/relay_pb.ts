@@ -13,7 +13,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file offbeat/v1/relay.proto.
  */
 export const file_offbeat_v1_relay: GenFile = /*@__PURE__*/
-  fileDesc("ChZvZmZiZWF0L3YxL3JlbGF5LnByb3RvEgpvZmZiZWF0LnYxIvYCChJSZWxheUNsaWVudE1lc3NhZ2USJwoEYXV0aBgBIAEoCzIXLm9mZmJlYXQudjEuQXV0aFJlcXVlc3RIABIxCglzdWJzY3JpYmUYAiABKAsyHC5vZmZiZWF0LnYxLlN1YnNjcmliZVJlcXVlc3RIABI1Cgt1bnN1YnNjcmliZRgDIAEoCzIeLm9mZmJlYXQudjEuVW5zdWJzY3JpYmVSZXF1ZXN0SAASKQoGZ29zc2lwGAQgASgLMhcub2ZmYmVhdC52MS5Hb3NzaXBSZWxheUgAEi0KB2NhdGNodXAYBSABKAsyGi5vZmZiZWF0LnYxLkNhdGNodXBSZXF1ZXN0SAASNAoLc3ZfZXhjaGFuZ2UYBiABKAsyHS5vZmZiZWF0LnYxLlN2RXhjaGFuZ2VSZXF1ZXN0SAASNgoMY2hhdF9jYXRjaHVwGAcgASgLMh4ub2ZmYmVhdC52MS5DaGF0Q2F0Y2h1cFJlcXVlc3RIAEIFCgNtc2cidQoLQXV0aFJlcXVlc3QSEgoKcHVibGljX2tleRgBIAEoDBIsCgthdHRlc3RhdGlvbhgCIAEoCzIXLm9mZmJlYXQudjEuQXR0ZXN0YXRpb24SEQoJc2lnbmF0dXJlGAMgASgMEhEKCXRpbWVzdGFtcBgEIAEoCSJBCgtBdHRlc3RhdGlvbhIPCgdtZXNzYWdlGAEgASgJEhEKCXNpZ25hdHVyZRgCIAEoDBIOCgZpc3N1ZXIYAyABKAwiIgoQU3Vic2NyaWJlUmVxdWVzdBIOCgZ0b3BpY3MYASADKAkiJAoSVW5zdWJzY3JpYmVSZXF1ZXN0Eg4KBnRvcGljcxgBIAMoCSJJCgtHb3NzaXBSZWxheRINCgV0b3BpYxgBIAEoCRIrCgdtZXNzYWdlGAIgASgLMhoub2ZmYmVhdC52MS5Hb3NzaXBFbnZlbG9wZSIyCg5DYXRjaHVwUmVxdWVzdBINCgV0b3BpYxgBIAEoCRIRCglzaW5jZV9zZXEYAiABKAQiLwoRU3ZFeGNoYW5nZVJlcXVlc3QSDgoGZG9jX2lkGAEgASgJEgoKAnN2GAIgASgMIpEBChJDaGF0Q2F0Y2h1cFJlcXVlc3QSDQoFdG9waWMYASABKAkSMgoCc3YYAiADKAsyJi5vZmZiZWF0LnYxLkNoYXRDYXRjaHVwUmVxdWVzdC5TdkVudHJ5Eg0KBWxpbWl0GAMgASgNGikKB1N2RW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgEOgI4ASLaAgoSUmVsYXlTZXJ2ZXJNZXNzYWdlEiUKB2F1dGhfb2sYASABKAsyEi5vZmZiZWF0LnYxLkF1dGhPa0gAEiwKCnN1YnNjcmliZWQYAiABKAsyFi5vZmZiZWF0LnYxLlN1YnNjcmliZWRIABItCgZnb3NzaXAYAyABKAsyGy5vZmZiZWF0LnYxLkdvc3NpcEJyb2FkY2FzdEgAEi4KB2NhdGNodXAYBCABKAsyGy5vZmZiZWF0LnYxLkNhdGNodXBSZXNwb25zZUgAEi0KB3N2X2RpZmYYBSABKAsyGi5vZmZiZWF0LnYxLlN2RGlmZlJlc3BvbnNlSAASMQoJY2hhdF9kaWZmGAYgASgLMhwub2ZmYmVhdC52MS5DaGF0RGlmZlJlc3BvbnNlSAASJwoFZXJyb3IYByABKAsyFi5vZmZiZWF0LnYxLlJlbGF5RXJyb3JIAEIFCgNtc2ciNAoGQXV0aE9rEhUKDWF1dGhlbnRpY2F0ZWQYASABKAgSEwoLYWRtaW5fY291bnQYAiABKA0iHAoKU3Vic2NyaWJlZBIOCgZ0b3BpY3MYASADKAkiWgoPR29zc2lwQnJvYWRjYXN0Eg0KBXRvcGljGAEgASgJEgsKA3NlcRgCIAEoBBIrCgdtZXNzYWdlGAMgASgLMhoub2ZmYmVhdC52MS5Hb3NzaXBFbnZlbG9wZSJbCgxDYXRjaHVwRW50cnkSCwoDc2VxGAEgASgEEisKB21lc3NhZ2UYAiABKAsyGi5vZmZiZWF0LnYxLkdvc3NpcEVudmVsb3BlEhEKCXRpbWVzdGFtcBgDIAEoCSJMCg9DYXRjaHVwUmVzcG9uc2USDQoFdG9waWMYASABKAkSKgoIbWVzc2FnZXMYAiADKAsyGC5vZmZiZWF0LnYxLkNhdGNodXBFbnRyeSIuCg5TdkRpZmZSZXNwb25zZRIOCgZkb2NfaWQYASABKAkSDAoEZGlmZhgCIAEoDCJPChBDaGF0RGlmZlJlc3BvbnNlEg0KBXRvcGljGAEgASgJEiwKCG1lc3NhZ2VzGAIgAygLMhoub2ZmYmVhdC52MS5Hb3NzaXBFbnZlbG9wZSJACgpSZWxheUVycm9yEg0KBWVycm9yGAEgASgJEiMKBGNvZGUYAiABKA4yFS5vZmZiZWF0LnYxLkVycm9yQ29kZSqdAQoJRXJyb3JDb2RlEhoKFkVSUk9SX0NPREVfVU5TUEVDSUZJRUQQABIgChxFUlJPUl9DT0RFX0lOVkFMSURfU0lHTkFUVVJFEAESGwoXRVJST1JfQ09ERV9VTkFVVEhPUklaRUQQAhIbChdFUlJPUl9DT0RFX1JBVEVfTElNSVRFRBADEhgKFEVSUk9SX0NPREVfTUFMRk9STUVEEARiBnByb3RvMw", [file_offbeat_v1_gossip, file_offbeat_v1_types]);
+  fileDesc("ChZvZmZiZWF0L3YxL3JlbGF5LnByb3RvEgpvZmZiZWF0LnYxIvYCChJSZWxheUNsaWVudE1lc3NhZ2USJwoEYXV0aBgBIAEoCzIXLm9mZmJlYXQudjEuQXV0aFJlcXVlc3RIABIxCglzdWJzY3JpYmUYAiABKAsyHC5vZmZiZWF0LnYxLlN1YnNjcmliZVJlcXVlc3RIABI1Cgt1bnN1YnNjcmliZRgDIAEoCzIeLm9mZmJlYXQudjEuVW5zdWJzY3JpYmVSZXF1ZXN0SAASKQoGZ29zc2lwGAQgASgLMhcub2ZmYmVhdC52MS5Hb3NzaXBSZWxheUgAEi0KB2NhdGNodXAYBSABKAsyGi5vZmZiZWF0LnYxLkNhdGNodXBSZXF1ZXN0SAASNAoLc3ZfZXhjaGFuZ2UYBiABKAsyHS5vZmZiZWF0LnYxLlN2RXhjaGFuZ2VSZXF1ZXN0SAASNgoMY2hhdF9jYXRjaHVwGAcgASgLMh4ub2ZmYmVhdC52MS5DaGF0Q2F0Y2h1cFJlcXVlc3RIAEIFCgNtc2cidQoLQXV0aFJlcXVlc3QSEgoKcHVibGljX2tleRgBIAEoDBIsCgthdHRlc3RhdGlvbhgCIAEoCzIXLm9mZmJlYXQudjEuQXR0ZXN0YXRpb24SEQoJc2lnbmF0dXJlGAMgASgMEhEKCXRpbWVzdGFtcBgEIAEoCSJBCgtBdHRlc3RhdGlvbhIPCgdtZXNzYWdlGAEgASgJEhEKCXNpZ25hdHVyZRgCIAEoDBIOCgZpc3N1ZXIYAyABKAwiIgoQU3Vic2NyaWJlUmVxdWVzdBIOCgZ0b3BpY3MYASADKAkiJAoSVW5zdWJzY3JpYmVSZXF1ZXN0Eg4KBnRvcGljcxgBIAMoCSJJCgtHb3NzaXBSZWxheRINCgV0b3BpYxgBIAEoCRIrCgdtZXNzYWdlGAIgASgLMhoub2ZmYmVhdC52MS5Hb3NzaXBFbnZlbG9wZSIyCg5DYXRjaHVwUmVxdWVzdBINCgV0b3BpYxgBIAEoCRIRCglzaW5jZV9zZXEYAiABKAQiLwoRU3ZFeGNoYW5nZVJlcXVlc3QSDgoGZG9jX2lkGAEgASgJEgoKAnN2GAIgASgMIpEBChJDaGF0Q2F0Y2h1cFJlcXVlc3QSDQoFdG9waWMYASABKAkSMgoCc3YYAiADKAsyJi5vZmZiZWF0LnYxLkNoYXRDYXRjaHVwUmVxdWVzdC5TdkVudHJ5Eg0KBWxpbWl0GAMgASgNGikKB1N2RW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgEOgI4ASKDAwoSUmVsYXlTZXJ2ZXJNZXNzYWdlEiUKB2F1dGhfb2sYASABKAsyEi5vZmZiZWF0LnYxLkF1dGhPa0gAEiwKCnN1YnNjcmliZWQYAiABKAsyFi5vZmZiZWF0LnYxLlN1YnNjcmliZWRIABItCgZnb3NzaXAYAyABKAsyGy5vZmZiZWF0LnYxLkdvc3NpcEJyb2FkY2FzdEgAEi4KB2NhdGNodXAYBCABKAsyGy5vZmZiZWF0LnYxLkNhdGNodXBSZXNwb25zZUgAEi0KB3N2X2RpZmYYBSABKAsyGi5vZmZiZWF0LnYxLlN2RGlmZlJlc3BvbnNlSAASMQoJY2hhdF9kaWZmGAYgASgLMhwub2ZmYmVhdC52MS5DaGF0RGlmZlJlc3BvbnNlSAASJwoFZXJyb3IYByABKAsyFi5vZmZiZWF0LnYxLlJlbGF5RXJyb3JIABInCgVoZWxsbxgIIAEoCzIWLm9mZmJlYXQudjEuUmVsYXlIZWxsb0gAQgUKA21zZyIhCgpSZWxheUhlbGxvEhMKC2VuZHBvaW50X2lkGAEgASgJIjQKBkF1dGhPaxIVCg1hdXRoZW50aWNhdGVkGAEgASgIEhMKC2FkbWluX2NvdW50GAIgASgNIhwKClN1YnNjcmliZWQSDgoGdG9waWNzGAEgAygJIloKD0dvc3NpcEJyb2FkY2FzdBINCgV0b3BpYxgBIAEoCRILCgNzZXEYAiABKAQSKwoHbWVzc2FnZRgDIAEoCzIaLm9mZmJlYXQudjEuR29zc2lwRW52ZWxvcGUiWwoMQ2F0Y2h1cEVudHJ5EgsKA3NlcRgBIAEoBBIrCgdtZXNzYWdlGAIgASgLMhoub2ZmYmVhdC52MS5Hb3NzaXBFbnZlbG9wZRIRCgl0aW1lc3RhbXAYAyABKAkiTAoPQ2F0Y2h1cFJlc3BvbnNlEg0KBXRvcGljGAEgASgJEioKCG1lc3NhZ2VzGAIgAygLMhgub2ZmYmVhdC52MS5DYXRjaHVwRW50cnkiLgoOU3ZEaWZmUmVzcG9uc2USDgoGZG9jX2lkGAEgASgJEgwKBGRpZmYYAiABKAwiTwoQQ2hhdERpZmZSZXNwb25zZRINCgV0b3BpYxgBIAEoCRIsCghtZXNzYWdlcxgCIAMoCzIaLm9mZmJlYXQudjEuR29zc2lwRW52ZWxvcGUiQAoKUmVsYXlFcnJvchINCgVlcnJvchgBIAEoCRIjCgRjb2RlGAIgASgOMhUub2ZmYmVhdC52MS5FcnJvckNvZGUqnQEKCUVycm9yQ29kZRIaChZFUlJPUl9DT0RFX1VOU1BFQ0lGSUVEEAASIAocRVJST1JfQ09ERV9JTlZBTElEX1NJR05BVFVSRRABEhsKF0VSUk9SX0NPREVfVU5BVVRIT1JJWkVEEAISGwoXRVJST1JfQ09ERV9SQVRFX0xJTUlURUQQAxIYChRFUlJPUl9DT0RFX01BTEZPUk1FRBAEYgZwcm90bzM", [file_offbeat_v1_gossip, file_offbeat_v1_types]);
 
 /**
  * Client -> Server
@@ -315,6 +315,12 @@ export type RelayServerMessage = Message<"offbeat.v1.RelayServerMessage"> & {
      */
     value: RelayError;
     case: "error";
+  } | {
+    /**
+     * @generated from field: offbeat.v1.RelayHello hello = 8;
+     */
+    value: RelayHello;
+    case: "hello";
   } | { case: undefined; value?: undefined };
 };
 
@@ -324,6 +330,29 @@ export type RelayServerMessage = Message<"offbeat.v1.RelayServerMessage"> & {
  */
 export const RelayServerMessageSchema: GenMessage<RelayServerMessage> = /*@__PURE__*/
   messageDesc(file_offbeat_v1_relay, 9);
+
+/**
+ * Sent by the DO immediately on WebSocket connection.
+ * Contains the DO's deterministic endpoint_id so the client
+ * can register it as a known peer.
+ *
+ * @generated from message offbeat.v1.RelayHello
+ */
+export type RelayHello = Message<"offbeat.v1.RelayHello"> & {
+  /**
+   * hex-encoded 32-byte Ed25519 public key
+   *
+   * @generated from field: string endpoint_id = 1;
+   */
+  endpointId: string;
+};
+
+/**
+ * Describes the message offbeat.v1.RelayHello.
+ * Use `create(RelayHelloSchema)` to create a new message.
+ */
+export const RelayHelloSchema: GenMessage<RelayHello> = /*@__PURE__*/
+  messageDesc(file_offbeat_v1_relay, 10);
 
 /**
  * @generated from message offbeat.v1.AuthOk
@@ -345,7 +374,7 @@ export type AuthOk = Message<"offbeat.v1.AuthOk"> & {
  * Use `create(AuthOkSchema)` to create a new message.
  */
 export const AuthOkSchema: GenMessage<AuthOk> = /*@__PURE__*/
-  messageDesc(file_offbeat_v1_relay, 10);
+  messageDesc(file_offbeat_v1_relay, 11);
 
 /**
  * @generated from message offbeat.v1.Subscribed
@@ -362,7 +391,7 @@ export type Subscribed = Message<"offbeat.v1.Subscribed"> & {
  * Use `create(SubscribedSchema)` to create a new message.
  */
 export const SubscribedSchema: GenMessage<Subscribed> = /*@__PURE__*/
-  messageDesc(file_offbeat_v1_relay, 11);
+  messageDesc(file_offbeat_v1_relay, 12);
 
 /**
  * @generated from message offbeat.v1.GossipBroadcast
@@ -389,7 +418,7 @@ export type GossipBroadcast = Message<"offbeat.v1.GossipBroadcast"> & {
  * Use `create(GossipBroadcastSchema)` to create a new message.
  */
 export const GossipBroadcastSchema: GenMessage<GossipBroadcast> = /*@__PURE__*/
-  messageDesc(file_offbeat_v1_relay, 12);
+  messageDesc(file_offbeat_v1_relay, 13);
 
 /**
  * @generated from message offbeat.v1.CatchupEntry
@@ -416,7 +445,7 @@ export type CatchupEntry = Message<"offbeat.v1.CatchupEntry"> & {
  * Use `create(CatchupEntrySchema)` to create a new message.
  */
 export const CatchupEntrySchema: GenMessage<CatchupEntry> = /*@__PURE__*/
-  messageDesc(file_offbeat_v1_relay, 13);
+  messageDesc(file_offbeat_v1_relay, 14);
 
 /**
  * @generated from message offbeat.v1.CatchupResponse
@@ -438,7 +467,7 @@ export type CatchupResponse = Message<"offbeat.v1.CatchupResponse"> & {
  * Use `create(CatchupResponseSchema)` to create a new message.
  */
 export const CatchupResponseSchema: GenMessage<CatchupResponse> = /*@__PURE__*/
-  messageDesc(file_offbeat_v1_relay, 14);
+  messageDesc(file_offbeat_v1_relay, 15);
 
 /**
  * @generated from message offbeat.v1.SvDiffResponse
@@ -460,7 +489,7 @@ export type SvDiffResponse = Message<"offbeat.v1.SvDiffResponse"> & {
  * Use `create(SvDiffResponseSchema)` to create a new message.
  */
 export const SvDiffResponseSchema: GenMessage<SvDiffResponse> = /*@__PURE__*/
-  messageDesc(file_offbeat_v1_relay, 15);
+  messageDesc(file_offbeat_v1_relay, 16);
 
 /**
  * @generated from message offbeat.v1.ChatDiffResponse
@@ -482,7 +511,7 @@ export type ChatDiffResponse = Message<"offbeat.v1.ChatDiffResponse"> & {
  * Use `create(ChatDiffResponseSchema)` to create a new message.
  */
 export const ChatDiffResponseSchema: GenMessage<ChatDiffResponse> = /*@__PURE__*/
-  messageDesc(file_offbeat_v1_relay, 16);
+  messageDesc(file_offbeat_v1_relay, 17);
 
 /**
  * @generated from message offbeat.v1.RelayError
@@ -504,7 +533,7 @@ export type RelayError = Message<"offbeat.v1.RelayError"> & {
  * Use `create(RelayErrorSchema)` to create a new message.
  */
 export const RelayErrorSchema: GenMessage<RelayError> = /*@__PURE__*/
-  messageDesc(file_offbeat_v1_relay, 17);
+  messageDesc(file_offbeat_v1_relay, 18);
 
 /**
  * @generated from enum offbeat.v1.ErrorCode

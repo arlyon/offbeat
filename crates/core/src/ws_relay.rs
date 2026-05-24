@@ -4,6 +4,15 @@
 //! This module implements a client that can connect, subscribe to topics,
 //! send gossip messages, request catchup, and feed received messages
 //! into the local dispatch pipeline.
+//!
+//! ## Gossip Protocol Bridge
+//!
+//! The DO cannot speak QUIC (CF Workers limitation), so WebSocket is the
+//! transport. However, the wire format is the standard GossipEnvelope protobuf.
+//! On connection, the DO sends a `RelayHello` message containing its
+//! deterministic `endpoint_id` (hex-encoded Ed25519 public key). The client
+//! stores this and registers the DO as a known peer in the `ConnectionManager`,
+//! enabling the gossip topology to treat the WS relay as a regular peer.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -14,6 +23,7 @@ use tokio::sync::Mutex;
 use tokio_tungstenite::{connect_async, tungstenite, MaybeTlsStream, WebSocketStream};
 
 use crate::auth::Attestation;
+use crate::connection_manager::ConnectionManager;
 use crate::doc_manager::DocManager;
 use crate::proto;
 use crate::sync::SyncOrchestrator;
@@ -40,6 +50,9 @@ pub struct WsRelaySink {
     connected: Arc<std::sync::atomic::AtomicBool>,
     tx_bytes: Arc<std::sync::atomic::AtomicU64>,
     rx_bytes: Arc<std::sync::atomic::AtomicU64>,
+    /// The DO's endpoint_id, received from the Hello message on connect.
+    /// This is the hex-encoded 32-byte Ed25519 public key of the Festival DO.
+    do_endpoint_id: Arc<Mutex<Option<String>>>,
 }
 
 impl WsRelaySink {
@@ -94,6 +107,12 @@ impl WsRelaySink {
     /// Cumulative bytes received over the relay.
     pub fn rx_bytes(&self) -> u64 {
         self.rx_bytes.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// The DO's endpoint_id, received from the Hello message on connect.
+    /// Returns `None` if the Hello message has not yet been received.
+    pub async fn do_endpoint_id(&self) -> Option<String> {
+        self.do_endpoint_id.lock().await.clone()
     }
 
     /// Send a gossip envelope to the DO on the given topic.
@@ -262,11 +281,15 @@ impl crate::sync::PeerConnection for WsRelaySink {
 // ---------------------------------------------------------------------------
 
 /// Connect to the Festival DO WebSocket at `url`.
+///
+/// If a `ConnectionManager` is provided, the DO's endpoint_id (received via
+/// the Hello message) will be registered as a known peer.
 pub async fn connect(
     url: &str,
     sync_orchestrator: Arc<SyncOrchestrator>,
     doc_manager: Arc<DocManager>,
     notifier: Arc<crate::notifier::ResourceNotifier>,
+    connection_manager: Option<Arc<ConnectionManager>>,
 ) -> anyhow::Result<(
     WsRelaySink,
     std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>>,
@@ -289,6 +312,7 @@ pub async fn connect(
         connected: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         tx_bytes: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         rx_bytes: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        do_endpoint_id: Arc::new(Mutex::new(None)),
     };
 
     let recv_sink = relay_sink.clone();
@@ -300,6 +324,7 @@ pub async fn connect(
         sync_orchestrator,
         doc_manager,
         notifier,
+        connection_manager,
     ));
 
     Ok((relay_sink, receive_loop))
@@ -312,6 +337,7 @@ pub async fn connect_with_retry(
     sync_orchestrator: Arc<SyncOrchestrator>,
     doc_manager: Arc<DocManager>,
     notifier: Arc<crate::notifier::ResourceNotifier>,
+    connection_manager: Option<Arc<ConnectionManager>>,
 ) -> anyhow::Result<(
     WsRelaySink,
     std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>>,
@@ -320,7 +346,15 @@ pub async fn connect_with_retry(
     const MAX_DELAY_MS: u64 = 30_000;
 
     for attempt in 0..max_retries {
-        match connect(url, sync_orchestrator.clone(), doc_manager.clone(), notifier.clone()).await {
+        match connect(
+            url,
+            sync_orchestrator.clone(),
+            doc_manager.clone(),
+            notifier.clone(),
+            connection_manager.clone(),
+        )
+        .await
+        {
             Ok(result) => return Ok(result),
             Err(e) if attempt + 1 == max_retries => return Err(e),
             Err(e) => {
@@ -346,6 +380,7 @@ async fn run_receive_loop_with_reconnect(
     sync_orchestrator: Arc<SyncOrchestrator>,
     doc_manager: Arc<DocManager>,
     notifier: Arc<crate::notifier::ResourceNotifier>,
+    connection_manager: Option<Arc<ConnectionManager>>,
 ) -> anyhow::Result<()> {
     use rand::RngExt;
     const MAX_DELAY_MS: u64 = 30_000;
@@ -360,6 +395,7 @@ async fn run_receive_loop_with_reconnect(
             &sync_orchestrator,
             &doc_manager,
             &notifier,
+            &connection_manager,
         )
         .await;
 
@@ -441,6 +477,7 @@ async fn run_receive_loop(
     sync_orchestrator: &Arc<SyncOrchestrator>,
     doc_manager: &Arc<DocManager>,
     notifier: &Arc<crate::notifier::ResourceNotifier>,
+    connection_manager: &Option<Arc<ConnectionManager>>,
 ) -> anyhow::Result<()> {
     while let Some(msg) = stream.next().await {
         match msg {
@@ -455,6 +492,7 @@ async fn run_receive_loop(
                             sync_orchestrator,
                             doc_manager,
                             notifier,
+                            connection_manager,
                         )
                         .await
                         {
@@ -490,6 +528,7 @@ async fn handle_server_message(
     sync_orchestrator: &Arc<SyncOrchestrator>,
     doc_manager: &Arc<DocManager>,
     notifier: &Arc<crate::notifier::ResourceNotifier>,
+    connection_manager: &Option<Arc<ConnectionManager>>,
 ) -> anyhow::Result<()> {
     use proto::relay_server_message::Msg;
 
@@ -499,6 +538,41 @@ async fn handle_server_message(
     };
 
     match msg_inner {
+        Msg::Hello(hello) => {
+            tracing::info!(
+                "ws_relay: received hello from DO, endpoint_id={}",
+                hello.endpoint_id,
+            );
+
+            // Store the DO's endpoint_id
+            {
+                let mut do_eid = sink.do_endpoint_id.lock().await;
+                *do_eid = Some(hello.endpoint_id.clone());
+            }
+
+            // Register the DO as a known peer in the ConnectionManager
+            if let Some(cm) = connection_manager {
+                let now_secs = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+
+                let peers = vec![crate::types::PeerInfo {
+                    endpoint_id: hello.endpoint_id.clone(),
+                    relay_url: None,
+                    last_seen: now_secs,
+                    user_id: "festival-do".to_string(),
+                }];
+                cm.on_peer_list_updated(peers);
+
+                tracing::info!(
+                    "ws_relay: registered DO {} as peer in ConnectionManager",
+                    hello.endpoint_id,
+                );
+            }
+            Ok(())
+        }
+
         Msg::AuthOk(auth_ok) => {
             sink.authenticated
                 .store(auth_ok.authenticated, std::sync::atomic::Ordering::Relaxed);
@@ -754,6 +828,18 @@ mod tests {
                     diff: vec![1, 0, 0, 0],
                 },
             )),
+        };
+        let bytes = proto::encode_server_msg(&msg);
+        let decoded = proto::decode_server_msg(&bytes).unwrap();
+        assert_eq!(decoded, msg);
+    }
+
+    #[test]
+    fn test_protobuf_hello_roundtrip() {
+        let msg = proto::RelayServerMessage {
+            msg: Some(proto::relay_server_message::Msg::Hello(proto::RelayHello {
+                endpoint_id: "a".repeat(64),
+            })),
         };
         let bytes = proto::encode_server_msg(&msg);
         let decoded = proto::decode_server_msg(&bytes).unwrap();

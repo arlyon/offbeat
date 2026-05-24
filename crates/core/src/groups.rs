@@ -15,6 +15,7 @@ use crate::types::GroupPin;
 
 pub struct GroupCreateResult {
     pub group_id: String,
+    pub festival_id: String,
     pub invite_payload: String,
     pub topic_state: TopicId,
     pub topic_chat: TopicId,
@@ -22,6 +23,7 @@ pub struct GroupCreateResult {
 
 pub struct GroupJoinResult {
     pub group_id: String,
+    pub festival_id: String,
     pub group_key: [u8; 32],
     pub topic_state: TopicId,
     pub topic_chat: TopicId,
@@ -86,13 +88,14 @@ impl GroupManager {
 
 
         let b64key = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(key);
-        let invite_payload = format!("offbeat://group/{group_id}/{b64key}");
+        let invite_payload = format!("offbeat://group/{festival_id}/{group_id}/{b64key}");
 
         let topic_state = topics::group_topic(&key, "state");
         let topic_chat = topics::group_topic(&key, "chat");
 
         Ok(GroupCreateResult {
             group_id,
+            festival_id: festival_id.to_string(),
             invite_payload,
             topic_state,
             topic_chat,
@@ -109,17 +112,26 @@ impl GroupManager {
         user_id: &str,
         display_name: &str,
     ) -> anyhow::Result<GroupJoinResult> {
-        // Parse "offbeat://group/{group_id}/{base64url_key}"
+        // Parse invite payload. Supports two formats:
+        //   New: "offbeat://group/{festival_id}/{group_id}/{base64url_key}"
+        //   Old: "offbeat://group/{group_id}/{base64url_key}"
         let stripped = invite_payload
             .strip_prefix("offbeat://group/")
             .ok_or_else(|| anyhow::anyhow!("invalid invite payload format"))?;
 
-        let sep = stripped
-            .rfind('/')
-            .ok_or_else(|| anyhow::anyhow!("invite payload missing key separator"))?;
+        let segments: Vec<&str> = stripped.split('/').collect();
 
-        let group_id_from_invite = &stripped[..sep];
-        let b64key = &stripped[sep + 1..];
+        let (festival_id, group_id_from_invite, b64key) = match segments.len() {
+            3 => {
+                // New format: festival_id/group_id/key
+                (segments[0].to_string(), segments[1], segments[2])
+            }
+            2 => {
+                // Old format: group_id/key (backward compat)
+                (String::new(), segments[0], segments[1])
+            }
+            _ => anyhow::bail!("invite payload has unexpected number of segments: {}", segments.len()),
+        };
 
         let key_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .decode(b64key)
@@ -137,9 +149,8 @@ impl GroupManager {
             );
         }
 
-        // Use empty festival_id (we may not know it yet; the doc will have it)
         self.db
-            .save_group(&derived_id, "", "", &group_key)?;
+            .save_group(&derived_id, &festival_id, "", &group_key)?;
 
         let doc_id = format!("group/{derived_id}");
 
@@ -150,13 +161,12 @@ impl GroupManager {
         .to_string();
         self.doc_manager.set_map_value(&doc_id, &format!("member/{user_id}"), &member_json)?;
 
-
-
         let topic_state = topics::group_topic(&group_key, "state");
         let topic_chat = topics::group_topic(&group_key, "chat");
 
         Ok(GroupJoinResult {
             group_id: derived_id,
+            festival_id,
             group_key,
             topic_state,
             topic_chat,
@@ -640,8 +650,53 @@ mod tests {
             .unwrap();
 
         assert_eq!(join.group_id, create.group_id);
+        assert_eq!(join.festival_id, "fest-1");
         assert_eq!(join.topic_state, create.topic_state);
         assert_eq!(join.topic_chat, create.topic_chat);
+    }
+
+    #[tokio::test]
+    async fn test_invite_payload_contains_festival_id() {
+        let gm = make_manager();
+        let create = gm
+            .create_group("wavelength26", "Crew", "u1", "Alice")
+            .await
+            .unwrap();
+
+        // New format: offbeat://group/{festival_id}/{group_id}/{key}
+        assert!(create.invite_payload.starts_with("offbeat://group/wavelength26/"));
+        assert_eq!(create.festival_id, "wavelength26");
+
+        // Should have 3 segments after "offbeat://group/"
+        let stripped = create.invite_payload.strip_prefix("offbeat://group/").unwrap();
+        let segments: Vec<&str> = stripped.split('/').collect();
+        assert_eq!(segments.len(), 3, "new format should have 3 segments: festival_id/group_id/key");
+        assert_eq!(segments[0], "wavelength26");
+        assert_eq!(segments[1], create.group_id);
+    }
+
+    #[tokio::test]
+    async fn test_join_group_backward_compat_old_format() {
+        let gm = make_manager();
+        let create = gm
+            .create_group("fest-1", "Compat", "u1", "Alice")
+            .await
+            .unwrap();
+
+        // Build old format manually: offbeat://group/{group_id}/{key}
+        let key = gm.db.load_group_key(&create.group_id).unwrap().unwrap();
+        let b64key = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(key);
+        let old_payload = format!("offbeat://group/{}/{}", create.group_id, b64key);
+
+        // Create a fresh manager to join (simulate different device)
+        let gm2 = make_manager();
+        let join = gm2
+            .join_group(&old_payload, "u2", "Bob")
+            .await
+            .unwrap();
+
+        assert_eq!(join.group_id, create.group_id);
+        assert_eq!(join.festival_id, ""); // old format has no festival_id
     }
 
     #[test]
@@ -652,6 +707,111 @@ mod tests {
         let id1 = auth::get_user_id(&key);
         let id2 = auth::get_user_id(&key);
         assert_eq!(id1, id2);
+    }
+
+    /// Full two-user integration test:
+    ///
+    /// 1. User A creates a group, sends a chat message, checks in at a stage,
+    ///    and stars (likes) an event.
+    /// 2. User B joins the group via invite link.
+    /// 3. B performs an SV sync handshake to catch up on A's state.
+    /// 4. B should see: group name, both members, A's check-in location,
+    ///    A's starred events, and A's chat message.
+    #[tokio::test]
+    async fn test_two_user_group_sync_full() {
+        use crate::chat::ChatManager;
+
+        // --- Device setup (separate DBs simulate separate devices) ---
+        let db_a = Arc::new(Database::new_in_memory().expect("in-memory db"));
+        let doc_a = Arc::new(DocManager::new(db_a.clone()));
+        let gm_a = GroupManager::new(db_a.clone(), doc_a.clone());
+        let chat_a = ChatManager::new(db_a.clone(), doc_a.clone());
+
+        let db_b = Arc::new(Database::new_in_memory().expect("in-memory db"));
+        let doc_b = Arc::new(DocManager::new(db_b.clone()));
+        let gm_b = GroupManager::new(db_b.clone(), doc_b.clone());
+        let chat_b = ChatManager::new(db_b.clone(), doc_b.clone());
+
+        // --- User A: create group ---
+        let create = gm_a
+            .create_group("fest-1", "The Crew", "alice", "Alice")
+            .await
+            .unwrap();
+        let group_id = &create.group_id;
+
+        // --- User A: send a chat message ---
+        let (encrypted_chat, _topic) = chat_a
+            .send_group_chat(group_id, "alice", "Alice", "hey everyone!")
+            .unwrap();
+
+        // --- User A: check in at main-stage ---
+        let _encrypted_checkin = gm_a
+            .check_in(group_id, "alice", Some("main-stage"), None)
+            .await
+            .unwrap();
+
+        // --- User A: star (like) some events ---
+        let _encrypted_stars = gm_a
+            .update_stars(group_id, "alice", vec!["event-1".into(), "event-2".into()])
+            .await
+            .unwrap();
+
+        // --- User B: join the group ---
+        gm_b
+            .join_group(&create.invite_payload, "bob", "Bob")
+            .await
+            .unwrap();
+
+        // --- SV sync: B requests, A responds, B applies ---
+        let encrypted_sv = gm_b.request_group_sync(group_id).await.unwrap();
+        let encrypted_diff = gm_a
+            .handle_sync_request(group_id, &encrypted_sv)
+            .await
+            .unwrap();
+
+        let group_key = db_b.load_group_key(group_id).unwrap().unwrap();
+        let diff = crate::crypto::decrypt(&group_key, &encrypted_diff).unwrap();
+        doc_b
+            .apply_update(&format!("group/{group_id}"), &diff)
+            .unwrap();
+
+        // --- B receives A's chat message (simulates gossip delivery) ---
+        let received_msg = chat_b
+            .receive_encrypted_group_chat(group_id, &encrypted_chat)
+            .unwrap();
+        assert_eq!(received_msg.text, "hey everyone!");
+        assert_eq!(received_msg.user_id, "alice");
+        assert_eq!(received_msg.display_name, "Alice");
+
+        // Verify chat is in B's history
+        let history = chat_b
+            .get_history(&format!("group/{group_id}/chat"), 10, 0)
+            .unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].text, "hey everyone!");
+
+        // --- Verify B sees full group state ---
+        let state = gm_b.get_group_state(group_id).await.unwrap();
+
+        // Group name
+        assert_eq!(state.name, "The Crew");
+
+        // Both members present
+        assert_eq!(state.members.len(), 2);
+        let alice = state.members.iter().find(|m| m.user_id == "alice").expect("alice should be a member");
+        let bob = state.members.iter().find(|m| m.user_id == "bob").expect("bob should be a member");
+        assert_eq!(alice.display_name, "Alice");
+        assert_eq!(bob.display_name, "Bob");
+
+        // Alice's check-in location
+        assert_eq!(alice.stage_id.as_deref(), Some("main-stage"));
+
+        // Alice's starred events
+        let stars_raw = doc_b
+            .read_map_value(&format!("group/{group_id}"), "stars/alice")
+            .expect("alice's stars should be synced");
+        let stars: Vec<String> = serde_json::from_str(&stars_raw).unwrap();
+        assert_eq!(stars, vec!["event-1".to_string(), "event-2".to_string()]);
     }
 
     /// D1 creates a group and makes some changes.  D2 joins and has only its

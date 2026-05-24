@@ -562,4 +562,104 @@ mod tests {
             h.join().unwrap();
         }
     }
+
+    /// Helper: insert peer entries into a doc's "root" → "peers" nested YMap.
+    fn insert_peer_entries(
+        mgr: &DocManager,
+        doc_id: &str,
+        peers: &[(&str, &str)], // (endpoint_id, json_value)
+    ) {
+        let doc_arc = mgr.get_or_create(doc_id);
+        let doc = doc_arc.write().unwrap();
+        let root = doc.get_or_insert_map("root");
+        let mut txn = doc.transact_mut();
+
+        // Get or create the nested "peers" map.
+        let peers_map = match root.get(&txn, "peers") {
+            Some(Out::YMap(map_ref)) => map_ref,
+            _ => {
+                // Insert a new empty map via MapPrelim.
+                let empty: [(&str, &str); 0] = [];
+                root.insert(
+                    &mut txn,
+                    "peers",
+                    yrs::MapPrelim::from(empty),
+                );
+                match root.get(&txn, "peers") {
+                    Some(Out::YMap(map_ref)) => map_ref,
+                    _ => panic!("failed to create peers map"),
+                }
+            }
+        };
+
+        for (eid, json_val) in peers {
+            peers_map.insert(&mut txn, *eid, *json_val);
+        }
+    }
+
+    #[test]
+    fn test_peer_list_parse() {
+        let db = test_db();
+        let mgr = DocManager::new(db);
+
+        let peer_json_a = r#"{"relay_url":"https://relay.example.com","last_seen":1700000000,"user_id":"user-a"}"#;
+        let peer_json_b =
+            r#"{"relay_url":null,"last_seen":1700001000,"user_id":"user-b"}"#;
+
+        insert_peer_entries(
+            &mgr,
+            "fest-1",
+            &[
+                ("aa".repeat(32).leak(), peer_json_a),
+                ("bb".repeat(32).leak(), peer_json_b),
+            ],
+        );
+
+        let peers = mgr.parse_peer_list("fest-1", "not-me");
+        assert_eq!(peers.len(), 2);
+
+        let a = peers.iter().find(|p| p.user_id == "user-a").unwrap();
+        assert_eq!(a.relay_url.as_deref(), Some("https://relay.example.com"));
+        assert_eq!(a.last_seen, 1700000000);
+
+        let b = peers.iter().find(|p| p.user_id == "user-b").unwrap();
+        assert!(b.relay_url.is_none());
+        assert_eq!(b.last_seen, 1700001000);
+    }
+
+    #[test]
+    fn test_peer_list_filters_self() {
+        let db = test_db();
+        let mgr = DocManager::new(db);
+
+        let own_id: &str = &"cc".repeat(32);
+        let other_id: &str = &"dd".repeat(32);
+
+        let json = r#"{"relay_url":null,"last_seen":1700000000,"user_id":"someone"}"#;
+
+        insert_peer_entries(&mgr, "fest-2", &[(own_id, json), (other_id, json)]);
+
+        let peers = mgr.parse_peer_list("fest-2", own_id);
+        assert_eq!(peers.len(), 1);
+        assert_eq!(peers[0].endpoint_id, other_id);
+    }
+
+    #[test]
+    fn test_peer_list_handles_malformed() {
+        let db = test_db();
+        let mgr = DocManager::new(db);
+
+        let good_json =
+            r#"{"relay_url":null,"last_seen":1700000000,"user_id":"good-user"}"#;
+        let bad_json = r#"{"not_valid": true}"#; // missing required fields
+
+        let good_id: &str = &"ee".repeat(32);
+        let bad_id: &str = &"ff".repeat(32);
+
+        insert_peer_entries(&mgr, "fest-3", &[(good_id, good_json), (bad_id, bad_json)]);
+
+        let peers = mgr.parse_peer_list("fest-3", "not-me");
+        assert_eq!(peers.len(), 1);
+        assert_eq!(peers[0].user_id, "good-user");
+    }
 }

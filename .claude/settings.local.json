@@ -29,7 +29,9 @@
       "WebFetch(domain:raw.githubusercontent.com)",
       "mcp__plugin_context7_context7__resolve-library-id",
       "Bash(rustup target list:*)",
-      "WebFetch(domain:api.anthropic.com)"
+      "WebFetch(domain:api.anthropic.com)",
+      "Bash(cargo build:*)",
+      "Bash(find .:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

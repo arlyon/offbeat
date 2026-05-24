@@ -20,6 +20,8 @@ export class FestivalDO extends DurableObject {
 	#sessions = new Map<WebSocket, Session>();
 	#publicKey: Uint8Array | null = null;
 	#secretKey: Uint8Array | null = null;
+	/** Hex-encoded 32-byte Ed25519 public key, used as the DO's deterministic endpoint_id. */
+	#endpointId: string | null = null;
 	#opensAt: string | null = null; // ISO date string
 	#closesAt: string | null = null; // ISO date string
 	#festivalId: string | null = null;
@@ -77,6 +79,8 @@ export class FestivalDO extends DurableObject {
 			await this.ctx.storage.put("ed25519_secret_key", secretKey);
 			await this.ctx.storage.put("ed25519_public_key", publicKey);
 		}
+		// Derive deterministic endpoint_id from public key
+		this.#endpointId = bytesToHex(this.#publicKey);
 	}
 
 	async #loadConfig() {
@@ -122,9 +126,7 @@ export class FestivalDO extends DurableObject {
 	 *
 	 * Returns the user's public key hex on success, or an error Response.
 	 */
-	async #requireAuth(
-		request: Request,
-	): Promise<{ publicKey: string } | Response> {
+	async #requireAuth(request: Request): Promise<{ publicKey: string } | Response> {
 		const attMessage = request.headers.get("X-Attestation-Message");
 		const attSignature = request.headers.get("X-Attestation-Signature");
 		const attIssuer = request.headers.get("X-Attestation-Issuer");
@@ -145,11 +147,7 @@ export class FestivalDO extends DurableObject {
 
 		// Verify attestation signature against issuer
 		const attMsgBytes = new TextEncoder().encode(attMessage);
-		const attValid = await verify(
-			hexToBytes(attIssuer),
-			attMsgBytes,
-			hexToBytes(attSignature),
-		);
+		const attValid = await verify(hexToBytes(attIssuer), attMsgBytes, hexToBytes(attSignature));
 		if (!attValid) {
 			return new Response("Invalid attestation signature", { status: 401 });
 		}
@@ -171,9 +169,7 @@ export class FestivalDO extends DurableObject {
 		}
 
 		// Verify session signature (proves ownership of the Ed25519 key)
-		const sessionMsg = new TextEncoder().encode(
-			`session:${sessionTimestamp}`,
-		);
+		const sessionMsg = new TextEncoder().encode(`session:${sessionTimestamp}`);
 		const sessionValid = await verify(
 			hexToBytes(sessionPubKey),
 			sessionMsg,
@@ -488,6 +484,17 @@ export class FestivalDO extends DurableObject {
 		this.#sessions.set(server, { topics: new Set(), authenticated: false, publicKey: null });
 		console.log(`[ws] new connection: ${sessionId}, total sessions: ${this.#sessions.size}`);
 
+		// Send Hello message with the DO's deterministic endpoint_id
+		if (this.#endpointId) {
+			this.#sendServerMsg(server, {
+				msg: { case: "hello", value: { endpointId: this.#endpointId } },
+			});
+		}
+
+		// Store-and-forward: replay last N gossip messages per topic
+		// so late joiners get caught up immediately on connect.
+		this.#replayRecentMessages(server);
+
 		return new Response(null, { status: 101, webSocket: client });
 	}
 
@@ -590,7 +597,12 @@ export class FestivalDO extends DurableObject {
 			}
 
 			case "subscribe": {
+				// Track which topics are genuinely new for this session
+				const newTopics: string[] = [];
 				for (const topic of msg.value.topics) {
+					if (!sess.topics.has(topic)) {
+						newTopics.push(topic);
+					}
 					sess.topics.add(topic);
 				}
 				ws.serializeAttachment(
@@ -604,6 +616,10 @@ export class FestivalDO extends DurableObject {
 				this.#sendServerMsg(ws, {
 					msg: { case: "subscribed", value: { topics: [...sess.topics] } },
 				});
+				// Replay recent messages for newly subscribed topics
+				if (newTopics.length > 0) {
+					this.#replayTopicMessages(ws, newTopics);
+				}
 				break;
 			}
 
@@ -806,6 +822,82 @@ export class FestivalDO extends DurableObject {
 
 	webSocketError(ws: WebSocket): void {
 		this.#sessions.delete(ws);
+	}
+
+	// -----------------------------------------------------------------------
+	// Store-and-forward: replay recent gossip on new connection / subscribe
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Replay the last 100 gossip messages (across all topics) to a newly
+	 * connected WebSocket. This provides store-and-forward semantics so that
+	 * clients joining mid-festival get caught up immediately without waiting
+	 * for the next live broadcast.
+	 *
+	 * Called once on initial WS connection (before the client subscribes to
+	 * specific topics). Since the client hasn't subscribed yet, messages are
+	 * sent unfiltered; the client will ignore messages for topics it hasn't
+	 * subscribed to internally.
+	 */
+	#replayRecentMessages(ws: WebSocket) {
+		const rows = this.sql
+			.exec("SELECT topic, seq, message FROM gossip_log ORDER BY seq DESC LIMIT 100")
+			.toArray() as { topic: string; seq: number; message: ArrayBuffer }[];
+
+		if (rows.length === 0) return;
+
+		// Send oldest first (reverse the DESC order)
+		for (let i = rows.length - 1; i >= 0; i--) {
+			const row = rows[i];
+			const envelope = fromBinary(GossipEnvelopeSchema, new Uint8Array(row.message));
+			this.#sendServerMsg(ws, {
+				msg: {
+					case: "gossip",
+					value: {
+						topic: row.topic,
+						seq: BigInt(row.seq),
+						message: envelope,
+					},
+				},
+			});
+		}
+
+		console.log(`[ws] replayed ${rows.length} recent messages to new connection`);
+	}
+
+	/**
+	 * Replay recent gossip messages for specific topics to a WebSocket.
+	 * Called when a client subscribes to new topics, so they get caught up
+	 * on messages they might have missed.
+	 */
+	#replayTopicMessages(ws: WebSocket, topics: string[]) {
+		if (topics.length === 0) return;
+
+		// Query last 100 messages per topic
+		for (const topic of topics) {
+			const rows = this.sql
+				.exec(
+					"SELECT seq, message FROM gossip_log WHERE topic = ? ORDER BY seq DESC LIMIT 100",
+					topic,
+				)
+				.toArray() as { seq: number; message: ArrayBuffer }[];
+
+			// Send oldest first
+			for (let i = rows.length - 1; i >= 0; i--) {
+				const row = rows[i];
+				const envelope = fromBinary(GossipEnvelopeSchema, new Uint8Array(row.message));
+				this.#sendServerMsg(ws, {
+					msg: {
+						case: "gossip",
+						value: {
+							topic,
+							seq: BigInt(row.seq),
+							message: envelope,
+						},
+					},
+				});
+			}
+		}
 	}
 
 	/**

@@ -10,6 +10,7 @@ import '../../src/rust/api.dart';
 import 'create_group_sheet.dart';
 import 'invite_sheet.dart';
 import 'member_sheet.dart';
+import 'scan_sheet.dart';
 
 class SocialScreen extends StatefulWidget {
   final AppNode node;
@@ -44,6 +45,10 @@ class _SocialScreenState extends State<SocialScreen> {
   List<ChatMessageDto> _messages = [];
   StreamSubscription<List<ChatMessageDto>>? _chatSub;
 
+  // Peer count (live)
+  int _directPeerCount = 0;
+  StreamSubscription<List<PeerStatusInfo>>? _peerListSub;
+
   final _scrollController = ScrollController();
   final _composerController = TextEditingController();
 
@@ -51,12 +56,14 @@ class _SocialScreenState extends State<SocialScreen> {
   void initState() {
     super.initState();
     _loadGroups();
+    _watchPeers();
   }
 
   @override
   void dispose() {
     _groupStateSub?.cancel();
     _chatSub?.cancel();
+    _peerListSub?.cancel();
     _scrollController.dispose();
     _composerController.dispose();
     super.dispose();
@@ -78,6 +85,20 @@ class _SocialScreenState extends State<SocialScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _watchPeers() async {
+    try {
+      final stream = await widget.node.watchPeerList();
+      _peerListSub = stream.listen((peers) {
+        if (mounted) {
+          final active = peers.where((p) => p.status == 'active').length;
+          setState(() => _directPeerCount = active);
+        }
+      });
+    } catch (_) {
+      // Connection manager may not be available (e.g. in-memory node)
     }
   }
 
@@ -191,20 +212,41 @@ class _SocialScreenState extends State<SocialScreen> {
           Navigator.pop(context);
           _handleJoinGroup(code);
         },
+        onScanQr: () => _showScanSheet(),
       ),
     );
   }
 
-  void _showInviteSheet([String? invitePayload]) {
+  Future<void> _showInviteSheet([String? invitePayload]) async {
     if (_activeGroupId == null || _groupState == null) return;
+    // Always use the full offbeat:// URI so the QR is scannable
+    var code = invitePayload;
+    code ??= await widget.node.getInvitePayload(
+      groupId: _activeGroupId!,
+      festivalId: widget.festivalId,
+    );
+    if (!mounted || code == null) return;
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
       builder: (_) => InviteSheet(
         groupName: _groupState!.name,
-        groupCode: invitePayload ?? _activeGroupId!,
+        groupCode: code!,
         festivalName: widget.festivalName,
+      ),
+    );
+  }
+
+  void _showScanSheet() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => ScanSheet(
+        onScanned: (uri) {
+          _handleJoinGroup(uri);
+        },
       ),
     );
   }
@@ -383,6 +425,11 @@ class _SocialScreenState extends State<SocialScreen> {
               ),
               _metaSep(),
               Text(
+                '$_directPeerCount DIRECT PEERS',
+                style: _metaStyle,
+              ),
+              _metaSep(),
+              Text(
                 widget.festivalName.toUpperCase(),
                 style: _metaStyle,
               ),
@@ -402,7 +449,7 @@ class _SocialScreenState extends State<SocialScreen> {
                 _actionButton(
                   label: 'SCAN',
                   icon: Icons.qr_code_scanner,
-                  onTap: () {},
+                  onTap: _showScanSheet,
                 ),
                 _actionButton(
                   label: 'NEW',

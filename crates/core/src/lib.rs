@@ -1,9 +1,11 @@
 pub mod auth;
 pub mod chat;
+pub mod connection_manager;
 pub mod crypto;
 pub mod db;
 pub mod doc_manager;
 pub mod gossip_manager;
+pub mod group_sync;
 pub mod groups;
 pub mod key_cache;
 pub mod notifier;
@@ -23,6 +25,7 @@ use std::sync::{Arc, RwLock};
 use tokio::sync::Mutex;
 
 use chat::ChatManager;
+use connection_manager::ConnectionManager;
 use db::Database;
 use doc_manager::DocManager;
 use gossip_manager::GossipManager;
@@ -56,6 +59,8 @@ pub struct OffbeatNode {
     pub endpoint: Option<iroh::Endpoint>,
     /// BLE transport handle, if BLE hardware is available.
     pub ble_transport: Option<Arc<BleTransport>>,
+    /// Connection manager for multi-path peer tracking.
+    pub connection_manager: Option<Arc<ConnectionManager>>,
     /// WS relay sink — populated after `connect_relay`.
     /// Behind a lock so background watchers (transport status) see updates.
     pub ws_relay: Arc<parking_lot::RwLock<Option<Arc<WsRelaySink>>>>,
@@ -93,6 +98,7 @@ impl OffbeatNode {
             gossip: None,
             endpoint: None,
             ble_transport: None,
+            connection_manager: None,
             ws_relay: Arc::new(parking_lot::RwLock::new(None)),
             festival_public_keys: HashMap::new(),
         })
@@ -125,6 +131,7 @@ impl OffbeatNode {
             gossip: None,
             endpoint: None,
             ble_transport: None,
+            connection_manager: None,
             ws_relay: Arc::new(parking_lot::RwLock::new(None)),
             festival_public_keys: HashMap::new(),
         })
@@ -141,7 +148,7 @@ impl OffbeatNode {
         let chat_manager = Arc::new(ChatManager::new(db.clone(), doc_manager.clone()));
         let resource_registry = Arc::new(RwLock::new(ResourceRegistry::new()));
         let notifier = ResourceNotifier::new_arc();
-        let sync_orchestrator = Arc::new(SyncOrchestrator::new(
+        let mut sync_orchestrator = Arc::new(SyncOrchestrator::new(
             resource_registry.clone(),
             doc_manager.clone(),
             chat_manager.clone(),
@@ -163,7 +170,9 @@ impl OffbeatNode {
                 key
             }
         };
-        let ble_transport = transport::ble::try_build_ble(secret_key.public()).await;
+        // Capture the public key before secret_key is moved into the builder.
+        let own_endpoint_id = secret_key.public();
+        let ble_transport = transport::ble::try_build_ble(own_endpoint_id).await;
 
         let mut builder = iroh::Endpoint::builder(presets::N0)
             .secret_key(secret_key)
@@ -178,10 +187,18 @@ impl OffbeatNode {
 
         let endpoint = builder.bind().await?;
 
+        // Create the connection manager with the hex-encoded endpoint ID.
+        let connection_manager = Arc::new(ConnectionManager::new(own_endpoint_id.to_string()));
+
         // Spawn the gossip actor; it takes ownership of a clone of the endpoint.
         let gossip = Gossip::builder().spawn(endpoint.clone());
 
         let gossip_manager = Arc::new(Mutex::new(GossipManager::new(gossip.clone())));
+
+        // Wire gossip manager into sync orchestrator for neighbor counts
+        Arc::get_mut(&mut sync_orchestrator)
+            .expect("sync_orchestrator not yet shared")
+            .set_gossip_manager(gossip_manager.clone());
 
         Ok(Self {
             doc_manager,
@@ -195,6 +212,7 @@ impl OffbeatNode {
             gossip: Some(gossip),
             endpoint: Some(endpoint),
             ble_transport,
+            connection_manager: Some(connection_manager),
             ws_relay: Arc::new(parking_lot::RwLock::new(None)),
             festival_public_keys: HashMap::new(),
         })

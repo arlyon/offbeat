@@ -177,7 +177,7 @@ class Day {
 }
 
 class FestSet {
-  final int id;
+  final String id;
   final String day;
   final String stage;
   final String artist;
@@ -186,7 +186,7 @@ class FestSet {
   final String genre;
   bool starred;
   final bool live;
-  final List<int> clashes;
+  final List<String> clashes;
 
   FestSet({
     required this.id,
@@ -202,9 +202,8 @@ class FestSet {
   });
 
   factory FestSet.fromJson(Map<String, dynamic> j) {
-    final idStr = j['id'] as String;
     return FestSet(
-      id: idStr.hashCode,
+      id: j['id'] as String,
       day: j['day'] as String,
       stage: j['stage'] as String,
       artist: j['artist'] as String,

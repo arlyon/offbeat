@@ -60,6 +60,16 @@ pub enum GossipMessage {
 // dispatch_message
 // ---------------------------------------------------------------------------
 
+/// Result of dispatching a gossip message, carrying any info needed for
+/// notifications that the caller cannot derive from the original message.
+pub enum DispatchResult {
+    /// No extra info needed for notification.
+    Ok,
+    /// An encrypted chat was decrypted; carries the plaintext topic so the
+    /// caller can notify chat watchers.
+    DecryptedChat { topic: String },
+}
+
 /// Dispatch an incoming gossip message to the appropriate handler.
 ///
 /// - `FestivalUpdate` → verifies Ed25519 signature and applies the Yrs update.
@@ -71,7 +81,7 @@ pub fn dispatch_message(
     db: &Database,
     msg: GossipMessage,
     festival_public_key: &[u8; 32],
-) -> anyhow::Result<()> {
+) -> anyhow::Result<DispatchResult> {
     match msg {
         GossipMessage::FestivalUpdate {
             doc_id,
@@ -99,7 +109,9 @@ pub fn dispatch_message(
             let plaintext = crypto::decrypt(&group_key, &encrypted)?;
             let chat: ChatMessage = serde_json::from_slice(&plaintext)
                 .map_err(|e| anyhow::anyhow!("deserialise chat: {e}"))?;
+            let topic = chat.topic.clone();
             db.save_chat_message(&chat)?;
+            return Ok(DispatchResult::DecryptedChat { topic });
         }
 
         GossipMessage::SyncResponse {
@@ -125,7 +137,7 @@ pub fn dispatch_message(
         }
     }
 
-    Ok(())
+    Ok(DispatchResult::Ok)
 }
 
 // ---------------------------------------------------------------------------
@@ -172,6 +184,14 @@ impl GossipManager {
     pub fn unsubscribe(&mut self, topic_id: TopicId) {
         self.subscriptions.remove(&topic_id);
         self.receivers.remove(&topic_id);
+    }
+
+    /// Get the number of gossip neighbors for a given topic.
+    pub fn neighbor_count(&self, topic_id: &TopicId) -> usize {
+        self.receivers
+            .get(topic_id)
+            .map(|r| r.neighbors().count())
+            .unwrap_or(0)
     }
 
     /// Broadcast raw bytes to all peers on the given topic.
@@ -236,7 +256,8 @@ async fn handle_wire_bytes(
         None => return Ok(()),
     };
 
-    dispatch_message(doc_manager, db, gossip_msg, &festival_public_key)
+    dispatch_message(doc_manager, db, gossip_msg, &festival_public_key)?;
+    Ok(())
 }
 
 /// Decode a GossipEnvelope into a GossipMessage, performing DB key lookups

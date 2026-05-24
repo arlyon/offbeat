@@ -63,7 +63,15 @@ message RelayServerMessage {
     SvDiffResponse sv_diff = 5;
     ChatDiffResponse chat_diff = 6;
     RelayError error = 7;
+    RelayHello hello = 8;
   }
+}
+
+// Sent by the DO immediately on WebSocket connection.
+// Contains the DO's deterministic endpoint_id so the client
+// can register it as a known peer.
+message RelayHello {
+  string endpoint_id = 1;   // hex-encoded 32-byte Ed25519 public key
 }
 
 message AuthOk {

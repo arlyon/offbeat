@@ -20,6 +20,7 @@ class GanttView extends StatefulWidget {
   final List<Stage> stages;
   final List<Day> days;
   final DateTime now;
+  final void Function(String setId)? onStar;
 
   const GanttView({
     super.key,
@@ -27,6 +28,7 @@ class GanttView extends StatefulWidget {
     required this.stages,
     required this.days,
     required this.now,
+    this.onStar,
   });
 
   @override
@@ -385,6 +387,7 @@ class _GanttViewState extends State<GanttView> {
                                   ? _vScrollController.offset
                                   : 0.0,
                               rowHeight: rh,
+                              onStar: widget.onStar,
                             ),
                           ),
                         ),
@@ -603,6 +606,7 @@ class _GanttContent extends StatelessWidget {
   final int startMin;
   final double vertOffset;
   final double rowHeight;
+  final void Function(String setId)? onStar;
 
   const _GanttContent({
     required this.tx,
@@ -618,6 +622,7 @@ class _GanttContent extends StatelessWidget {
     required this.startMin,
     required this.vertOffset,
     required this.rowHeight,
+    this.onStar,
   });
 
   @override
@@ -660,6 +665,7 @@ class _GanttContent extends StatelessWidget {
             startMin: startMin,
             vertOffset: vertOffset,
             rowHeight: rowHeight,
+            onStar: onStar,
           ),
         ),
       ],
@@ -772,6 +778,7 @@ class _StageRows extends StatelessWidget {
   final int startMin;
   final double vertOffset;
   final double rowHeight;
+  final void Function(String setId)? onStar;
 
   const _StageRows({
     required this.tx,
@@ -782,6 +789,7 @@ class _StageRows extends StatelessWidget {
     required this.startMin,
     required this.vertOffset,
     required this.rowHeight,
+    this.onStar,
   });
 
   @override
@@ -811,6 +819,7 @@ class _StageRows extends StatelessWidget {
                           tx: tx,
                           isLast: i == stages.length - 1,
                           startMin: startMin,
+                          onStar: onStar,
                         ),
                       );
                     }),
@@ -859,6 +868,7 @@ class _SingleStageRow extends StatelessWidget {
   final double tx;
   final bool isLast;
   final int startMin;
+  final void Function(String setId)? onStar;
 
   const _SingleStageRow({
     required this.stage,
@@ -866,6 +876,7 @@ class _SingleStageRow extends StatelessWidget {
     required this.tx,
     required this.isLast,
     required this.startMin,
+    this.onStar,
   });
 
   @override
@@ -921,7 +932,7 @@ class _SingleStageRow extends StatelessWidget {
             top: 6,
             bottom: 6,
             width: s.dur * ganttPxPerMin,
-            child: _SetBlock(set: s, stageColor: stageColor),
+            child: _SetBlock(set: s, stageColor: stageColor, onStar: onStar),
           ),
       ],
     );
@@ -933,8 +944,9 @@ class _SingleStageRow extends StatelessWidget {
 class _SetBlock extends StatelessWidget {
   final FestSet set;
   final Color stageColor;
+  final void Function(String setId)? onStar;
 
-  const _SetBlock({required this.set, required this.stageColor});
+  const _SetBlock({required this.set, required this.stageColor, this.onStar});
 
   @override
   Widget build(BuildContext context) {

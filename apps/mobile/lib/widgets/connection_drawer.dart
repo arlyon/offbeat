@@ -527,6 +527,18 @@ class _SubscriptionRow extends StatelessWidget {
                     ),
                   ),
                 ),
+              Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: Text(
+                    '${resource.peerCount}P',
+                    style: const TextStyle(
+                      fontFamily: 'JetBrainsMono',
+                      fontSize: 9,
+                      color: colorFg3,
+                      height: 1,
+                    ),
+                  ),
+                ),
               Text(
                 '${resource.messagesReceived}\u2193 ${resource.messagesSent}\u2191',
                 style: const TextStyle(

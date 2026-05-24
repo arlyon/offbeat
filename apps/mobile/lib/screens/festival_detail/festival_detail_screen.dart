@@ -23,6 +23,7 @@ class FestivalDetailScreen extends StatefulWidget {
   final List<FestSet>? sets;
   final bool loading;
   final DateTime now;
+  final void Function(String setId)? onStar;
 
   const FestivalDetailScreen({
     super.key,
@@ -32,6 +33,7 @@ class FestivalDetailScreen extends StatefulWidget {
     this.days,
     this.sets,
     this.loading = false,
+    this.onStar,
   });
 
   @override
@@ -88,16 +90,17 @@ class _FestivalDetailScreenState extends State<FestivalDetailScreen> {
   Widget _buildView(List<Stage> stages, List<Day> days, List<FestSet> sets) {
     switch (_view) {
       case FestDetailView.gantt:
-        return GanttView(sets: sets, stages: stages, days: days, now: widget.now);
+        return GanttView(sets: sets, stages: stages, days: days, now: widget.now, onStar: widget.onStar);
       case FestDetailView.dayTabs:
         return DayTabsView(
           sets: sets,
           stages: stages,
           days: days,
           festivalWhere: widget.festival.where,
+          onStar: widget.onStar,
         );
       case FestDetailView.stageTabs:
-        return StageTabsView(sets: sets, stages: stages, days: days);
+        return StageTabsView(sets: sets, stages: stages, days: days, onStar: widget.onStar);
       case FestDetailView.filters:
         return FilterView(sets: sets, stages: stages, days: days);
       case FestDetailView.clashRadar:

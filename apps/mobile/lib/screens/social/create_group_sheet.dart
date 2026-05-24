@@ -10,12 +10,14 @@ class CreateGroupSheet extends StatefulWidget {
   final String festivalName;
   final void Function(String name) onCreate;
   final void Function(String code) onJoin;
+  final VoidCallback? onScanQr;
 
   const CreateGroupSheet({
     super.key,
     required this.festivalName,
     required this.onCreate,
     required this.onJoin,
+    this.onScanQr,
   });
 
   @override
@@ -402,7 +404,8 @@ class _CreateGroupSheetState extends State<CreateGroupSheet> {
                 color: Colors.transparent,
                 child: InkWell(
                   onTap: () {
-                    // QR scanning — future feature
+                    Navigator.pop(context);
+                    widget.onScanQr?.call();
                   },
                   child: const Padding(
                     padding: EdgeInsets.symmetric(vertical: 12, horizontal: 16),

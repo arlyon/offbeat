@@ -12,7 +12,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file offbeat/v1/gossip.proto.
  */
 export const file_offbeat_v1_gossip: GenFile = /*@__PURE__*/
-  fileDesc("ChdvZmZiZWF0L3YxL2dvc3NpcC5wcm90bxIKb2ZmYmVhdC52MSL3AgoOR29zc2lwRW52ZWxvcGUSNQoPZmVzdGl2YWxfdXBkYXRlGAEgASgLMhoub2ZmYmVhdC52MS5GZXN0aXZhbFVwZGF0ZUgAEi8KDGdyb3VwX3VwZGF0ZRgCIAEoCzIXLm9mZmJlYXQudjEuR3JvdXBVcGRhdGVIABInCgRjaGF0GAMgASgLMhcub2ZmYmVhdC52MS5DaGF0TWVzc2FnZUgAEjYKDmVuY3J5cHRlZF9jaGF0GAQgASgLMhwub2ZmYmVhdC52MS5FbmNyeXB0ZWRQYXlsb2FkSAASLwoMc3luY19yZXF1ZXN0GAUgASgLMhcub2ZmYmVhdC52MS5TeW5jUmVxdWVzdEgAEjEKDXN5bmNfcmVzcG9uc2UYBiABKAsyGC5vZmZiZWF0LnYxLlN5bmNSZXNwb25zZUgAEi0KC3N5bmNfdXBkYXRlGAcgASgLMhYub2ZmYmVhdC52MS5TeW5jVXBkYXRlSABCCQoHcGF5bG9hZCJRCg5GZXN0aXZhbFVwZGF0ZRIOCgZkb2NfaWQYASABKAkSLwoNc2lnbmVkX3VwZGF0ZRgCIAEoCzIYLm9mZmJlYXQudjEuU2lnbmVkVXBkYXRlIkYKC0dyb3VwVXBkYXRlEg4KBmRvY19pZBgBIAEoCRIRCgllbmNyeXB0ZWQYAiABKAwSFAoMZ3JvdXBfa2V5X2lkGAMgASgJIjsKEEVuY3J5cHRlZFBheWxvYWQSEQoJZW5jcnlwdGVkGAEgASgMEhQKDGdyb3VwX2tleV9pZBgCIAEoCSJJCgtTeW5jUmVxdWVzdBIOCgZkb2NfaWQYASABKAkSFAoMZW5jcnlwdGVkX3N2GAIgASgMEhQKDGdyb3VwX2tleV9pZBgDIAEoCSJMCgxTeW5jUmVzcG9uc2USDgoGZG9jX2lkGAEgASgJEhYKDmVuY3J5cHRlZF9kaWZmGAIgASgMEhQKDGdyb3VwX2tleV9pZBgDIAEoCSJKCgpTeW5jVXBkYXRlEg4KBmRvY19pZBgBIAEoCRIWCg5lbmNyeXB0ZWRfZGlmZhgCIAEoDBIUCgxncm91cF9rZXlfaWQYAyABKAliBnByb3RvMw", [file_offbeat_v1_types]);
+  fileDesc("ChdvZmZiZWF0L3YxL2dvc3NpcC5wcm90bxIKb2ZmYmVhdC52MSL3AgoOR29zc2lwRW52ZWxvcGUSNQoPZmVzdGl2YWxfdXBkYXRlGAEgASgLMhoub2ZmYmVhdC52MS5GZXN0aXZhbFVwZGF0ZUgAEi8KDGdyb3VwX3VwZGF0ZRgCIAEoCzIXLm9mZmJlYXQudjEuR3JvdXBVcGRhdGVIABInCgRjaGF0GAMgASgLMhcub2ZmYmVhdC52MS5DaGF0TWVzc2FnZUgAEjYKDmVuY3J5cHRlZF9jaGF0GAQgASgLMhwub2ZmYmVhdC52MS5FbmNyeXB0ZWRQYXlsb2FkSAASLwoMc3luY19yZXF1ZXN0GAUgASgLMhcub2ZmYmVhdC52MS5TeW5jUmVxdWVzdEgAEjEKDXN5bmNfcmVzcG9uc2UYBiABKAsyGC5vZmZiZWF0LnYxLlN5bmNSZXNwb25zZUgAEi0KC3N5bmNfdXBkYXRlGAcgASgLMhYub2ZmYmVhdC52MS5TeW5jVXBkYXRlSABCCQoHcGF5bG9hZCJRCg5GZXN0aXZhbFVwZGF0ZRIOCgZkb2NfaWQYASABKAkSLwoNc2lnbmVkX3VwZGF0ZRgCIAEoCzIYLm9mZmJlYXQudjEuU2lnbmVkVXBkYXRlIkYKC0dyb3VwVXBkYXRlEg4KBmRvY19pZBgBIAEoCRIRCgllbmNyeXB0ZWQYAiABKAwSFAoMZ3JvdXBfa2V5X2lkGAMgASgJIjsKEEVuY3J5cHRlZFBheWxvYWQSEQoJZW5jcnlwdGVkGAEgASgMEhQKDGdyb3VwX2tleV9pZBgCIAEoCSJJCgtTeW5jUmVxdWVzdBIOCgZkb2NfaWQYASABKAkSFAoMZW5jcnlwdGVkX3N2GAIgASgMEhQKDGdyb3VwX2tleV9pZBgDIAEoCSJMCgxTeW5jUmVzcG9uc2USDgoGZG9jX2lkGAEgASgJEhYKDmVuY3J5cHRlZF9kaWZmGAIgASgMEhQKDGdyb3VwX2tleV9pZBgDIAEoCSJKCgpTeW5jVXBkYXRlEg4KBmRvY19pZBgBIAEoCRIWCg5lbmNyeXB0ZWRfZGlmZhgCIAEoDBIUCgxncm91cF9rZXlfaWQYAyABKAkiNwoOR3JvdXBIYW5kc2hha2USFQoNc2Vzc2lvbl9ub25jZRgBIAEoDBIOCgZ0b2tlbnMYAiADKAwiRAoWR3JvdXBIYW5kc2hha2VSZXNwb25zZRIqCgZvZmZlcnMYASADKAsyGi5vZmZiZWF0LnYxLkdyb3VwU3luY09mZmVyIk4KDkdyb3VwU3luY09mZmVyEhAKCGdyb3VwX2lkGAEgASgJEhQKDGVuY3J5cHRlZF9zdhgCIAEoDBIUCgxncm91cF9rZXlfaWQYAyABKAliBnByb3RvMw", [file_offbeat_v1_types]);
 
 /**
  * @generated from message offbeat.v1.GossipEnvelope
@@ -226,4 +226,80 @@ export type SyncUpdate = Message<"offbeat.v1.SyncUpdate"> & {
  */
 export const SyncUpdateSchema: GenMessage<SyncUpdate> = /*@__PURE__*/
   messageDesc(file_offbeat_v1_gossip, 6);
+
+/**
+ * P2P group discovery handshake
+ *
+ * @generated from message offbeat.v1.GroupHandshake
+ */
+export type GroupHandshake = Message<"offbeat.v1.GroupHandshake"> & {
+  /**
+   * 16 random bytes
+   *
+   * @generated from field: bytes session_nonce = 1;
+   */
+  sessionNonce: Uint8Array;
+
+  /**
+   * blake3(key || "hs" || nonce) per group
+   *
+   * @generated from field: repeated bytes tokens = 2;
+   */
+  tokens: Uint8Array[];
+};
+
+/**
+ * Describes the message offbeat.v1.GroupHandshake.
+ * Use `create(GroupHandshakeSchema)` to create a new message.
+ */
+export const GroupHandshakeSchema: GenMessage<GroupHandshake> = /*@__PURE__*/
+  messageDesc(file_offbeat_v1_gossip, 7);
+
+/**
+ * @generated from message offbeat.v1.GroupHandshakeResponse
+ */
+export type GroupHandshakeResponse = Message<"offbeat.v1.GroupHandshakeResponse"> & {
+  /**
+   * @generated from field: repeated offbeat.v1.GroupSyncOffer offers = 1;
+   */
+  offers: GroupSyncOffer[];
+};
+
+/**
+ * Describes the message offbeat.v1.GroupHandshakeResponse.
+ * Use `create(GroupHandshakeResponseSchema)` to create a new message.
+ */
+export const GroupHandshakeResponseSchema: GenMessage<GroupHandshakeResponse> = /*@__PURE__*/
+  messageDesc(file_offbeat_v1_gossip, 8);
+
+/**
+ * @generated from message offbeat.v1.GroupSyncOffer
+ */
+export type GroupSyncOffer = Message<"offbeat.v1.GroupSyncOffer"> & {
+  /**
+   * @generated from field: string group_id = 1;
+   */
+  groupId: string;
+
+  /**
+   * encrypt(group_key, yrs_state_vector)
+   *
+   * @generated from field: bytes encrypted_sv = 2;
+   */
+  encryptedSv: Uint8Array;
+
+  /**
+   * blake3(group_key) first 16 bytes hex
+   *
+   * @generated from field: string group_key_id = 3;
+   */
+  groupKeyId: string;
+};
+
+/**
+ * Describes the message offbeat.v1.GroupSyncOffer.
+ * Use `create(GroupSyncOfferSchema)` to create a new message.
+ */
+export const GroupSyncOfferSchema: GenMessage<GroupSyncOffer> = /*@__PURE__*/
+  messageDesc(file_offbeat_v1_gossip, 9);
 

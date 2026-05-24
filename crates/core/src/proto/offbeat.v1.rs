@@ -106,6 +106,32 @@ pub struct SyncUpdate {
     #[prost(string, tag = "3")]
     pub group_key_id: ::prost::alloc::string::String,
 }
+/// P2P group discovery handshake
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GroupHandshake {
+    /// 16 random bytes
+    #[prost(bytes = "vec", tag = "1")]
+    pub session_nonce: ::prost::alloc::vec::Vec<u8>,
+    /// blake3(key || "hs" || nonce) per group
+    #[prost(bytes = "vec", repeated, tag = "2")]
+    pub tokens: ::prost::alloc::vec::Vec<::prost::alloc::vec::Vec<u8>>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GroupHandshakeResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub offers: ::prost::alloc::vec::Vec<GroupSyncOffer>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GroupSyncOffer {
+    #[prost(string, tag = "1")]
+    pub group_id: ::prost::alloc::string::String,
+    /// encrypt(group_key, yrs_state_vector)
+    #[prost(bytes = "vec", tag = "2")]
+    pub encrypted_sv: ::prost::alloc::vec::Vec<u8>,
+    /// blake3(group_key) first 16 bytes hex
+    #[prost(string, tag = "3")]
+    pub group_key_id: ::prost::alloc::string::String,
+}
 /// Client -> Server
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RelayClientMessage {
@@ -196,7 +222,7 @@ pub struct ChatCatchupRequest {
 /// Server -> Client
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RelayServerMessage {
-    #[prost(oneof = "relay_server_message::Msg", tags = "1, 2, 3, 4, 5, 6, 7")]
+    #[prost(oneof = "relay_server_message::Msg", tags = "1, 2, 3, 4, 5, 6, 7, 8")]
     pub msg: ::core::option::Option<relay_server_message::Msg>,
 }
 /// Nested message and enum types in `RelayServerMessage`.
@@ -217,7 +243,18 @@ pub mod relay_server_message {
         ChatDiff(super::ChatDiffResponse),
         #[prost(message, tag = "7")]
         Error(super::RelayError),
+        #[prost(message, tag = "8")]
+        Hello(super::RelayHello),
     }
+}
+/// Sent by the DO immediately on WebSocket connection.
+/// Contains the DO's deterministic endpoint_id so the client
+/// can register it as a known peer.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RelayHello {
+    /// hex-encoded 32-byte Ed25519 public key
+    #[prost(string, tag = "1")]
+    pub endpoint_id: ::prost::alloc::string::String,
 }
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct AuthOk {

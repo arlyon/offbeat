@@ -6,7 +6,7 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `convert_sync_status`, `parse_json_array`, `read_lineup_from_doc`, `read_weather_from_doc`, `snapshot_transport`
+// These functions are ignored because they are not marked as `pub`: `convert_sync_status`, `parse_json_array`, `peer_entry_to_dto`, `read_lineup_from_doc`, `read_weather_from_doc`, `snapshot_transport`
 
 /// Generate a fresh random 32-byte group key.
 Future<Uint8List> generateGroupKey() =>
@@ -43,7 +43,8 @@ abstract class AppNode implements RustOpaqueInterface {
   static Future<AppNode> create({required String dbPath}) =>
       RustLib.instance.api.crateApiAppNodeCreate(dbPath: dbPath);
 
-  /// Create a new group and return its ID + shareable invite payload.
+  /// Create a new group, register resources, subscribe, and broadcast
+  /// the initial state. Returns the group ID + shareable invite payload.
   Future<GroupCreateResultDto> createGroup({
     required String festivalId,
     required String name,
@@ -89,6 +90,15 @@ abstract class AppNode implements RustOpaqueInterface {
   /// Return the local identity (user_id + optional display_name).
   Future<IdentityDto> getIdentity();
 
+  /// Reconstruct the invite payload URI for an existing group.
+  ///
+  /// Returns `offbeat://group/{festival_id}/{group_id}/{base64url(key)}`
+  /// or `None` if the group is not found.
+  Future<String?> getInvitePayload({
+    required String groupId,
+    required String festivalId,
+  });
+
   /// Read the lineup from the local Yrs doc for a festival.
   ///
   /// The Yrs doc at `festival/{id}/state` has separate root-map keys:
@@ -97,6 +107,12 @@ abstract class AppNode implements RustOpaqueInterface {
   ///
   /// Returns `None` if no lineup data has synced yet.
   Future<LineupDto?> getLineup({required String festivalId});
+
+  /// Return the number of active direct peers (those with gossip status "active").
+  Future<int> getPeerCount();
+
+  /// Return a snapshot of all known peers for the UI.
+  Future<List<PeerStatusInfo>> getPeerList();
 
   /// Get the hex-encoded Ed25519 public key of the local identity.
   Future<String> getPublicKeyHex();
@@ -112,7 +128,8 @@ abstract class AppNode implements RustOpaqueInterface {
   /// Returns `None` if no weather data has synced yet.
   Future<WeatherForecastDto?> getWeather({required String festivalId});
 
-  /// Join an existing group from an invite payload.
+  /// Join an existing group, register resources, subscribe, and trigger
+  /// SV exchange + chat catchup.
   Future<GroupJoinResultDto> joinGroup({
     required String invitePayload,
     required String displayName,
@@ -182,6 +199,12 @@ abstract class AppNode implements RustOpaqueInterface {
   /// subscribe + catch-up to the SyncOrchestrator.
   Future<void> subscribeFestival({required String festivalId});
 
+  /// Subscribe to all group topics for a festival and sync state.
+  ///
+  /// Loads groups from SQLite, registers their resources (state + chat),
+  /// and triggers a sync via the WS relay if connected.
+  Future<void> subscribeGroups({required String festivalId});
+
   /// Toggle a star on a set. Returns the new starred state (`true` = now starred).
   Future<bool> toggleStar({required String festivalId, required String setId});
 
@@ -205,6 +228,10 @@ abstract class AppNode implements RustOpaqueInterface {
   /// The stream emits the current lineup immediately, then re-emits whenever
   /// the lineup document is updated (via sync or local changes).
   Future<Stream<LineupDto?>> watchLineup({required String festivalId});
+
+  /// Watch the peer list — polls every second and emits whenever the
+  /// snapshot changes (peer count or any entry status).
+  Future<Stream<List<PeerStatusInfo>>> watchPeerList();
 
   /// Watch sync status — emits current status, then updates on changes.
   Future<Stream<SyncStatusDto>> watchSyncStatus();
@@ -349,15 +376,18 @@ class ChatMessageDto {
 
 class GroupCreateResultDto {
   final String groupId;
+  final String festivalId;
   final String invitePayload;
 
   const GroupCreateResultDto({
     required this.groupId,
+    required this.festivalId,
     required this.invitePayload,
   });
 
   @override
-  int get hashCode => groupId.hashCode ^ invitePayload.hashCode;
+  int get hashCode =>
+      groupId.hashCode ^ festivalId.hashCode ^ invitePayload.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -365,6 +395,7 @@ class GroupCreateResultDto {
       other is GroupCreateResultDto &&
           runtimeType == other.runtimeType &&
           groupId == other.groupId &&
+          festivalId == other.festivalId &&
           invitePayload == other.invitePayload;
 }
 
@@ -388,18 +419,20 @@ class GroupInfo {
 
 class GroupJoinResultDto {
   final String groupId;
+  final String festivalId;
 
-  const GroupJoinResultDto({required this.groupId});
+  const GroupJoinResultDto({required this.groupId, required this.festivalId});
 
   @override
-  int get hashCode => groupId.hashCode;
+  int get hashCode => groupId.hashCode ^ festivalId.hashCode;
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
       other is GroupJoinResultDto &&
           runtimeType == other.runtimeType &&
-          groupId == other.groupId;
+          groupId == other.groupId &&
+          festivalId == other.festivalId;
 }
 
 class GroupMemberDto {
@@ -683,6 +716,46 @@ class LineupStageDto {
           order == other.order;
 }
 
+/// A simplified view of a tracked peer for the Flutter UI.
+class PeerStatusInfo {
+  final String endpointId;
+
+  /// Discovery source: "crdt", "ble", or "gossip".
+  final String source;
+
+  /// Gossip connection status: "unknown", "joining", "active", or "stale".
+  final String status;
+  final bool bleVisible;
+  final String? relayUrl;
+
+  const PeerStatusInfo({
+    required this.endpointId,
+    required this.source,
+    required this.status,
+    required this.bleVisible,
+    this.relayUrl,
+  });
+
+  @override
+  int get hashCode =>
+      endpointId.hashCode ^
+      source.hashCode ^
+      status.hashCode ^
+      bleVisible.hashCode ^
+      relayUrl.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is PeerStatusInfo &&
+          runtimeType == other.runtimeType &&
+          endpointId == other.endpointId &&
+          source == other.source &&
+          status == other.status &&
+          bleVisible == other.bleVisible &&
+          relayUrl == other.relayUrl;
+}
+
 class RelayStatusDto {
   final bool connected;
   final bool authenticated;
@@ -727,6 +800,9 @@ class ResourceSyncStatusDto {
   final int messagesReceived;
   final int messagesSent;
 
+  /// Number of peers subscribed to this topic on the relay.
+  final int peerCount;
+
   const ResourceSyncStatusDto({
     required this.id,
     required this.syncing,
@@ -734,6 +810,7 @@ class ResourceSyncStatusDto {
     this.error,
     required this.messagesReceived,
     required this.messagesSent,
+    required this.peerCount,
   });
 
   @override
@@ -743,7 +820,8 @@ class ResourceSyncStatusDto {
       lastSynced.hashCode ^
       error.hashCode ^
       messagesReceived.hashCode ^
-      messagesSent.hashCode;
+      messagesSent.hashCode ^
+      peerCount.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -755,7 +833,8 @@ class ResourceSyncStatusDto {
           lastSynced == other.lastSynced &&
           error == other.error &&
           messagesReceived == other.messagesReceived &&
-          messagesSent == other.messagesSent;
+          messagesSent == other.messagesSent &&
+          peerCount == other.peerCount;
 }
 
 /// Overall sync status for the node.

@@ -213,6 +213,14 @@ impl ResourceRegistry {
         self.register(Resource::festival_state(festival_id, public_key));
     }
 
+    /// Register all groups for a festival (state + chat resources per group).
+    pub fn register_groups(&mut self, groups: &[(String, [u8; 32])]) {
+        for (_, key) in groups {
+            self.register(Resource::group_state(*key));
+            self.register(Resource::group_chat(*key));
+        }
+    }
+
     /// Return all resources sorted by priority (lowest value first).
     pub fn by_priority(&self) -> Vec<&Resource> {
         let mut v: Vec<&Resource> = self.resources.values().collect();
@@ -352,5 +360,29 @@ mod tests {
         assert!(Priority::CRITICAL < Priority::HIGH);
         assert!(Priority::HIGH < Priority::MEDIUM);
         assert!(Priority::MEDIUM < Priority::LOW);
+    }
+
+    #[test]
+    fn register_groups_produces_state_and_chat() {
+        let mut reg = ResourceRegistry::new();
+        let groups = vec![
+            ("group-a".to_string(), [3u8; 32]),
+            ("group-b".to_string(), [4u8; 32]),
+        ];
+        reg.register_groups(&groups);
+
+        let ordered = reg.by_priority();
+        assert_eq!(ordered.len(), 4, "2 groups × 2 resources = 4");
+
+        let priorities: Vec<Priority> = ordered.iter().map(|r| r.priority()).collect();
+        // GroupState (HIGH) should come before GroupChat (MEDIUM)
+        for window in priorities.windows(2) {
+            assert!(window[0] <= window[1], "priorities not sorted: {:?}", priorities);
+        }
+
+        assert_eq!(priorities[0], Priority::HIGH);
+        assert_eq!(priorities[1], Priority::HIGH);
+        assert_eq!(priorities[2], Priority::MEDIUM);
+        assert_eq!(priorities[3], Priority::MEDIUM);
     }
 }

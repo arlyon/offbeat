@@ -29,6 +29,8 @@ pub struct ResourceSyncStatus {
     pub messages_received: u32,
     /// Number of messages sent on this resource.
     pub messages_sent: u32,
+    /// Number of peers subscribed to this topic on the relay.
+    pub peer_count: u32,
 }
 
 /// Overall sync status.

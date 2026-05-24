@@ -2,6 +2,7 @@
 
 import 'dart:async';
 import 'dart:io';
+import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
@@ -95,6 +96,9 @@ class _OffbeatShellState extends State<_OffbeatShell>
   LineupDto? _lineup;
   bool _lineupLoading = true;
 
+  // Starred set IDs (loaded from Rust SQLite)
+  Set<String> _starredSetIds = {};
+
   // Weather state
   StreamSubscription<WeatherForecastDto?>? _weatherSub;
   WeatherForecastDto? _weather;
@@ -119,6 +123,10 @@ class _OffbeatShellState extends State<_OffbeatShell>
   List<String> _adminKeys = [];
   List<AdminRequest> _pendingRequests = [];
   String _adminRequestStatus = ''; // '', 'pending', 'already_admin'
+
+  // Deep link handling
+  StreamSubscription<Uri>? _deepLinkSub;
+  final _appLinks = AppLinks();
 
   final _authService = AuthService();
   final _adminService = AdminService();
@@ -148,6 +156,7 @@ class _OffbeatShellState extends State<_OffbeatShell>
     });
     _initNode();
     _loadFestivals();
+    _initDeepLinks();
   }
 
   @override
@@ -156,8 +165,46 @@ class _OffbeatShellState extends State<_OffbeatShell>
     _lineupSub?.cancel();
     _weatherSub?.cancel();
     _transportSub?.cancel();
+    _deepLinkSub?.cancel();
     _navController.dispose();
     super.dispose();
+  }
+
+  void _initDeepLinks() {
+    // Handle links that opened the app
+    _appLinks.getInitialLink().then((uri) {
+      if (uri != null) _handleDeepLink(uri);
+    });
+    // Handle links while app is running
+    _deepLinkSub = _appLinks.uriLinkStream.listen((uri) {
+      _handleDeepLink(uri);
+    });
+  }
+
+  void _handleDeepLink(Uri uri) {
+    // Expected: offbeat://group/{festival_id}/{group_id}/{key}
+    if (uri.scheme != 'offbeat') return;
+    if (uri.host != 'group' && !uri.path.startsWith('/group/')) return;
+
+    final node = _node;
+    if (node == null) return;
+
+    final invitePayload = uri.toString();
+    final displayName = _displayName ?? 'anon';
+
+    node.joinGroup(invitePayload: invitePayload, displayName: displayName).then((result) {
+      if (!mounted) return;
+      // If we know the festival_id, navigate to that festival
+      if (result.festivalId.isNotEmpty) {
+        final fest = _festivals.firstWhere(
+          (f) => f.id == result.festivalId,
+          orElse: () => _festivals.first,
+        );
+        _onFestivalTap(fest);
+      }
+    }).catchError((e) {
+      debugPrint('deep link join failed: $e');
+    });
   }
 
   Future<void> _initNode() async {
@@ -243,6 +290,7 @@ class _OffbeatShellState extends State<_OffbeatShell>
       _lineup = null;
       _lineupLoading = true;
       _weather = null;
+      _starredSetIds = {};
     });
     await _initNode();
     _loadFestivals();
@@ -333,6 +381,7 @@ class _OffbeatShellState extends State<_OffbeatShell>
       _lineup = null;
       _lineupLoading = true;
       _weather = null;
+      _starredSetIds = {};
     });
   }
 
@@ -353,7 +402,16 @@ class _OffbeatShellState extends State<_OffbeatShell>
       _lineup = null;
       _lineupLoading = true;
       _weather = null;
+      _starredSetIds = {};
     });
+
+    // Load persisted stars from Rust SQLite
+    try {
+      final stars = await node.getStars(festivalId: fest.id);
+      if (mounted) {
+        setState(() => _starredSetIds = stars.toSet());
+      }
+    } catch (_) {}
 
     // Start watching the lineup stream
     final stream = await node.watchLineup(festivalId: fest.id);
@@ -439,6 +497,9 @@ class _OffbeatShellState extends State<_OffbeatShell>
 
       // Subscribe to the state topic and request catchup from seq 0
       await node.subscribeFestival(festivalId: festivalId);
+
+      // Subscribe to all group topics for this festival
+      await node.subscribeGroups(festivalId: festivalId);
     } catch (e, st) {
       print('relay error: $e\n$st');
     }
@@ -614,6 +675,7 @@ class _OffbeatShellState extends State<_OffbeatShell>
         _lineup = null;
         _lineupLoading = true;
         _weather = null;
+        _starredSetIds = {};
       });
     });
   }
@@ -826,6 +888,40 @@ class _OffbeatShellState extends State<_OffbeatShell>
     }
   }
 
+  Future<void> _handleStarToggle(String setId) async {
+    final node = _node;
+    final fest = _selectedFestival;
+    if (node == null || fest == null) return;
+
+    try {
+      final nowStarred = await node.toggleStar(festivalId: fest.id, setId: setId);
+      if (!mounted) return;
+      setState(() {
+        if (nowStarred) {
+          _starredSetIds.add(setId);
+        } else {
+          _starredSetIds.remove(setId);
+        }
+      });
+      _flushStarsToGroups(node, fest.id);
+    } catch (e) {
+      debugPrint('star toggle failed: $e');
+    }
+  }
+
+  /// Push current stars to all groups for this festival (fire-and-forget).
+  void _flushStarsToGroups(AppNode node, String festivalId) async {
+    try {
+      final stars = await node.getStars(festivalId: festivalId);
+      final groups = await node.getGroups(festivalId: festivalId);
+      for (final group in groups) {
+        node.updateSharedStars(groupId: group.id, setIds: stars);
+      }
+    } catch (e) {
+      debugPrint('flush stars failed: $e');
+    }
+  }
+
   Widget _buildScheduleTab() {
     final lineup = _lineup;
 
@@ -850,16 +946,20 @@ class _OffbeatShellState extends State<_OffbeatShell>
         'year': d.year,
       })).toList();
 
-      sets = lineup.sets.map((s) => FestSet.fromJson({
-        'id': s.id,
-        'day': s.day,
-        'stage': s.stage,
-        'artist': s.artist,
-        'startMin': s.startMin,
-        'durationMin': s.durationMin,
-        'genre': s.genre,
-        'cancelled': s.cancelled,
-      })).toList();
+      sets = lineup.sets.map((s) {
+        final festSet = FestSet.fromJson({
+          'id': s.id,
+          'day': s.day,
+          'stage': s.stage,
+          'artist': s.artist,
+          'startMin': s.startMin,
+          'durationMin': s.durationMin,
+          'genre': s.genre,
+          'cancelled': s.cancelled,
+        });
+        festSet.starred = _starredSetIds.contains(s.id);
+        return festSet;
+      }).toList();
 
     }
 
@@ -871,6 +971,7 @@ class _OffbeatShellState extends State<_OffbeatShell>
       days: days,
       sets: sets,
       loading: _lineupLoading,
+      onStar: _handleStarToggle,
     );
   }
 

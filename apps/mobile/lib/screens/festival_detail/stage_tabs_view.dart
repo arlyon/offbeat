@@ -17,12 +17,14 @@ class StageTabsView extends StatefulWidget {
   final List<FestSet> sets;
   final List<Stage> stages;
   final List<Day> days;
+  final void Function(String setId)? onStar;
 
   const StageTabsView({
     super.key,
     required this.sets,
     required this.stages,
     required this.days,
+    this.onStar,
   });
 
   @override
@@ -32,20 +34,18 @@ class StageTabsView extends StatefulWidget {
 class _StageTabsViewState extends State<StageTabsView> {
   late String _stageId;
   late String _day;
-  late List<FestSet> _sets;
 
   @override
   void initState() {
     super.initState();
     _day = widget.days.first.id;
     _stageId = widget.stages.first.id;
-    _sets = List.from(widget.sets);
   }
 
   Stage get _currentStage => widget.stages.firstWhere((s) => s.id == _stageId);
 
   List<FestSet> get _dayStageSets {
-    final s = _sets.where((s) => s.day == _day && s.stage == _stageId).toList();
+    final s = widget.sets.where((s) => s.day == _day && s.stage == _stageId).toList();
     s.sort((a, b) => a.t.compareTo(b.t));
     return s;
   }
@@ -55,7 +55,7 @@ class _StageTabsViewState extends State<StageTabsView> {
     for (final s in widget.stages) {
       m[s.id] = [];
     }
-    for (final s in _sets.where((s) => s.day == _day)) {
+    for (final s in widget.sets.where((s) => s.day == _day)) {
       m[s.stage]?.add(s);
     }
     return m;
@@ -87,7 +87,7 @@ class _StageTabsViewState extends State<StageTabsView> {
           stages: widget.stages,
           activeStageId: _stageId,
           day: _day,
-          sets: _sets,
+          sets: widget.sets,
           onStageChanged: (id) => setState(() => _stageId = id),
           setsByStage: setsByStage,
         ),
@@ -135,14 +135,7 @@ class _StageTabsViewState extends State<StageTabsView> {
                 (s) => _BigCard(
                   set: s,
                   stage: stage,
-                  onStar: () => setState(() {
-                    final idx = _sets.indexWhere((x) => x.id == s.id);
-                    if (idx >= 0) {
-                      _sets[idx] = _sets[idx].copyWith(
-                        starred: !_sets[idx].starred,
-                      );
-                    }
-                  }),
+                  onStar: () => widget.onStar?.call(s.id),
                 ),
               ),
               const SizedBox(height: 80),

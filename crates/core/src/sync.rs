@@ -12,7 +12,7 @@ use std::sync::{Arc, RwLock};
 use crate::chat::ChatManager;
 use crate::db::Database;
 use crate::doc_manager::DocManager;
-use crate::gossip_manager::{dispatch_message, GossipMessage};
+use crate::gossip_manager::{DispatchResult, dispatch_message, GossipManager, GossipMessage};
 use crate::key_cache::GroupKeyCache;
 use crate::notifier::ResourceNotifier;
 use crate::proto;
@@ -116,6 +116,8 @@ pub struct SyncOrchestrator {
     festival_public_keys: Arc<RwLock<HashMap<String, [u8; 32]>>>,
     /// In-memory group key cache.
     key_cache: Arc<GroupKeyCache>,
+    /// Gossip manager for querying per-topic neighbor counts.
+    gossip_manager: Option<Arc<tokio::sync::Mutex<GossipManager>>>,
 }
 
 impl SyncOrchestrator {
@@ -135,7 +137,13 @@ impl SyncOrchestrator {
             notifier,
             festival_public_keys: Arc::new(RwLock::new(HashMap::new())),
             key_cache: Arc::new(GroupKeyCache::new()),
+            gossip_manager: None,
         }
+    }
+
+    /// Set the gossip manager for querying per-topic neighbor counts.
+    pub fn set_gossip_manager(&mut self, gm: Arc<tokio::sync::Mutex<GossipManager>>) {
+        self.gossip_manager = Some(gm);
     }
 
     /// Cache a festival's Ed25519 public key.
@@ -150,16 +158,27 @@ impl SyncOrchestrator {
         self.festival_public_keys.read().ok()?.get(festival_id).copied()
     }
 
+    /// Pre-populate the group key cache so incoming messages can be decoded
+    /// without a DB round-trip.
+    pub fn cache_group_key(&self, group_id: &str, key: [u8; 32]) {
+        self.key_cache.insert(group_id, key);
+    }
+
     /// Build the resources list from the registry for sync status notifications.
     fn build_resource_statuses(&self) -> Vec<crate::notifier::ResourceSyncStatus> {
         let Ok(reg) = self.registry.read() else {
             return vec![];
         };
+        let gm = self.gossip_manager.as_ref().and_then(|gm| gm.try_lock().ok());
         reg.by_priority()
             .iter()
             .map(|r| {
                 let id = r.id();
                 let (received, sent) = self.notifier.get_counters(&id);
+                let peer_count = gm
+                    .as_ref()
+                    .map(|gm| gm.neighbor_count(&r.topic()) as u32)
+                    .unwrap_or(0);
                 crate::notifier::ResourceSyncStatus {
                     id,
                     syncing: false,
@@ -167,6 +186,7 @@ impl SyncOrchestrator {
                     error: None,
                     messages_received: received,
                     messages_sent: sent,
+                    peer_count,
                 }
             })
             .collect()
@@ -298,10 +318,10 @@ impl SyncOrchestrator {
         };
 
         let pk = festival_pk.unwrap_or([0u8; 32]);
-        dispatch_message(&self.doc_manager, &self.db, msg.clone(), &pk)?;
+        let result = dispatch_message(&self.doc_manager, &self.db, msg.clone(), &pk)?;
 
         // Notify watchers and record counters after successful dispatch
-        match msg {
+        match &msg {
             GossipMessage::FestivalUpdate { doc_id, .. } => {
                 self.notifier.record_received(doc_id);
                 self.notifier.notify_doc(doc_id);
@@ -317,7 +337,10 @@ impl SyncOrchestrator {
                 self.notifier.notify_chat(&chat_msg.topic);
             }
             GossipMessage::EncryptedChat { .. } => {
-                // Encrypted chat doesn't have direct topic info after decryption
+                if let DispatchResult::DecryptedChat { topic } = &result {
+                    self.notifier.record_received(topic);
+                    self.notifier.notify_chat(topic);
+                }
             }
             GossipMessage::SyncRequest { .. } => {}
         }

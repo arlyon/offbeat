@@ -16,6 +16,7 @@ class DayTabsView extends StatefulWidget {
   final List<Stage> stages;
   final List<Day> days;
   final String festivalWhere;
+  final void Function(String setId)? onStar;
 
   const DayTabsView({
     super.key,
@@ -23,6 +24,7 @@ class DayTabsView extends StatefulWidget {
     required this.stages,
     required this.days,
     required this.festivalWhere,
+    this.onStar,
   });
 
   @override
@@ -31,13 +33,11 @@ class DayTabsView extends StatefulWidget {
 
 class _DayTabsViewState extends State<DayTabsView> {
   late String _day;
-  late List<FestSet> _sets;
 
   @override
   void initState() {
     super.initState();
     _day = widget.days.first.id;
-    _sets = List.from(widget.sets);
   }
 
   Map<String, Stage> get _stageById {
@@ -45,7 +45,7 @@ class _DayTabsViewState extends State<DayTabsView> {
   }
 
   List<FestSet> get _daySets {
-    final s = _sets.where((s) => s.day == _day).toList();
+    final s = widget.sets.where((s) => s.day == _day).toList();
     s.sort((a, b) => a.t.compareTo(b.t));
     return s;
   }
@@ -103,7 +103,7 @@ class _DayTabsViewState extends State<DayTabsView> {
         if (widget.days.length > 1)
           _DayTabStrip(
             days: widget.days,
-            sets: _sets,
+            sets: widget.sets,
             activeDay: _day,
             onDayChanged: (d) => setState(() => _day = d),
           ),
@@ -118,14 +118,7 @@ class _DayTabsViewState extends State<DayTabsView> {
                   (s) => SetRow(
                     set: s,
                     stage: stageById[s.stage]!,
-                    onStar: (id) => setState(() {
-                      final idx = _sets.indexWhere((x) => x.id == id);
-                      if (idx >= 0) {
-                        _sets[idx] = _sets[idx].copyWith(
-                          starred: !_sets[idx].starred,
-                        );
-                      }
-                    }),
+                    onStar: widget.onStar,
                   ),
                 ),
               ],
@@ -299,7 +292,7 @@ class _HourHeader extends StatelessWidget {
 class SetRow extends StatelessWidget {
   final FestSet set;
   final Stage stage;
-  final void Function(int id)? onStar;
+  final void Function(String setId)? onStar;
 
   const SetRow({
     super.key,
