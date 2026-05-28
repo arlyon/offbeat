@@ -6,7 +6,7 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../theme/tokens.dart';
-import '../src/rust/api.dart';
+import '../src/rust/api/dto.dart';
 import '../widgets/dotted_border.dart';
 import 'weather_pill.dart' show wmoIcon;
 

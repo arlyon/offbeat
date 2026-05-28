@@ -111,10 +111,10 @@ async fn wait_for_msg(
             anyhow::bail!("Timeout waiting for {label}");
         }
         let server_msg = recv_server_msg(stream, remaining.as_secs().max(1)).await?;
-        if let Some(ref msg) = server_msg.msg {
-            if matcher(msg) {
-                return Ok(msg.clone());
-            }
+        if let Some(ref msg) = server_msg.msg
+            && matcher(msg)
+        {
+            return Ok(msg.clone());
         }
     }
 }

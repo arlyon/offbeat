@@ -26,6 +26,7 @@
 
 // Section: imports
 
+use crate::api::dto::*;
 use crate::api::*;
 use flutter_rust_bridge::for_generated::byteorder::{NativeEndian, ReadBytesExt, WriteBytesExt};
 use flutter_rust_bridge::for_generated::{transform_result_dco, Lifetimeable, Lockable};
@@ -39,7 +40,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1473851032;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 244991422;
 
 // Section: executor
 
@@ -1439,7 +1440,7 @@ fn wire__crate__api__AppNode_publish_chat_impl(
                 flutter_rust_bridge::for_generated::RustAutoOpaqueInner<AppNode>,
             >>::sse_decode(&mut deserializer);
             let api_topic = <String>::sse_decode(&mut deserializer);
-            let api_message = <crate::api::ChatMessageDto>::sse_decode(&mut deserializer);
+            let api_message = <crate::api::dto::ChatMessageDto>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
@@ -1821,6 +1822,57 @@ fn wire__crate__api__AppNode_sign_message_impl(
                         Ok(output_ok)
                     })(),
                 )
+            }
+        },
+    )
+}
+fn wire__crate__api__AppNode_start_ble_sync_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "AppNode_start_ble_sync",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<AppNode>,
+            >>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let mut api_that_guard = None;
+                    let decode_indices_ =
+                        flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
+                            flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                &api_that, 0, true,
+                            ),
+                        ]);
+                    for i in decode_indices_ {
+                        match i {
+                            0 => api_that_guard = Some(api_that.lockable_decode_sync_ref_mut()),
+                            _ => unreachable!(),
+                        }
+                    }
+                    let mut api_that_guard = api_that_guard.unwrap();
+                    let output_ok = Result::<_, ()>::Ok({
+                        crate::api::AppNode::start_ble_sync(&mut *api_that_guard);
+                    })?;
+                    Ok(output_ok)
+                })())
             }
         },
     )
@@ -2213,7 +2265,7 @@ fn wire__crate__api__AppNode_watch_chat_impl(
             let api_topic = <String>::sse_decode(&mut deserializer);
             let api_last_n = <u32>::sse_decode(&mut deserializer);
             let api_sink = <StreamSink<
-                Vec<crate::api::ChatMessageDto>,
+                Vec<crate::api::dto::ChatMessageDto>,
                 flutter_rust_bridge::for_generated::SseCodec,
             >>::sse_decode(&mut deserializer);
             deserializer.end();
@@ -2274,7 +2326,7 @@ fn wire__crate__api__AppNode_watch_group_state_impl(
             >>::sse_decode(&mut deserializer);
             let api_group_id = <String>::sse_decode(&mut deserializer);
             let api_sink = <StreamSink<
-                crate::api::GroupStateDto,
+                crate::api::dto::GroupStateDto,
                 flutter_rust_bridge::for_generated::SseCodec,
             >>::sse_decode(&mut deserializer);
             deserializer.end();
@@ -2334,7 +2386,7 @@ fn wire__crate__api__AppNode_watch_lineup_impl(
             >>::sse_decode(&mut deserializer);
             let api_festival_id = <String>::sse_decode(&mut deserializer);
             let api_sink = <StreamSink<
-                Option<crate::api::LineupDto>,
+                Option<crate::api::dto::LineupDto>,
                 flutter_rust_bridge::for_generated::SseCodec,
             >>::sse_decode(&mut deserializer);
             deserializer.end();
@@ -2393,7 +2445,7 @@ fn wire__crate__api__AppNode_watch_peer_list_impl(
                 flutter_rust_bridge::for_generated::RustAutoOpaqueInner<AppNode>,
             >>::sse_decode(&mut deserializer);
             let api_sink = <StreamSink<
-                Vec<crate::api::PeerStatusInfo>,
+                Vec<crate::api::dto::PeerStatusInfo>,
                 flutter_rust_bridge::for_generated::SseCodec,
             >>::sse_decode(&mut deserializer);
             deserializer.end();
@@ -2449,7 +2501,7 @@ fn wire__crate__api__AppNode_watch_sync_status_impl(
                 flutter_rust_bridge::for_generated::RustAutoOpaqueInner<AppNode>,
             >>::sse_decode(&mut deserializer);
             let api_sink = <StreamSink<
-                crate::api::SyncStatusDto,
+                crate::api::dto::SyncStatusDto,
                 flutter_rust_bridge::for_generated::SseCodec,
             >>::sse_decode(&mut deserializer);
             deserializer.end();
@@ -2505,7 +2557,7 @@ fn wire__crate__api__AppNode_watch_transport_status_impl(
                 flutter_rust_bridge::for_generated::RustAutoOpaqueInner<AppNode>,
             >>::sse_decode(&mut deserializer);
             let api_sink = <StreamSink<
-                crate::api::TransportStatusDto,
+                crate::api::dto::TransportStatusDto,
                 flutter_rust_bridge::for_generated::SseCodec,
             >>::sse_decode(&mut deserializer);
             deserializer.end();
@@ -2564,7 +2616,7 @@ fn wire__crate__api__AppNode_watch_weather_impl(
             >>::sse_decode(&mut deserializer);
             let api_festival_id = <String>::sse_decode(&mut deserializer);
             let api_sink = <StreamSink<
-                Option<crate::api::WeatherForecastDto>,
+                Option<crate::api::dto::WeatherForecastDto>,
                 flutter_rust_bridge::for_generated::SseCodec,
             >>::sse_decode(&mut deserializer);
             deserializer.end();
@@ -2597,7 +2649,60 @@ fn wire__crate__api__AppNode_watch_weather_impl(
         },
     )
 }
-fn wire__crate__api__generate_group_key_impl(
+fn wire__crate__api__dto__convert_sync_status_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "convert_sync_status",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_status = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<SyncStatus>,
+            >>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let mut api_status_guard = None;
+                    let decode_indices_ =
+                        flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
+                            flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                &api_status,
+                                0,
+                                false,
+                            ),
+                        ]);
+                    for i in decode_indices_ {
+                        match i {
+                            0 => api_status_guard = Some(api_status.lockable_decode_sync_ref()),
+                            _ => unreachable!(),
+                        }
+                    }
+                    let api_status_guard = api_status_guard.unwrap();
+                    let output_ok = Result::<_, ()>::Ok(crate::api::dto::convert_sync_status(
+                        &*api_status_guard,
+                    ))?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__dto__generate_group_key_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -2622,14 +2727,14 @@ fn wire__crate__api__generate_group_key_impl(
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, ()>((move || {
-                    let output_ok = Result::<_, ()>::Ok(crate::api::generate_group_key())?;
+                    let output_ok = Result::<_, ()>::Ok(crate::api::dto::generate_group_key())?;
                     Ok(output_ok)
                 })())
             }
         },
     )
 }
-fn wire__crate__api__group_id_from_key_impl(
+fn wire__crate__api__dto__group_id_from_key_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -2656,7 +2761,7 @@ fn wire__crate__api__group_id_from_key_impl(
             move |context| {
                 transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
                     (move || {
-                        let output_ok = crate::api::group_id_from_key(api_key)?;
+                        let output_ok = crate::api::dto::group_id_from_key(api_key)?;
                         Ok(output_ok)
                     })(),
                 )
@@ -2698,11 +2803,213 @@ fn wire__crate__api__init_app_impl(
         },
     )
 }
+fn wire__crate__api__dto__peer_entry_to_dto_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "peer_entry_to_dto",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_entry = <PeerEntry>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let output_ok =
+                        Result::<_, ()>::Ok(crate::api::dto::peer_entry_to_dto(api_entry))?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__dto__read_lineup_from_doc_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "read_lineup_from_doc",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_dm = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<DocManager>,
+            >>::sse_decode(&mut deserializer);
+            let api_doc_id = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let mut api_dm_guard = None;
+                    let decode_indices_ =
+                        flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
+                            flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                &api_dm, 0, false,
+                            ),
+                        ]);
+                    for i in decode_indices_ {
+                        match i {
+                            0 => api_dm_guard = Some(api_dm.lockable_decode_sync_ref()),
+                            _ => unreachable!(),
+                        }
+                    }
+                    let api_dm_guard = api_dm_guard.unwrap();
+                    let output_ok = Result::<_, ()>::Ok(crate::api::dto::read_lineup_from_doc(
+                        &*api_dm_guard,
+                        &api_doc_id,
+                    ))?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__dto__read_weather_from_doc_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "read_weather_from_doc",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_dm = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<DocManager>,
+            >>::sse_decode(&mut deserializer);
+            let api_doc_id = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let mut api_dm_guard = None;
+                    let decode_indices_ =
+                        flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
+                            flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                &api_dm, 0, false,
+                            ),
+                        ]);
+                    for i in decode_indices_ {
+                        match i {
+                            0 => api_dm_guard = Some(api_dm.lockable_decode_sync_ref()),
+                            _ => unreachable!(),
+                        }
+                    }
+                    let api_dm_guard = api_dm_guard.unwrap();
+                    let output_ok = Result::<_, ()>::Ok(crate::api::dto::read_weather_from_doc(
+                        &*api_dm_guard,
+                        &api_doc_id,
+                    ))?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__dto__snapshot_transport_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "snapshot_transport",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_node = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<OffbeatNode>,
+            >>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let mut api_node_guard = None;
+                    let decode_indices_ =
+                        flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
+                            flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                &api_node, 0, false,
+                            ),
+                        ]);
+                    for i in decode_indices_ {
+                        match i {
+                            0 => api_node_guard = Some(api_node.lockable_decode_sync_ref()),
+                            _ => unreachable!(),
+                        }
+                    }
+                    let api_node_guard = api_node_guard.unwrap();
+                    let output_ok =
+                        Result::<_, ()>::Ok(crate::api::dto::snapshot_transport(&*api_node_guard))?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 
 // Section: related_funcs
 
 flutter_rust_bridge::frb_generated_moi_arc_impl_value!(
     flutter_rust_bridge::for_generated::RustAutoOpaqueInner<AppNode>
+);
+flutter_rust_bridge::frb_generated_moi_arc_impl_value!(
+    flutter_rust_bridge::for_generated::RustAutoOpaqueInner<DocManager>
+);
+flutter_rust_bridge::frb_generated_moi_arc_impl_value!(
+    flutter_rust_bridge::for_generated::RustAutoOpaqueInner<OffbeatNode>
+);
+flutter_rust_bridge::frb_generated_moi_arc_impl_value!(
+    flutter_rust_bridge::for_generated::RustAutoOpaqueInner<PeerEntry>
+);
+flutter_rust_bridge::frb_generated_moi_arc_impl_value!(
+    flutter_rust_bridge::for_generated::RustAutoOpaqueInner<SyncStatus>
 );
 
 // Section: dart2rust
@@ -2725,6 +3032,16 @@ impl SseDecode for AppNode {
     }
 }
 
+impl SseDecode for PeerEntry {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <RustOpaqueMoi<
+            flutter_rust_bridge::for_generated::RustAutoOpaqueInner<PeerEntry>,
+        >>::sse_decode(deserializer);
+        return flutter_rust_bridge::for_generated::rust_auto_opaque_decode_owned(inner);
+    }
+}
+
 impl SseDecode for RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<AppNode>> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -2734,37 +3051,47 @@ impl SseDecode for RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpa
 }
 
 impl SseDecode
-    for StreamSink<crate::api::GroupStateDto, flutter_rust_bridge::for_generated::SseCodec>
+    for RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<DocManager>>
 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
-        let mut inner = <String>::sse_decode(deserializer);
-        return StreamSink::deserialize(inner);
+        let mut inner = <usize>::sse_decode(deserializer);
+        return decode_rust_opaque_moi(inner);
     }
 }
 
 impl SseDecode
-    for StreamSink<Vec<crate::api::ChatMessageDto>, flutter_rust_bridge::for_generated::SseCodec>
+    for RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<OffbeatNode>>
 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
-        let mut inner = <String>::sse_decode(deserializer);
-        return StreamSink::deserialize(inner);
+        let mut inner = <usize>::sse_decode(deserializer);
+        return decode_rust_opaque_moi(inner);
     }
 }
 
 impl SseDecode
-    for StreamSink<Vec<crate::api::PeerStatusInfo>, flutter_rust_bridge::for_generated::SseCodec>
+    for RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<PeerEntry>>
 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
-        let mut inner = <String>::sse_decode(deserializer);
-        return StreamSink::deserialize(inner);
+        let mut inner = <usize>::sse_decode(deserializer);
+        return decode_rust_opaque_moi(inner);
     }
 }
 
 impl SseDecode
-    for StreamSink<Option<crate::api::LineupDto>, flutter_rust_bridge::for_generated::SseCodec>
+    for RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<SyncStatus>>
+{
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <usize>::sse_decode(deserializer);
+        return decode_rust_opaque_moi(inner);
+    }
+}
+
+impl SseDecode
+    for StreamSink<crate::api::dto::GroupStateDto, flutter_rust_bridge::for_generated::SseCodec>
 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -2775,7 +3102,7 @@ impl SseDecode
 
 impl SseDecode
     for StreamSink<
-        Option<crate::api::WeatherForecastDto>,
+        Vec<crate::api::dto::ChatMessageDto>,
         flutter_rust_bridge::for_generated::SseCodec,
     >
 {
@@ -2787,7 +3114,10 @@ impl SseDecode
 }
 
 impl SseDecode
-    for StreamSink<crate::api::SyncStatusDto, flutter_rust_bridge::for_generated::SseCodec>
+    for StreamSink<
+        Vec<crate::api::dto::PeerStatusInfo>,
+        flutter_rust_bridge::for_generated::SseCodec,
+    >
 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -2797,7 +3127,43 @@ impl SseDecode
 }
 
 impl SseDecode
-    for StreamSink<crate::api::TransportStatusDto, flutter_rust_bridge::for_generated::SseCodec>
+    for StreamSink<Option<crate::api::dto::LineupDto>, flutter_rust_bridge::for_generated::SseCodec>
+{
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <String>::sse_decode(deserializer);
+        return StreamSink::deserialize(inner);
+    }
+}
+
+impl SseDecode
+    for StreamSink<
+        Option<crate::api::dto::WeatherForecastDto>,
+        flutter_rust_bridge::for_generated::SseCodec,
+    >
+{
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <String>::sse_decode(deserializer);
+        return StreamSink::deserialize(inner);
+    }
+}
+
+impl SseDecode
+    for StreamSink<crate::api::dto::SyncStatusDto, flutter_rust_bridge::for_generated::SseCodec>
+{
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <String>::sse_decode(deserializer);
+        return StreamSink::deserialize(inner);
+    }
+}
+
+impl SseDecode
+    for StreamSink<
+        crate::api::dto::TransportStatusDto,
+        flutter_rust_bridge::for_generated::SseCodec,
+    >
 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -2814,13 +3180,13 @@ impl SseDecode for String {
     }
 }
 
-impl SseDecode for crate::api::AttestationDto {
+impl SseDecode for crate::api::dto::AttestationDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_message = <String>::sse_decode(deserializer);
         let mut var_signature = <String>::sse_decode(deserializer);
         let mut var_issuer = <String>::sse_decode(deserializer);
-        return crate::api::AttestationDto {
+        return crate::api::dto::AttestationDto {
             message: var_message,
             signature: var_signature,
             issuer: var_issuer,
@@ -2828,19 +3194,19 @@ impl SseDecode for crate::api::AttestationDto {
     }
 }
 
-impl SseDecode for crate::api::AuthStateDto {
+impl SseDecode for crate::api::dto::AuthStateDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_state = <String>::sse_decode(deserializer);
         let mut var_expiresAt = <Option<String>>::sse_decode(deserializer);
-        return crate::api::AuthStateDto {
+        return crate::api::dto::AuthStateDto {
             state: var_state,
             expires_at: var_expiresAt,
         };
     }
 }
 
-impl SseDecode for crate::api::BleStatusDto {
+impl SseDecode for crate::api::dto::BleStatusDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_active = <bool>::sse_decode(deserializer);
@@ -2848,8 +3214,8 @@ impl SseDecode for crate::api::BleStatusDto {
         let mut var_txBytesPerSec = <u64>::sse_decode(deserializer);
         let mut var_rxBytesPerSec = <u64>::sse_decode(deserializer);
         let mut var_retransmits = <u64>::sse_decode(deserializer);
-        let mut var_peers = <Vec<crate::api::TransportPeerDto>>::sse_decode(deserializer);
-        return crate::api::BleStatusDto {
+        let mut var_peers = <Vec<crate::api::dto::TransportPeerDto>>::sse_decode(deserializer);
+        return crate::api::dto::BleStatusDto {
             active: var_active,
             peer_count: var_peerCount,
             tx_bytes_per_sec: var_txBytesPerSec,
@@ -2867,7 +3233,7 @@ impl SseDecode for bool {
     }
 }
 
-impl SseDecode for crate::api::ChatMessageDto {
+impl SseDecode for crate::api::dto::ChatMessageDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_id = <String>::sse_decode(deserializer);
@@ -2877,7 +3243,7 @@ impl SseDecode for crate::api::ChatMessageDto {
         let mut var_topic = <String>::sse_decode(deserializer);
         let mut var_stageId = <Option<String>>::sse_decode(deserializer);
         let mut var_timestamp = <String>::sse_decode(deserializer);
-        return crate::api::ChatMessageDto {
+        return crate::api::dto::ChatMessageDto {
             id: var_id,
             user_id: var_userId,
             display_name: var_displayName,
@@ -2896,13 +3262,13 @@ impl SseDecode for f64 {
     }
 }
 
-impl SseDecode for crate::api::GroupCreateResultDto {
+impl SseDecode for crate::api::dto::GroupCreateResultDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_groupId = <String>::sse_decode(deserializer);
         let mut var_festivalId = <String>::sse_decode(deserializer);
         let mut var_invitePayload = <String>::sse_decode(deserializer);
-        return crate::api::GroupCreateResultDto {
+        return crate::api::dto::GroupCreateResultDto {
             group_id: var_groupId,
             festival_id: var_festivalId,
             invite_payload: var_invitePayload,
@@ -2910,31 +3276,31 @@ impl SseDecode for crate::api::GroupCreateResultDto {
     }
 }
 
-impl SseDecode for crate::api::GroupInfo {
+impl SseDecode for crate::api::dto::GroupInfo {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_id = <String>::sse_decode(deserializer);
         let mut var_name = <String>::sse_decode(deserializer);
-        return crate::api::GroupInfo {
+        return crate::api::dto::GroupInfo {
             id: var_id,
             name: var_name,
         };
     }
 }
 
-impl SseDecode for crate::api::GroupJoinResultDto {
+impl SseDecode for crate::api::dto::GroupJoinResultDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_groupId = <String>::sse_decode(deserializer);
         let mut var_festivalId = <String>::sse_decode(deserializer);
-        return crate::api::GroupJoinResultDto {
+        return crate::api::dto::GroupJoinResultDto {
             group_id: var_groupId,
             festival_id: var_festivalId,
         };
     }
 }
 
-impl SseDecode for crate::api::GroupMemberDto {
+impl SseDecode for crate::api::dto::GroupMemberDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_userId = <String>::sse_decode(deserializer);
@@ -2942,7 +3308,7 @@ impl SseDecode for crate::api::GroupMemberDto {
         let mut var_status = <String>::sse_decode(deserializer);
         let mut var_stageId = <Option<String>>::sse_decode(deserializer);
         let mut var_customLocation = <Option<String>>::sse_decode(deserializer);
-        return crate::api::GroupMemberDto {
+        return crate::api::dto::GroupMemberDto {
             user_id: var_userId,
             display_name: var_displayName,
             status: var_status,
@@ -2952,14 +3318,14 @@ impl SseDecode for crate::api::GroupMemberDto {
     }
 }
 
-impl SseDecode for crate::api::GroupPinDto {
+impl SseDecode for crate::api::dto::GroupPinDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_id = <String>::sse_decode(deserializer);
         let mut var_label = <String>::sse_decode(deserializer);
         let mut var_location = <String>::sse_decode(deserializer);
         let mut var_pinnedBy = <String>::sse_decode(deserializer);
-        return crate::api::GroupPinDto {
+        return crate::api::dto::GroupPinDto {
             id: var_id,
             label: var_label,
             location: var_location,
@@ -2968,13 +3334,13 @@ impl SseDecode for crate::api::GroupPinDto {
     }
 }
 
-impl SseDecode for crate::api::GroupStateDto {
+impl SseDecode for crate::api::dto::GroupStateDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_name = <String>::sse_decode(deserializer);
-        let mut var_members = <Vec<crate::api::GroupMemberDto>>::sse_decode(deserializer);
-        let mut var_pins = <Vec<crate::api::GroupPinDto>>::sse_decode(deserializer);
-        return crate::api::GroupStateDto {
+        let mut var_members = <Vec<crate::api::dto::GroupMemberDto>>::sse_decode(deserializer);
+        let mut var_pins = <Vec<crate::api::dto::GroupPinDto>>::sse_decode(deserializer);
+        return crate::api::dto::GroupStateDto {
             name: var_name,
             members: var_members,
             pins: var_pins,
@@ -2982,7 +3348,7 @@ impl SseDecode for crate::api::GroupStateDto {
     }
 }
 
-impl SseDecode for crate::api::HourlyWeatherDto {
+impl SseDecode for crate::api::dto::HourlyWeatherDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_time = <Vec<String>>::sse_decode(deserializer);
@@ -2990,7 +3356,7 @@ impl SseDecode for crate::api::HourlyWeatherDto {
         let mut var_precipitationProbability = <Vec<f64>>::sse_decode(deserializer);
         let mut var_weatherCode = <Vec<u32>>::sse_decode(deserializer);
         let mut var_windSpeed10M = <Vec<f64>>::sse_decode(deserializer);
-        return crate::api::HourlyWeatherDto {
+        return crate::api::dto::HourlyWeatherDto {
             time: var_time,
             temperature_2m: var_temperature2M,
             precipitation_probability: var_precipitationProbability,
@@ -3007,19 +3373,19 @@ impl SseDecode for i32 {
     }
 }
 
-impl SseDecode for crate::api::IdentityDto {
+impl SseDecode for crate::api::dto::IdentityDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_userId = <String>::sse_decode(deserializer);
         let mut var_displayName = <Option<String>>::sse_decode(deserializer);
-        return crate::api::IdentityDto {
+        return crate::api::dto::IdentityDto {
             user_id: var_userId,
             display_name: var_displayName,
         };
     }
 }
 
-impl SseDecode for crate::api::LineupDayDto {
+impl SseDecode for crate::api::dto::LineupDayDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_id = <String>::sse_decode(deserializer);
@@ -3027,7 +3393,7 @@ impl SseDecode for crate::api::LineupDayDto {
         let mut var_num = <i32>::sse_decode(deserializer);
         let mut var_month = <String>::sse_decode(deserializer);
         let mut var_year = <i32>::sse_decode(deserializer);
-        return crate::api::LineupDayDto {
+        return crate::api::dto::LineupDayDto {
             id: var_id,
             label: var_label,
             num: var_num,
@@ -3037,13 +3403,13 @@ impl SseDecode for crate::api::LineupDayDto {
     }
 }
 
-impl SseDecode for crate::api::LineupDto {
+impl SseDecode for crate::api::dto::LineupDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
-        let mut var_stages = <Vec<crate::api::LineupStageDto>>::sse_decode(deserializer);
-        let mut var_days = <Vec<crate::api::LineupDayDto>>::sse_decode(deserializer);
-        let mut var_sets = <Vec<crate::api::LineupSetDto>>::sse_decode(deserializer);
-        return crate::api::LineupDto {
+        let mut var_stages = <Vec<crate::api::dto::LineupStageDto>>::sse_decode(deserializer);
+        let mut var_days = <Vec<crate::api::dto::LineupDayDto>>::sse_decode(deserializer);
+        let mut var_sets = <Vec<crate::api::dto::LineupSetDto>>::sse_decode(deserializer);
+        return crate::api::dto::LineupDto {
             stages: var_stages,
             days: var_days,
             sets: var_sets,
@@ -3051,7 +3417,7 @@ impl SseDecode for crate::api::LineupDto {
     }
 }
 
-impl SseDecode for crate::api::LineupSetDto {
+impl SseDecode for crate::api::dto::LineupSetDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_id = <String>::sse_decode(deserializer);
@@ -3062,7 +3428,7 @@ impl SseDecode for crate::api::LineupSetDto {
         let mut var_durationMin = <i32>::sse_decode(deserializer);
         let mut var_genre = <String>::sse_decode(deserializer);
         let mut var_cancelled = <bool>::sse_decode(deserializer);
-        return crate::api::LineupSetDto {
+        return crate::api::dto::LineupSetDto {
             id: var_id,
             day: var_day,
             stage: var_stage,
@@ -3075,7 +3441,7 @@ impl SseDecode for crate::api::LineupSetDto {
     }
 }
 
-impl SseDecode for crate::api::LineupStageDto {
+impl SseDecode for crate::api::dto::LineupStageDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_id = <String>::sse_decode(deserializer);
@@ -3083,7 +3449,7 @@ impl SseDecode for crate::api::LineupStageDto {
         let mut var_short = <String>::sse_decode(deserializer);
         let mut var_color = <String>::sse_decode(deserializer);
         let mut var_order = <i32>::sse_decode(deserializer);
-        return crate::api::LineupStageDto {
+        return crate::api::dto::LineupStageDto {
             id: var_id,
             name: var_name,
             short: var_short,
@@ -3105,97 +3471,97 @@ impl SseDecode for Vec<String> {
     }
 }
 
-impl SseDecode for Vec<crate::api::ChatMessageDto> {
+impl SseDecode for Vec<crate::api::dto::ChatMessageDto> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut len_ = <i32>::sse_decode(deserializer);
         let mut ans_ = Vec::with_capacity(len_ as usize);
         for idx_ in 0..len_ {
-            ans_.push(<crate::api::ChatMessageDto>::sse_decode(deserializer));
+            ans_.push(<crate::api::dto::ChatMessageDto>::sse_decode(deserializer));
         }
         return ans_;
     }
 }
 
-impl SseDecode for Vec<crate::api::GroupInfo> {
+impl SseDecode for Vec<crate::api::dto::GroupInfo> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut len_ = <i32>::sse_decode(deserializer);
         let mut ans_ = Vec::with_capacity(len_ as usize);
         for idx_ in 0..len_ {
-            ans_.push(<crate::api::GroupInfo>::sse_decode(deserializer));
+            ans_.push(<crate::api::dto::GroupInfo>::sse_decode(deserializer));
         }
         return ans_;
     }
 }
 
-impl SseDecode for Vec<crate::api::GroupMemberDto> {
+impl SseDecode for Vec<crate::api::dto::GroupMemberDto> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut len_ = <i32>::sse_decode(deserializer);
         let mut ans_ = Vec::with_capacity(len_ as usize);
         for idx_ in 0..len_ {
-            ans_.push(<crate::api::GroupMemberDto>::sse_decode(deserializer));
+            ans_.push(<crate::api::dto::GroupMemberDto>::sse_decode(deserializer));
         }
         return ans_;
     }
 }
 
-impl SseDecode for Vec<crate::api::GroupPinDto> {
+impl SseDecode for Vec<crate::api::dto::GroupPinDto> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut len_ = <i32>::sse_decode(deserializer);
         let mut ans_ = Vec::with_capacity(len_ as usize);
         for idx_ in 0..len_ {
-            ans_.push(<crate::api::GroupPinDto>::sse_decode(deserializer));
+            ans_.push(<crate::api::dto::GroupPinDto>::sse_decode(deserializer));
         }
         return ans_;
     }
 }
 
-impl SseDecode for Vec<crate::api::LineupDayDto> {
+impl SseDecode for Vec<crate::api::dto::LineupDayDto> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut len_ = <i32>::sse_decode(deserializer);
         let mut ans_ = Vec::with_capacity(len_ as usize);
         for idx_ in 0..len_ {
-            ans_.push(<crate::api::LineupDayDto>::sse_decode(deserializer));
+            ans_.push(<crate::api::dto::LineupDayDto>::sse_decode(deserializer));
         }
         return ans_;
     }
 }
 
-impl SseDecode for Vec<crate::api::LineupSetDto> {
+impl SseDecode for Vec<crate::api::dto::LineupSetDto> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut len_ = <i32>::sse_decode(deserializer);
         let mut ans_ = Vec::with_capacity(len_ as usize);
         for idx_ in 0..len_ {
-            ans_.push(<crate::api::LineupSetDto>::sse_decode(deserializer));
+            ans_.push(<crate::api::dto::LineupSetDto>::sse_decode(deserializer));
         }
         return ans_;
     }
 }
 
-impl SseDecode for Vec<crate::api::LineupStageDto> {
+impl SseDecode for Vec<crate::api::dto::LineupStageDto> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut len_ = <i32>::sse_decode(deserializer);
         let mut ans_ = Vec::with_capacity(len_ as usize);
         for idx_ in 0..len_ {
-            ans_.push(<crate::api::LineupStageDto>::sse_decode(deserializer));
+            ans_.push(<crate::api::dto::LineupStageDto>::sse_decode(deserializer));
         }
         return ans_;
     }
 }
 
-impl SseDecode for Vec<crate::api::PeerStatusInfo> {
+impl SseDecode for Vec<crate::api::dto::PeerStatusInfo> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut len_ = <i32>::sse_decode(deserializer);
         let mut ans_ = Vec::with_capacity(len_ as usize);
         for idx_ in 0..len_ {
-            ans_.push(<crate::api::PeerStatusInfo>::sse_decode(deserializer));
+            ans_.push(<crate::api::dto::PeerStatusInfo>::sse_decode(deserializer));
         }
         return ans_;
     }
@@ -3237,13 +3603,13 @@ impl SseDecode for Vec<u8> {
     }
 }
 
-impl SseDecode for Vec<crate::api::ResourceSyncStatusDto> {
+impl SseDecode for Vec<crate::api::dto::ResourceSyncStatusDto> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut len_ = <i32>::sse_decode(deserializer);
         let mut ans_ = Vec::with_capacity(len_ as usize);
         for idx_ in 0..len_ {
-            ans_.push(<crate::api::ResourceSyncStatusDto>::sse_decode(
+            ans_.push(<crate::api::dto::ResourceSyncStatusDto>::sse_decode(
                 deserializer,
             ));
         }
@@ -3251,13 +3617,15 @@ impl SseDecode for Vec<crate::api::ResourceSyncStatusDto> {
     }
 }
 
-impl SseDecode for Vec<crate::api::TransportPeerDto> {
+impl SseDecode for Vec<crate::api::dto::TransportPeerDto> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut len_ = <i32>::sse_decode(deserializer);
         let mut ans_ = Vec::with_capacity(len_ as usize);
         for idx_ in 0..len_ {
-            ans_.push(<crate::api::TransportPeerDto>::sse_decode(deserializer));
+            ans_.push(<crate::api::dto::TransportPeerDto>::sse_decode(
+                deserializer,
+            ));
         }
         return ans_;
     }
@@ -3274,40 +3642,42 @@ impl SseDecode for Option<String> {
     }
 }
 
-impl SseDecode for Option<crate::api::AttestationDto> {
+impl SseDecode for Option<crate::api::dto::AttestationDto> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         if (<bool>::sse_decode(deserializer)) {
-            return Some(<crate::api::AttestationDto>::sse_decode(deserializer));
+            return Some(<crate::api::dto::AttestationDto>::sse_decode(deserializer));
         } else {
             return None;
         }
     }
 }
 
-impl SseDecode for Option<crate::api::LineupDto> {
+impl SseDecode for Option<crate::api::dto::LineupDto> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         if (<bool>::sse_decode(deserializer)) {
-            return Some(<crate::api::LineupDto>::sse_decode(deserializer));
+            return Some(<crate::api::dto::LineupDto>::sse_decode(deserializer));
         } else {
             return None;
         }
     }
 }
 
-impl SseDecode for Option<crate::api::WeatherForecastDto> {
+impl SseDecode for Option<crate::api::dto::WeatherForecastDto> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         if (<bool>::sse_decode(deserializer)) {
-            return Some(<crate::api::WeatherForecastDto>::sse_decode(deserializer));
+            return Some(<crate::api::dto::WeatherForecastDto>::sse_decode(
+                deserializer,
+            ));
         } else {
             return None;
         }
     }
 }
 
-impl SseDecode for crate::api::PeerStatusInfo {
+impl SseDecode for crate::api::dto::PeerStatusInfo {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_endpointId = <String>::sse_decode(deserializer);
@@ -3315,7 +3685,7 @@ impl SseDecode for crate::api::PeerStatusInfo {
         let mut var_status = <String>::sse_decode(deserializer);
         let mut var_bleVisible = <bool>::sse_decode(deserializer);
         let mut var_relayUrl = <Option<String>>::sse_decode(deserializer);
-        return crate::api::PeerStatusInfo {
+        return crate::api::dto::PeerStatusInfo {
             endpoint_id: var_endpointId,
             source: var_source,
             status: var_status,
@@ -3325,14 +3695,14 @@ impl SseDecode for crate::api::PeerStatusInfo {
     }
 }
 
-impl SseDecode for crate::api::RelayStatusDto {
+impl SseDecode for crate::api::dto::RelayStatusDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_connected = <bool>::sse_decode(deserializer);
         let mut var_authenticated = <bool>::sse_decode(deserializer);
         let mut var_txBytesPerSec = <u64>::sse_decode(deserializer);
         let mut var_rxBytesPerSec = <u64>::sse_decode(deserializer);
-        return crate::api::RelayStatusDto {
+        return crate::api::dto::RelayStatusDto {
             connected: var_connected,
             authenticated: var_authenticated,
             tx_bytes_per_sec: var_txBytesPerSec,
@@ -3341,7 +3711,7 @@ impl SseDecode for crate::api::RelayStatusDto {
     }
 }
 
-impl SseDecode for crate::api::ResourceSyncStatusDto {
+impl SseDecode for crate::api::dto::ResourceSyncStatusDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_id = <String>::sse_decode(deserializer);
@@ -3351,7 +3721,7 @@ impl SseDecode for crate::api::ResourceSyncStatusDto {
         let mut var_messagesReceived = <u32>::sse_decode(deserializer);
         let mut var_messagesSent = <u32>::sse_decode(deserializer);
         let mut var_peerCount = <u32>::sse_decode(deserializer);
-        return crate::api::ResourceSyncStatusDto {
+        return crate::api::dto::ResourceSyncStatusDto {
             id: var_id,
             syncing: var_syncing,
             last_synced: var_lastSynced,
@@ -3363,13 +3733,14 @@ impl SseDecode for crate::api::ResourceSyncStatusDto {
     }
 }
 
-impl SseDecode for crate::api::SyncStatusDto {
+impl SseDecode for crate::api::dto::SyncStatusDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_syncing = <bool>::sse_decode(deserializer);
-        let mut var_resources = <Vec<crate::api::ResourceSyncStatusDto>>::sse_decode(deserializer);
+        let mut var_resources =
+            <Vec<crate::api::dto::ResourceSyncStatusDto>>::sse_decode(deserializer);
         let mut var_pendingOps = <u32>::sse_decode(deserializer);
-        return crate::api::SyncStatusDto {
+        return crate::api::dto::SyncStatusDto {
             syncing: var_syncing,
             resources: var_resources,
             pending_ops: var_pendingOps,
@@ -3377,26 +3748,30 @@ impl SseDecode for crate::api::SyncStatusDto {
     }
 }
 
-impl SseDecode for crate::api::TransportPeerDto {
+impl SseDecode for crate::api::dto::TransportPeerDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_deviceId = <String>::sse_decode(deserializer);
         let mut var_phase = <String>::sse_decode(deserializer);
         let mut var_connectPath = <Option<String>>::sse_decode(deserializer);
-        return crate::api::TransportPeerDto {
+        let mut var_verifiedEndpoint = <Option<String>>::sse_decode(deserializer);
+        let mut var_consecutiveFailures = <u32>::sse_decode(deserializer);
+        return crate::api::dto::TransportPeerDto {
             device_id: var_deviceId,
             phase: var_phase,
             connect_path: var_connectPath,
+            verified_endpoint: var_verifiedEndpoint,
+            consecutive_failures: var_consecutiveFailures,
         };
     }
 }
 
-impl SseDecode for crate::api::TransportStatusDto {
+impl SseDecode for crate::api::dto::TransportStatusDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
-        let mut var_relay = <crate::api::RelayStatusDto>::sse_decode(deserializer);
-        let mut var_ble = <crate::api::BleStatusDto>::sse_decode(deserializer);
-        return crate::api::TransportStatusDto {
+        let mut var_relay = <crate::api::dto::RelayStatusDto>::sse_decode(deserializer);
+        let mut var_ble = <crate::api::dto::BleStatusDto>::sse_decode(deserializer);
+        return crate::api::dto::TransportStatusDto {
             relay: var_relay,
             ble: var_ble,
         };
@@ -3436,15 +3811,15 @@ impl SseDecode for usize {
     }
 }
 
-impl SseDecode for crate::api::WeatherForecastDto {
+impl SseDecode for crate::api::dto::WeatherForecastDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_updatedAt = <String>::sse_decode(deserializer);
         let mut var_lat = <f64>::sse_decode(deserializer);
         let mut var_lon = <f64>::sse_decode(deserializer);
         let mut var_timezone = <String>::sse_decode(deserializer);
-        let mut var_hourly = <crate::api::HourlyWeatherDto>::sse_decode(deserializer);
-        return crate::api::WeatherForecastDto {
+        let mut var_hourly = <crate::api::dto::HourlyWeatherDto>::sse_decode(deserializer);
+        return crate::api::dto::WeatherForecastDto {
             updated_at: var_updatedAt,
             lat: var_lat,
             lon: var_lon,
@@ -3507,26 +3882,32 @@ fn pde_ffi_dispatcher_primary_impl(
             data_len,
         ),
         32 => wire__crate__api__AppNode_sign_message_impl(port, ptr, rust_vec_len, data_len),
-        33 => wire__crate__api__AppNode_store_attestation_impl(port, ptr, rust_vec_len, data_len),
-        34 => {
+        33 => wire__crate__api__AppNode_start_ble_sync_impl(port, ptr, rust_vec_len, data_len),
+        34 => wire__crate__api__AppNode_store_attestation_impl(port, ptr, rust_vec_len, data_len),
+        35 => {
             wire__crate__api__AppNode_subscribe_chat_topics_impl(port, ptr, rust_vec_len, data_len)
         }
-        35 => wire__crate__api__AppNode_subscribe_festival_impl(port, ptr, rust_vec_len, data_len),
-        36 => wire__crate__api__AppNode_subscribe_groups_impl(port, ptr, rust_vec_len, data_len),
-        37 => wire__crate__api__AppNode_toggle_star_impl(port, ptr, rust_vec_len, data_len),
-        38 => wire__crate__api__AppNode_update_shared_stars_impl(port, ptr, rust_vec_len, data_len),
-        39 => wire__crate__api__AppNode_watch_chat_impl(port, ptr, rust_vec_len, data_len),
-        40 => wire__crate__api__AppNode_watch_group_state_impl(port, ptr, rust_vec_len, data_len),
-        41 => wire__crate__api__AppNode_watch_lineup_impl(port, ptr, rust_vec_len, data_len),
-        42 => wire__crate__api__AppNode_watch_peer_list_impl(port, ptr, rust_vec_len, data_len),
-        43 => wire__crate__api__AppNode_watch_sync_status_impl(port, ptr, rust_vec_len, data_len),
-        44 => {
+        36 => wire__crate__api__AppNode_subscribe_festival_impl(port, ptr, rust_vec_len, data_len),
+        37 => wire__crate__api__AppNode_subscribe_groups_impl(port, ptr, rust_vec_len, data_len),
+        38 => wire__crate__api__AppNode_toggle_star_impl(port, ptr, rust_vec_len, data_len),
+        39 => wire__crate__api__AppNode_update_shared_stars_impl(port, ptr, rust_vec_len, data_len),
+        40 => wire__crate__api__AppNode_watch_chat_impl(port, ptr, rust_vec_len, data_len),
+        41 => wire__crate__api__AppNode_watch_group_state_impl(port, ptr, rust_vec_len, data_len),
+        42 => wire__crate__api__AppNode_watch_lineup_impl(port, ptr, rust_vec_len, data_len),
+        43 => wire__crate__api__AppNode_watch_peer_list_impl(port, ptr, rust_vec_len, data_len),
+        44 => wire__crate__api__AppNode_watch_sync_status_impl(port, ptr, rust_vec_len, data_len),
+        45 => {
             wire__crate__api__AppNode_watch_transport_status_impl(port, ptr, rust_vec_len, data_len)
         }
-        45 => wire__crate__api__AppNode_watch_weather_impl(port, ptr, rust_vec_len, data_len),
-        46 => wire__crate__api__generate_group_key_impl(port, ptr, rust_vec_len, data_len),
-        47 => wire__crate__api__group_id_from_key_impl(port, ptr, rust_vec_len, data_len),
-        48 => wire__crate__api__init_app_impl(port, ptr, rust_vec_len, data_len),
+        46 => wire__crate__api__AppNode_watch_weather_impl(port, ptr, rust_vec_len, data_len),
+        47 => wire__crate__api__dto__convert_sync_status_impl(port, ptr, rust_vec_len, data_len),
+        48 => wire__crate__api__dto__generate_group_key_impl(port, ptr, rust_vec_len, data_len),
+        49 => wire__crate__api__dto__group_id_from_key_impl(port, ptr, rust_vec_len, data_len),
+        50 => wire__crate__api__init_app_impl(port, ptr, rust_vec_len, data_len),
+        51 => wire__crate__api__dto__peer_entry_to_dto_impl(port, ptr, rust_vec_len, data_len),
+        52 => wire__crate__api__dto__read_lineup_from_doc_impl(port, ptr, rust_vec_len, data_len),
+        53 => wire__crate__api__dto__read_weather_from_doc_impl(port, ptr, rust_vec_len, data_len),
+        54 => wire__crate__api__dto__snapshot_transport_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -3561,7 +3942,22 @@ impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<AppNode>> for AppNode {
 }
 
 // Codec=Dco (DartCObject based), see doc to use other codecs
-impl flutter_rust_bridge::IntoDart for crate::api::AttestationDto {
+impl flutter_rust_bridge::IntoDart for FrbWrapper<PeerEntry> {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        flutter_rust_bridge::for_generated::rust_auto_opaque_encode::<_, MoiArc<_>>(self.0)
+            .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for FrbWrapper<PeerEntry> {}
+
+impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<PeerEntry>> for PeerEntry {
+    fn into_into_dart(self) -> FrbWrapper<PeerEntry> {
+        self.into()
+    }
+}
+
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::dto::AttestationDto {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
             self.message.into_into_dart().into_dart(),
@@ -3571,14 +3967,19 @@ impl flutter_rust_bridge::IntoDart for crate::api::AttestationDto {
         .into_dart()
     }
 }
-impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::AttestationDto {}
-impl flutter_rust_bridge::IntoIntoDart<crate::api::AttestationDto> for crate::api::AttestationDto {
-    fn into_into_dart(self) -> crate::api::AttestationDto {
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::dto::AttestationDto
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::dto::AttestationDto>
+    for crate::api::dto::AttestationDto
+{
+    fn into_into_dart(self) -> crate::api::dto::AttestationDto {
         self
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
-impl flutter_rust_bridge::IntoDart for crate::api::AuthStateDto {
+impl flutter_rust_bridge::IntoDart for crate::api::dto::AuthStateDto {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
             self.state.into_into_dart().into_dart(),
@@ -3587,14 +3988,16 @@ impl flutter_rust_bridge::IntoDart for crate::api::AuthStateDto {
         .into_dart()
     }
 }
-impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::AuthStateDto {}
-impl flutter_rust_bridge::IntoIntoDart<crate::api::AuthStateDto> for crate::api::AuthStateDto {
-    fn into_into_dart(self) -> crate::api::AuthStateDto {
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::dto::AuthStateDto {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::dto::AuthStateDto>
+    for crate::api::dto::AuthStateDto
+{
+    fn into_into_dart(self) -> crate::api::dto::AuthStateDto {
         self
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
-impl flutter_rust_bridge::IntoDart for crate::api::BleStatusDto {
+impl flutter_rust_bridge::IntoDart for crate::api::dto::BleStatusDto {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
             self.active.into_into_dart().into_dart(),
@@ -3607,14 +4010,16 @@ impl flutter_rust_bridge::IntoDart for crate::api::BleStatusDto {
         .into_dart()
     }
 }
-impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::BleStatusDto {}
-impl flutter_rust_bridge::IntoIntoDart<crate::api::BleStatusDto> for crate::api::BleStatusDto {
-    fn into_into_dart(self) -> crate::api::BleStatusDto {
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::dto::BleStatusDto {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::dto::BleStatusDto>
+    for crate::api::dto::BleStatusDto
+{
+    fn into_into_dart(self) -> crate::api::dto::BleStatusDto {
         self
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
-impl flutter_rust_bridge::IntoDart for crate::api::ChatMessageDto {
+impl flutter_rust_bridge::IntoDart for crate::api::dto::ChatMessageDto {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
             self.id.into_into_dart().into_dart(),
@@ -3628,14 +4033,19 @@ impl flutter_rust_bridge::IntoDart for crate::api::ChatMessageDto {
         .into_dart()
     }
 }
-impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::ChatMessageDto {}
-impl flutter_rust_bridge::IntoIntoDart<crate::api::ChatMessageDto> for crate::api::ChatMessageDto {
-    fn into_into_dart(self) -> crate::api::ChatMessageDto {
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::dto::ChatMessageDto
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::dto::ChatMessageDto>
+    for crate::api::dto::ChatMessageDto
+{
+    fn into_into_dart(self) -> crate::api::dto::ChatMessageDto {
         self
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
-impl flutter_rust_bridge::IntoDart for crate::api::GroupCreateResultDto {
+impl flutter_rust_bridge::IntoDart for crate::api::dto::GroupCreateResultDto {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
             self.group_id.into_into_dart().into_dart(),
@@ -3646,18 +4056,18 @@ impl flutter_rust_bridge::IntoDart for crate::api::GroupCreateResultDto {
     }
 }
 impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
-    for crate::api::GroupCreateResultDto
+    for crate::api::dto::GroupCreateResultDto
 {
 }
-impl flutter_rust_bridge::IntoIntoDart<crate::api::GroupCreateResultDto>
-    for crate::api::GroupCreateResultDto
+impl flutter_rust_bridge::IntoIntoDart<crate::api::dto::GroupCreateResultDto>
+    for crate::api::dto::GroupCreateResultDto
 {
-    fn into_into_dart(self) -> crate::api::GroupCreateResultDto {
+    fn into_into_dart(self) -> crate::api::dto::GroupCreateResultDto {
         self
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
-impl flutter_rust_bridge::IntoDart for crate::api::GroupInfo {
+impl flutter_rust_bridge::IntoDart for crate::api::dto::GroupInfo {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
             self.id.into_into_dart().into_dart(),
@@ -3666,14 +4076,14 @@ impl flutter_rust_bridge::IntoDart for crate::api::GroupInfo {
         .into_dart()
     }
 }
-impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::GroupInfo {}
-impl flutter_rust_bridge::IntoIntoDart<crate::api::GroupInfo> for crate::api::GroupInfo {
-    fn into_into_dart(self) -> crate::api::GroupInfo {
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::dto::GroupInfo {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::dto::GroupInfo> for crate::api::dto::GroupInfo {
+    fn into_into_dart(self) -> crate::api::dto::GroupInfo {
         self
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
-impl flutter_rust_bridge::IntoDart for crate::api::GroupJoinResultDto {
+impl flutter_rust_bridge::IntoDart for crate::api::dto::GroupJoinResultDto {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
             self.group_id.into_into_dart().into_dart(),
@@ -3683,18 +4093,18 @@ impl flutter_rust_bridge::IntoDart for crate::api::GroupJoinResultDto {
     }
 }
 impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
-    for crate::api::GroupJoinResultDto
+    for crate::api::dto::GroupJoinResultDto
 {
 }
-impl flutter_rust_bridge::IntoIntoDart<crate::api::GroupJoinResultDto>
-    for crate::api::GroupJoinResultDto
+impl flutter_rust_bridge::IntoIntoDart<crate::api::dto::GroupJoinResultDto>
+    for crate::api::dto::GroupJoinResultDto
 {
-    fn into_into_dart(self) -> crate::api::GroupJoinResultDto {
+    fn into_into_dart(self) -> crate::api::dto::GroupJoinResultDto {
         self
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
-impl flutter_rust_bridge::IntoDart for crate::api::GroupMemberDto {
+impl flutter_rust_bridge::IntoDart for crate::api::dto::GroupMemberDto {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
             self.user_id.into_into_dart().into_dart(),
@@ -3706,14 +4116,19 @@ impl flutter_rust_bridge::IntoDart for crate::api::GroupMemberDto {
         .into_dart()
     }
 }
-impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::GroupMemberDto {}
-impl flutter_rust_bridge::IntoIntoDart<crate::api::GroupMemberDto> for crate::api::GroupMemberDto {
-    fn into_into_dart(self) -> crate::api::GroupMemberDto {
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::dto::GroupMemberDto
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::dto::GroupMemberDto>
+    for crate::api::dto::GroupMemberDto
+{
+    fn into_into_dart(self) -> crate::api::dto::GroupMemberDto {
         self
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
-impl flutter_rust_bridge::IntoDart for crate::api::GroupPinDto {
+impl flutter_rust_bridge::IntoDart for crate::api::dto::GroupPinDto {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
             self.id.into_into_dart().into_dart(),
@@ -3724,14 +4139,16 @@ impl flutter_rust_bridge::IntoDart for crate::api::GroupPinDto {
         .into_dart()
     }
 }
-impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::GroupPinDto {}
-impl flutter_rust_bridge::IntoIntoDart<crate::api::GroupPinDto> for crate::api::GroupPinDto {
-    fn into_into_dart(self) -> crate::api::GroupPinDto {
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::dto::GroupPinDto {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::dto::GroupPinDto>
+    for crate::api::dto::GroupPinDto
+{
+    fn into_into_dart(self) -> crate::api::dto::GroupPinDto {
         self
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
-impl flutter_rust_bridge::IntoDart for crate::api::GroupStateDto {
+impl flutter_rust_bridge::IntoDart for crate::api::dto::GroupStateDto {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
             self.name.into_into_dart().into_dart(),
@@ -3741,14 +4158,19 @@ impl flutter_rust_bridge::IntoDart for crate::api::GroupStateDto {
         .into_dart()
     }
 }
-impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::GroupStateDto {}
-impl flutter_rust_bridge::IntoIntoDart<crate::api::GroupStateDto> for crate::api::GroupStateDto {
-    fn into_into_dart(self) -> crate::api::GroupStateDto {
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::dto::GroupStateDto
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::dto::GroupStateDto>
+    for crate::api::dto::GroupStateDto
+{
+    fn into_into_dart(self) -> crate::api::dto::GroupStateDto {
         self
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
-impl flutter_rust_bridge::IntoDart for crate::api::HourlyWeatherDto {
+impl flutter_rust_bridge::IntoDart for crate::api::dto::HourlyWeatherDto {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
             self.time.into_into_dart().into_dart(),
@@ -3760,16 +4182,19 @@ impl flutter_rust_bridge::IntoDart for crate::api::HourlyWeatherDto {
         .into_dart()
     }
 }
-impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::HourlyWeatherDto {}
-impl flutter_rust_bridge::IntoIntoDart<crate::api::HourlyWeatherDto>
-    for crate::api::HourlyWeatherDto
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::dto::HourlyWeatherDto
 {
-    fn into_into_dart(self) -> crate::api::HourlyWeatherDto {
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::dto::HourlyWeatherDto>
+    for crate::api::dto::HourlyWeatherDto
+{
+    fn into_into_dart(self) -> crate::api::dto::HourlyWeatherDto {
         self
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
-impl flutter_rust_bridge::IntoDart for crate::api::IdentityDto {
+impl flutter_rust_bridge::IntoDart for crate::api::dto::IdentityDto {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
             self.user_id.into_into_dart().into_dart(),
@@ -3778,14 +4203,16 @@ impl flutter_rust_bridge::IntoDart for crate::api::IdentityDto {
         .into_dart()
     }
 }
-impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::IdentityDto {}
-impl flutter_rust_bridge::IntoIntoDart<crate::api::IdentityDto> for crate::api::IdentityDto {
-    fn into_into_dart(self) -> crate::api::IdentityDto {
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::dto::IdentityDto {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::dto::IdentityDto>
+    for crate::api::dto::IdentityDto
+{
+    fn into_into_dart(self) -> crate::api::dto::IdentityDto {
         self
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
-impl flutter_rust_bridge::IntoDart for crate::api::LineupDayDto {
+impl flutter_rust_bridge::IntoDart for crate::api::dto::LineupDayDto {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
             self.id.into_into_dart().into_dart(),
@@ -3797,14 +4224,16 @@ impl flutter_rust_bridge::IntoDart for crate::api::LineupDayDto {
         .into_dart()
     }
 }
-impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::LineupDayDto {}
-impl flutter_rust_bridge::IntoIntoDart<crate::api::LineupDayDto> for crate::api::LineupDayDto {
-    fn into_into_dart(self) -> crate::api::LineupDayDto {
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::dto::LineupDayDto {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::dto::LineupDayDto>
+    for crate::api::dto::LineupDayDto
+{
+    fn into_into_dart(self) -> crate::api::dto::LineupDayDto {
         self
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
-impl flutter_rust_bridge::IntoDart for crate::api::LineupDto {
+impl flutter_rust_bridge::IntoDart for crate::api::dto::LineupDto {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
             self.stages.into_into_dart().into_dart(),
@@ -3814,14 +4243,14 @@ impl flutter_rust_bridge::IntoDart for crate::api::LineupDto {
         .into_dart()
     }
 }
-impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::LineupDto {}
-impl flutter_rust_bridge::IntoIntoDart<crate::api::LineupDto> for crate::api::LineupDto {
-    fn into_into_dart(self) -> crate::api::LineupDto {
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::dto::LineupDto {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::dto::LineupDto> for crate::api::dto::LineupDto {
+    fn into_into_dart(self) -> crate::api::dto::LineupDto {
         self
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
-impl flutter_rust_bridge::IntoDart for crate::api::LineupSetDto {
+impl flutter_rust_bridge::IntoDart for crate::api::dto::LineupSetDto {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
             self.id.into_into_dart().into_dart(),
@@ -3836,14 +4265,16 @@ impl flutter_rust_bridge::IntoDart for crate::api::LineupSetDto {
         .into_dart()
     }
 }
-impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::LineupSetDto {}
-impl flutter_rust_bridge::IntoIntoDart<crate::api::LineupSetDto> for crate::api::LineupSetDto {
-    fn into_into_dart(self) -> crate::api::LineupSetDto {
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::dto::LineupSetDto {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::dto::LineupSetDto>
+    for crate::api::dto::LineupSetDto
+{
+    fn into_into_dart(self) -> crate::api::dto::LineupSetDto {
         self
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
-impl flutter_rust_bridge::IntoDart for crate::api::LineupStageDto {
+impl flutter_rust_bridge::IntoDart for crate::api::dto::LineupStageDto {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
             self.id.into_into_dart().into_dart(),
@@ -3855,14 +4286,19 @@ impl flutter_rust_bridge::IntoDart for crate::api::LineupStageDto {
         .into_dart()
     }
 }
-impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::LineupStageDto {}
-impl flutter_rust_bridge::IntoIntoDart<crate::api::LineupStageDto> for crate::api::LineupStageDto {
-    fn into_into_dart(self) -> crate::api::LineupStageDto {
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::dto::LineupStageDto
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::dto::LineupStageDto>
+    for crate::api::dto::LineupStageDto
+{
+    fn into_into_dart(self) -> crate::api::dto::LineupStageDto {
         self
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
-impl flutter_rust_bridge::IntoDart for crate::api::PeerStatusInfo {
+impl flutter_rust_bridge::IntoDart for crate::api::dto::PeerStatusInfo {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
             self.endpoint_id.into_into_dart().into_dart(),
@@ -3874,14 +4310,19 @@ impl flutter_rust_bridge::IntoDart for crate::api::PeerStatusInfo {
         .into_dart()
     }
 }
-impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::PeerStatusInfo {}
-impl flutter_rust_bridge::IntoIntoDart<crate::api::PeerStatusInfo> for crate::api::PeerStatusInfo {
-    fn into_into_dart(self) -> crate::api::PeerStatusInfo {
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::dto::PeerStatusInfo
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::dto::PeerStatusInfo>
+    for crate::api::dto::PeerStatusInfo
+{
+    fn into_into_dart(self) -> crate::api::dto::PeerStatusInfo {
         self
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
-impl flutter_rust_bridge::IntoDart for crate::api::RelayStatusDto {
+impl flutter_rust_bridge::IntoDart for crate::api::dto::RelayStatusDto {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
             self.connected.into_into_dart().into_dart(),
@@ -3892,14 +4333,19 @@ impl flutter_rust_bridge::IntoDart for crate::api::RelayStatusDto {
         .into_dart()
     }
 }
-impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::RelayStatusDto {}
-impl flutter_rust_bridge::IntoIntoDart<crate::api::RelayStatusDto> for crate::api::RelayStatusDto {
-    fn into_into_dart(self) -> crate::api::RelayStatusDto {
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::dto::RelayStatusDto
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::dto::RelayStatusDto>
+    for crate::api::dto::RelayStatusDto
+{
+    fn into_into_dart(self) -> crate::api::dto::RelayStatusDto {
         self
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
-impl flutter_rust_bridge::IntoDart for crate::api::ResourceSyncStatusDto {
+impl flutter_rust_bridge::IntoDart for crate::api::dto::ResourceSyncStatusDto {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
             self.id.into_into_dart().into_dart(),
@@ -3914,18 +4360,18 @@ impl flutter_rust_bridge::IntoDart for crate::api::ResourceSyncStatusDto {
     }
 }
 impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
-    for crate::api::ResourceSyncStatusDto
+    for crate::api::dto::ResourceSyncStatusDto
 {
 }
-impl flutter_rust_bridge::IntoIntoDart<crate::api::ResourceSyncStatusDto>
-    for crate::api::ResourceSyncStatusDto
+impl flutter_rust_bridge::IntoIntoDart<crate::api::dto::ResourceSyncStatusDto>
+    for crate::api::dto::ResourceSyncStatusDto
 {
-    fn into_into_dart(self) -> crate::api::ResourceSyncStatusDto {
+    fn into_into_dart(self) -> crate::api::dto::ResourceSyncStatusDto {
         self
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
-impl flutter_rust_bridge::IntoDart for crate::api::SyncStatusDto {
+impl flutter_rust_bridge::IntoDart for crate::api::dto::SyncStatusDto {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
             self.syncing.into_into_dart().into_dart(),
@@ -3935,33 +4381,43 @@ impl flutter_rust_bridge::IntoDart for crate::api::SyncStatusDto {
         .into_dart()
     }
 }
-impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::SyncStatusDto {}
-impl flutter_rust_bridge::IntoIntoDart<crate::api::SyncStatusDto> for crate::api::SyncStatusDto {
-    fn into_into_dart(self) -> crate::api::SyncStatusDto {
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::dto::SyncStatusDto
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::dto::SyncStatusDto>
+    for crate::api::dto::SyncStatusDto
+{
+    fn into_into_dart(self) -> crate::api::dto::SyncStatusDto {
         self
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
-impl flutter_rust_bridge::IntoDart for crate::api::TransportPeerDto {
+impl flutter_rust_bridge::IntoDart for crate::api::dto::TransportPeerDto {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
             self.device_id.into_into_dart().into_dart(),
             self.phase.into_into_dart().into_dart(),
             self.connect_path.into_into_dart().into_dart(),
+            self.verified_endpoint.into_into_dart().into_dart(),
+            self.consecutive_failures.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
 }
-impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::TransportPeerDto {}
-impl flutter_rust_bridge::IntoIntoDart<crate::api::TransportPeerDto>
-    for crate::api::TransportPeerDto
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::dto::TransportPeerDto
 {
-    fn into_into_dart(self) -> crate::api::TransportPeerDto {
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::dto::TransportPeerDto>
+    for crate::api::dto::TransportPeerDto
+{
+    fn into_into_dart(self) -> crate::api::dto::TransportPeerDto {
         self
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
-impl flutter_rust_bridge::IntoDart for crate::api::TransportStatusDto {
+impl flutter_rust_bridge::IntoDart for crate::api::dto::TransportStatusDto {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
             self.relay.into_into_dart().into_dart(),
@@ -3971,18 +4427,18 @@ impl flutter_rust_bridge::IntoDart for crate::api::TransportStatusDto {
     }
 }
 impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
-    for crate::api::TransportStatusDto
+    for crate::api::dto::TransportStatusDto
 {
 }
-impl flutter_rust_bridge::IntoIntoDart<crate::api::TransportStatusDto>
-    for crate::api::TransportStatusDto
+impl flutter_rust_bridge::IntoIntoDart<crate::api::dto::TransportStatusDto>
+    for crate::api::dto::TransportStatusDto
 {
-    fn into_into_dart(self) -> crate::api::TransportStatusDto {
+    fn into_into_dart(self) -> crate::api::dto::TransportStatusDto {
         self
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
-impl flutter_rust_bridge::IntoDart for crate::api::WeatherForecastDto {
+impl flutter_rust_bridge::IntoDart for crate::api::dto::WeatherForecastDto {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
             self.updated_at.into_into_dart().into_dart(),
@@ -3995,13 +4451,13 @@ impl flutter_rust_bridge::IntoDart for crate::api::WeatherForecastDto {
     }
 }
 impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
-    for crate::api::WeatherForecastDto
+    for crate::api::dto::WeatherForecastDto
 {
 }
-impl flutter_rust_bridge::IntoIntoDart<crate::api::WeatherForecastDto>
-    for crate::api::WeatherForecastDto
+impl flutter_rust_bridge::IntoIntoDart<crate::api::dto::WeatherForecastDto>
+    for crate::api::dto::WeatherForecastDto
 {
-    fn into_into_dart(self) -> crate::api::WeatherForecastDto {
+    fn into_into_dart(self) -> crate::api::dto::WeatherForecastDto {
         self
     }
 }
@@ -4020,6 +4476,13 @@ impl SseEncode for AppNode {
     }
 }
 
+impl SseEncode for PeerEntry {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<PeerEntry>>>::sse_encode(flutter_rust_bridge::for_generated::rust_auto_opaque_encode::<_, MoiArc<_>>(self), serializer);
+    }
+}
+
 impl SseEncode for RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<AppNode>> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -4030,34 +4493,51 @@ impl SseEncode for RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpa
 }
 
 impl SseEncode
-    for StreamSink<crate::api::GroupStateDto, flutter_rust_bridge::for_generated::SseCodec>
+    for RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<DocManager>>
 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
-        unimplemented!("")
+        let (ptr, size) = self.sse_encode_raw();
+        <usize>::sse_encode(ptr, serializer);
+        <i32>::sse_encode(size, serializer);
     }
 }
 
 impl SseEncode
-    for StreamSink<Vec<crate::api::ChatMessageDto>, flutter_rust_bridge::for_generated::SseCodec>
+    for RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<OffbeatNode>>
 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
-        unimplemented!("")
+        let (ptr, size) = self.sse_encode_raw();
+        <usize>::sse_encode(ptr, serializer);
+        <i32>::sse_encode(size, serializer);
     }
 }
 
 impl SseEncode
-    for StreamSink<Vec<crate::api::PeerStatusInfo>, flutter_rust_bridge::for_generated::SseCodec>
+    for RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<PeerEntry>>
 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
-        unimplemented!("")
+        let (ptr, size) = self.sse_encode_raw();
+        <usize>::sse_encode(ptr, serializer);
+        <i32>::sse_encode(size, serializer);
     }
 }
 
 impl SseEncode
-    for StreamSink<Option<crate::api::LineupDto>, flutter_rust_bridge::for_generated::SseCodec>
+    for RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<SyncStatus>>
+{
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        let (ptr, size) = self.sse_encode_raw();
+        <usize>::sse_encode(ptr, serializer);
+        <i32>::sse_encode(size, serializer);
+    }
+}
+
+impl SseEncode
+    for StreamSink<crate::api::dto::GroupStateDto, flutter_rust_bridge::for_generated::SseCodec>
 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -4067,7 +4547,7 @@ impl SseEncode
 
 impl SseEncode
     for StreamSink<
-        Option<crate::api::WeatherForecastDto>,
+        Vec<crate::api::dto::ChatMessageDto>,
         flutter_rust_bridge::for_generated::SseCodec,
     >
 {
@@ -4078,7 +4558,10 @@ impl SseEncode
 }
 
 impl SseEncode
-    for StreamSink<crate::api::SyncStatusDto, flutter_rust_bridge::for_generated::SseCodec>
+    for StreamSink<
+        Vec<crate::api::dto::PeerStatusInfo>,
+        flutter_rust_bridge::for_generated::SseCodec,
+    >
 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -4087,7 +4570,40 @@ impl SseEncode
 }
 
 impl SseEncode
-    for StreamSink<crate::api::TransportStatusDto, flutter_rust_bridge::for_generated::SseCodec>
+    for StreamSink<Option<crate::api::dto::LineupDto>, flutter_rust_bridge::for_generated::SseCodec>
+{
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        unimplemented!("")
+    }
+}
+
+impl SseEncode
+    for StreamSink<
+        Option<crate::api::dto::WeatherForecastDto>,
+        flutter_rust_bridge::for_generated::SseCodec,
+    >
+{
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        unimplemented!("")
+    }
+}
+
+impl SseEncode
+    for StreamSink<crate::api::dto::SyncStatusDto, flutter_rust_bridge::for_generated::SseCodec>
+{
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        unimplemented!("")
+    }
+}
+
+impl SseEncode
+    for StreamSink<
+        crate::api::dto::TransportStatusDto,
+        flutter_rust_bridge::for_generated::SseCodec,
+    >
 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -4102,7 +4618,7 @@ impl SseEncode for String {
     }
 }
 
-impl SseEncode for crate::api::AttestationDto {
+impl SseEncode for crate::api::dto::AttestationDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.message, serializer);
@@ -4111,7 +4627,7 @@ impl SseEncode for crate::api::AttestationDto {
     }
 }
 
-impl SseEncode for crate::api::AuthStateDto {
+impl SseEncode for crate::api::dto::AuthStateDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.state, serializer);
@@ -4119,7 +4635,7 @@ impl SseEncode for crate::api::AuthStateDto {
     }
 }
 
-impl SseEncode for crate::api::BleStatusDto {
+impl SseEncode for crate::api::dto::BleStatusDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <bool>::sse_encode(self.active, serializer);
@@ -4127,7 +4643,7 @@ impl SseEncode for crate::api::BleStatusDto {
         <u64>::sse_encode(self.tx_bytes_per_sec, serializer);
         <u64>::sse_encode(self.rx_bytes_per_sec, serializer);
         <u64>::sse_encode(self.retransmits, serializer);
-        <Vec<crate::api::TransportPeerDto>>::sse_encode(self.peers, serializer);
+        <Vec<crate::api::dto::TransportPeerDto>>::sse_encode(self.peers, serializer);
     }
 }
 
@@ -4138,7 +4654,7 @@ impl SseEncode for bool {
     }
 }
 
-impl SseEncode for crate::api::ChatMessageDto {
+impl SseEncode for crate::api::dto::ChatMessageDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.id, serializer);
@@ -4158,7 +4674,7 @@ impl SseEncode for f64 {
     }
 }
 
-impl SseEncode for crate::api::GroupCreateResultDto {
+impl SseEncode for crate::api::dto::GroupCreateResultDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.group_id, serializer);
@@ -4167,7 +4683,7 @@ impl SseEncode for crate::api::GroupCreateResultDto {
     }
 }
 
-impl SseEncode for crate::api::GroupInfo {
+impl SseEncode for crate::api::dto::GroupInfo {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.id, serializer);
@@ -4175,7 +4691,7 @@ impl SseEncode for crate::api::GroupInfo {
     }
 }
 
-impl SseEncode for crate::api::GroupJoinResultDto {
+impl SseEncode for crate::api::dto::GroupJoinResultDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.group_id, serializer);
@@ -4183,7 +4699,7 @@ impl SseEncode for crate::api::GroupJoinResultDto {
     }
 }
 
-impl SseEncode for crate::api::GroupMemberDto {
+impl SseEncode for crate::api::dto::GroupMemberDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.user_id, serializer);
@@ -4194,7 +4710,7 @@ impl SseEncode for crate::api::GroupMemberDto {
     }
 }
 
-impl SseEncode for crate::api::GroupPinDto {
+impl SseEncode for crate::api::dto::GroupPinDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.id, serializer);
@@ -4204,16 +4720,16 @@ impl SseEncode for crate::api::GroupPinDto {
     }
 }
 
-impl SseEncode for crate::api::GroupStateDto {
+impl SseEncode for crate::api::dto::GroupStateDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.name, serializer);
-        <Vec<crate::api::GroupMemberDto>>::sse_encode(self.members, serializer);
-        <Vec<crate::api::GroupPinDto>>::sse_encode(self.pins, serializer);
+        <Vec<crate::api::dto::GroupMemberDto>>::sse_encode(self.members, serializer);
+        <Vec<crate::api::dto::GroupPinDto>>::sse_encode(self.pins, serializer);
     }
 }
 
-impl SseEncode for crate::api::HourlyWeatherDto {
+impl SseEncode for crate::api::dto::HourlyWeatherDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <Vec<String>>::sse_encode(self.time, serializer);
@@ -4231,7 +4747,7 @@ impl SseEncode for i32 {
     }
 }
 
-impl SseEncode for crate::api::IdentityDto {
+impl SseEncode for crate::api::dto::IdentityDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.user_id, serializer);
@@ -4239,7 +4755,7 @@ impl SseEncode for crate::api::IdentityDto {
     }
 }
 
-impl SseEncode for crate::api::LineupDayDto {
+impl SseEncode for crate::api::dto::LineupDayDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.id, serializer);
@@ -4250,16 +4766,16 @@ impl SseEncode for crate::api::LineupDayDto {
     }
 }
 
-impl SseEncode for crate::api::LineupDto {
+impl SseEncode for crate::api::dto::LineupDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
-        <Vec<crate::api::LineupStageDto>>::sse_encode(self.stages, serializer);
-        <Vec<crate::api::LineupDayDto>>::sse_encode(self.days, serializer);
-        <Vec<crate::api::LineupSetDto>>::sse_encode(self.sets, serializer);
+        <Vec<crate::api::dto::LineupStageDto>>::sse_encode(self.stages, serializer);
+        <Vec<crate::api::dto::LineupDayDto>>::sse_encode(self.days, serializer);
+        <Vec<crate::api::dto::LineupSetDto>>::sse_encode(self.sets, serializer);
     }
 }
 
-impl SseEncode for crate::api::LineupSetDto {
+impl SseEncode for crate::api::dto::LineupSetDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.id, serializer);
@@ -4273,7 +4789,7 @@ impl SseEncode for crate::api::LineupSetDto {
     }
 }
 
-impl SseEncode for crate::api::LineupStageDto {
+impl SseEncode for crate::api::dto::LineupStageDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.id, serializer);
@@ -4294,82 +4810,82 @@ impl SseEncode for Vec<String> {
     }
 }
 
-impl SseEncode for Vec<crate::api::ChatMessageDto> {
+impl SseEncode for Vec<crate::api::dto::ChatMessageDto> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <i32>::sse_encode(self.len() as _, serializer);
         for item in self {
-            <crate::api::ChatMessageDto>::sse_encode(item, serializer);
+            <crate::api::dto::ChatMessageDto>::sse_encode(item, serializer);
         }
     }
 }
 
-impl SseEncode for Vec<crate::api::GroupInfo> {
+impl SseEncode for Vec<crate::api::dto::GroupInfo> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <i32>::sse_encode(self.len() as _, serializer);
         for item in self {
-            <crate::api::GroupInfo>::sse_encode(item, serializer);
+            <crate::api::dto::GroupInfo>::sse_encode(item, serializer);
         }
     }
 }
 
-impl SseEncode for Vec<crate::api::GroupMemberDto> {
+impl SseEncode for Vec<crate::api::dto::GroupMemberDto> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <i32>::sse_encode(self.len() as _, serializer);
         for item in self {
-            <crate::api::GroupMemberDto>::sse_encode(item, serializer);
+            <crate::api::dto::GroupMemberDto>::sse_encode(item, serializer);
         }
     }
 }
 
-impl SseEncode for Vec<crate::api::GroupPinDto> {
+impl SseEncode for Vec<crate::api::dto::GroupPinDto> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <i32>::sse_encode(self.len() as _, serializer);
         for item in self {
-            <crate::api::GroupPinDto>::sse_encode(item, serializer);
+            <crate::api::dto::GroupPinDto>::sse_encode(item, serializer);
         }
     }
 }
 
-impl SseEncode for Vec<crate::api::LineupDayDto> {
+impl SseEncode for Vec<crate::api::dto::LineupDayDto> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <i32>::sse_encode(self.len() as _, serializer);
         for item in self {
-            <crate::api::LineupDayDto>::sse_encode(item, serializer);
+            <crate::api::dto::LineupDayDto>::sse_encode(item, serializer);
         }
     }
 }
 
-impl SseEncode for Vec<crate::api::LineupSetDto> {
+impl SseEncode for Vec<crate::api::dto::LineupSetDto> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <i32>::sse_encode(self.len() as _, serializer);
         for item in self {
-            <crate::api::LineupSetDto>::sse_encode(item, serializer);
+            <crate::api::dto::LineupSetDto>::sse_encode(item, serializer);
         }
     }
 }
 
-impl SseEncode for Vec<crate::api::LineupStageDto> {
+impl SseEncode for Vec<crate::api::dto::LineupStageDto> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <i32>::sse_encode(self.len() as _, serializer);
         for item in self {
-            <crate::api::LineupStageDto>::sse_encode(item, serializer);
+            <crate::api::dto::LineupStageDto>::sse_encode(item, serializer);
         }
     }
 }
 
-impl SseEncode for Vec<crate::api::PeerStatusInfo> {
+impl SseEncode for Vec<crate::api::dto::PeerStatusInfo> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <i32>::sse_encode(self.len() as _, serializer);
         for item in self {
-            <crate::api::PeerStatusInfo>::sse_encode(item, serializer);
+            <crate::api::dto::PeerStatusInfo>::sse_encode(item, serializer);
         }
     }
 }
@@ -4404,22 +4920,22 @@ impl SseEncode for Vec<u8> {
     }
 }
 
-impl SseEncode for Vec<crate::api::ResourceSyncStatusDto> {
+impl SseEncode for Vec<crate::api::dto::ResourceSyncStatusDto> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <i32>::sse_encode(self.len() as _, serializer);
         for item in self {
-            <crate::api::ResourceSyncStatusDto>::sse_encode(item, serializer);
+            <crate::api::dto::ResourceSyncStatusDto>::sse_encode(item, serializer);
         }
     }
 }
 
-impl SseEncode for Vec<crate::api::TransportPeerDto> {
+impl SseEncode for Vec<crate::api::dto::TransportPeerDto> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <i32>::sse_encode(self.len() as _, serializer);
         for item in self {
-            <crate::api::TransportPeerDto>::sse_encode(item, serializer);
+            <crate::api::dto::TransportPeerDto>::sse_encode(item, serializer);
         }
     }
 }
@@ -4434,37 +4950,37 @@ impl SseEncode for Option<String> {
     }
 }
 
-impl SseEncode for Option<crate::api::AttestationDto> {
+impl SseEncode for Option<crate::api::dto::AttestationDto> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <bool>::sse_encode(self.is_some(), serializer);
         if let Some(value) = self {
-            <crate::api::AttestationDto>::sse_encode(value, serializer);
+            <crate::api::dto::AttestationDto>::sse_encode(value, serializer);
         }
     }
 }
 
-impl SseEncode for Option<crate::api::LineupDto> {
+impl SseEncode for Option<crate::api::dto::LineupDto> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <bool>::sse_encode(self.is_some(), serializer);
         if let Some(value) = self {
-            <crate::api::LineupDto>::sse_encode(value, serializer);
+            <crate::api::dto::LineupDto>::sse_encode(value, serializer);
         }
     }
 }
 
-impl SseEncode for Option<crate::api::WeatherForecastDto> {
+impl SseEncode for Option<crate::api::dto::WeatherForecastDto> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <bool>::sse_encode(self.is_some(), serializer);
         if let Some(value) = self {
-            <crate::api::WeatherForecastDto>::sse_encode(value, serializer);
+            <crate::api::dto::WeatherForecastDto>::sse_encode(value, serializer);
         }
     }
 }
 
-impl SseEncode for crate::api::PeerStatusInfo {
+impl SseEncode for crate::api::dto::PeerStatusInfo {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.endpoint_id, serializer);
@@ -4475,7 +4991,7 @@ impl SseEncode for crate::api::PeerStatusInfo {
     }
 }
 
-impl SseEncode for crate::api::RelayStatusDto {
+impl SseEncode for crate::api::dto::RelayStatusDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <bool>::sse_encode(self.connected, serializer);
@@ -4485,7 +5001,7 @@ impl SseEncode for crate::api::RelayStatusDto {
     }
 }
 
-impl SseEncode for crate::api::ResourceSyncStatusDto {
+impl SseEncode for crate::api::dto::ResourceSyncStatusDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.id, serializer);
@@ -4498,29 +5014,31 @@ impl SseEncode for crate::api::ResourceSyncStatusDto {
     }
 }
 
-impl SseEncode for crate::api::SyncStatusDto {
+impl SseEncode for crate::api::dto::SyncStatusDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <bool>::sse_encode(self.syncing, serializer);
-        <Vec<crate::api::ResourceSyncStatusDto>>::sse_encode(self.resources, serializer);
+        <Vec<crate::api::dto::ResourceSyncStatusDto>>::sse_encode(self.resources, serializer);
         <u32>::sse_encode(self.pending_ops, serializer);
     }
 }
 
-impl SseEncode for crate::api::TransportPeerDto {
+impl SseEncode for crate::api::dto::TransportPeerDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.device_id, serializer);
         <String>::sse_encode(self.phase, serializer);
         <Option<String>>::sse_encode(self.connect_path, serializer);
+        <Option<String>>::sse_encode(self.verified_endpoint, serializer);
+        <u32>::sse_encode(self.consecutive_failures, serializer);
     }
 }
 
-impl SseEncode for crate::api::TransportStatusDto {
+impl SseEncode for crate::api::dto::TransportStatusDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
-        <crate::api::RelayStatusDto>::sse_encode(self.relay, serializer);
-        <crate::api::BleStatusDto>::sse_encode(self.ble, serializer);
+        <crate::api::dto::RelayStatusDto>::sse_encode(self.relay, serializer);
+        <crate::api::dto::BleStatusDto>::sse_encode(self.ble, serializer);
     }
 }
 
@@ -4560,14 +5078,14 @@ impl SseEncode for usize {
     }
 }
 
-impl SseEncode for crate::api::WeatherForecastDto {
+impl SseEncode for crate::api::dto::WeatherForecastDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.updated_at, serializer);
         <f64>::sse_encode(self.lat, serializer);
         <f64>::sse_encode(self.lon, serializer);
         <String>::sse_encode(self.timezone, serializer);
-        <crate::api::HourlyWeatherDto>::sse_encode(self.hourly, serializer);
+        <crate::api::dto::HourlyWeatherDto>::sse_encode(self.hourly, serializer);
     }
 }
 
@@ -4579,6 +5097,7 @@ mod io {
     // Section: imports
 
     use super::*;
+    use crate::api::dto::*;
     use crate::api::*;
     use flutter_rust_bridge::for_generated::byteorder::{
         NativeEndian, ReadBytesExt, WriteBytesExt,
@@ -4603,6 +5122,62 @@ mod io {
     ) {
         MoiArc::<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<AppNode>>::decrement_strong_count(ptr as _);
     }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn frbgen_offbeat_mobile_rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDocManager(
+        ptr: *const std::ffi::c_void,
+    ) {
+        MoiArc::<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<DocManager>>::increment_strong_count(ptr as _);
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn frbgen_offbeat_mobile_rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDocManager(
+        ptr: *const std::ffi::c_void,
+    ) {
+        MoiArc::<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<DocManager>>::decrement_strong_count(ptr as _);
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn frbgen_offbeat_mobile_rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerOffbeatNode(
+        ptr: *const std::ffi::c_void,
+    ) {
+        MoiArc::<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<OffbeatNode>>::increment_strong_count(ptr as _);
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn frbgen_offbeat_mobile_rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerOffbeatNode(
+        ptr: *const std::ffi::c_void,
+    ) {
+        MoiArc::<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<OffbeatNode>>::decrement_strong_count(ptr as _);
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn frbgen_offbeat_mobile_rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerEntry(
+        ptr: *const std::ffi::c_void,
+    ) {
+        MoiArc::<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<PeerEntry>>::increment_strong_count(ptr as _);
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn frbgen_offbeat_mobile_rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerEntry(
+        ptr: *const std::ffi::c_void,
+    ) {
+        MoiArc::<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<PeerEntry>>::decrement_strong_count(ptr as _);
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn frbgen_offbeat_mobile_rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncStatus(
+        ptr: *const std::ffi::c_void,
+    ) {
+        MoiArc::<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<SyncStatus>>::increment_strong_count(ptr as _);
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn frbgen_offbeat_mobile_rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncStatus(
+        ptr: *const std::ffi::c_void,
+    ) {
+        MoiArc::<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<SyncStatus>>::decrement_strong_count(ptr as _);
+    }
 }
 #[cfg(not(target_family = "wasm"))]
 pub use io::*;
@@ -4616,6 +5191,7 @@ mod web {
     // Section: imports
 
     use super::*;
+    use crate::api::dto::*;
     use crate::api::*;
     use flutter_rust_bridge::for_generated::byteorder::{
         NativeEndian, ReadBytesExt, WriteBytesExt,
@@ -4641,6 +5217,62 @@ mod web {
         ptr: *const std::ffi::c_void,
     ) {
         MoiArc::<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<AppNode>>::decrement_strong_count(ptr as _);
+    }
+
+    #[wasm_bindgen]
+    pub fn rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDocManager(
+        ptr: *const std::ffi::c_void,
+    ) {
+        MoiArc::<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<DocManager>>::increment_strong_count(ptr as _);
+    }
+
+    #[wasm_bindgen]
+    pub fn rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDocManager(
+        ptr: *const std::ffi::c_void,
+    ) {
+        MoiArc::<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<DocManager>>::decrement_strong_count(ptr as _);
+    }
+
+    #[wasm_bindgen]
+    pub fn rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerOffbeatNode(
+        ptr: *const std::ffi::c_void,
+    ) {
+        MoiArc::<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<OffbeatNode>>::increment_strong_count(ptr as _);
+    }
+
+    #[wasm_bindgen]
+    pub fn rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerOffbeatNode(
+        ptr: *const std::ffi::c_void,
+    ) {
+        MoiArc::<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<OffbeatNode>>::decrement_strong_count(ptr as _);
+    }
+
+    #[wasm_bindgen]
+    pub fn rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerEntry(
+        ptr: *const std::ffi::c_void,
+    ) {
+        MoiArc::<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<PeerEntry>>::increment_strong_count(ptr as _);
+    }
+
+    #[wasm_bindgen]
+    pub fn rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerEntry(
+        ptr: *const std::ffi::c_void,
+    ) {
+        MoiArc::<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<PeerEntry>>::decrement_strong_count(ptr as _);
+    }
+
+    #[wasm_bindgen]
+    pub fn rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncStatus(
+        ptr: *const std::ffi::c_void,
+    ) {
+        MoiArc::<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<SyncStatus>>::increment_strong_count(ptr as _);
+    }
+
+    #[wasm_bindgen]
+    pub fn rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncStatus(
+        ptr: *const std::ffi::c_void,
+    ) {
+        MoiArc::<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<SyncStatus>>::decrement_strong_count(ptr as _);
     }
 }
 #[cfg(target_family = "wasm")]

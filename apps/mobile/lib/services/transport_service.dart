@@ -1,5 +1,6 @@
 import 'dart:async';
 import '../src/rust/api.dart';
+import '../src/rust/api/dto.dart';
 
 /// Wraps transport status from the Rust core (relay + BLE).
 class TransportService {

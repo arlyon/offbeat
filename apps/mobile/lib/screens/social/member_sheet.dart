@@ -5,7 +5,7 @@
 import 'package:flutter/material.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/dotted_border.dart';
-import '../../src/rust/api.dart';
+import '../../src/rust/api/dto.dart';
 
 class MemberSheet extends StatelessWidget {
   final GroupMemberDto member;

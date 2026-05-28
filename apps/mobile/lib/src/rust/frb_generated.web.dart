@@ -7,6 +7,7 @@
 // ignore_for_file: argument_type_not_assignable
 
 import 'api.dart';
+import 'api/dto.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'frb_generated.dart';
@@ -24,12 +25,34 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   get rust_arc_decrement_strong_count_AppNodePtr => wire
       .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerAppNode;
 
+  CrossPlatformFinalizerArg
+  get rust_arc_decrement_strong_count_DocManagerPtr => wire
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDocManager;
+
+  CrossPlatformFinalizerArg
+  get rust_arc_decrement_strong_count_OffbeatNodePtr => wire
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerOffbeatNode;
+
+  CrossPlatformFinalizerArg
+  get rust_arc_decrement_strong_count_PeerEntryPtr => wire
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerEntry;
+
+  CrossPlatformFinalizerArg
+  get rust_arc_decrement_strong_count_SyncStatusPtr => wire
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncStatus;
+
   @protected
   AnyhowException dco_decode_AnyhowException(dynamic raw);
 
   @protected
   AppNode
   dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerAppNode(
+    dynamic raw,
+  );
+
+  @protected
+  PeerEntry
+  dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerEntry(
     dynamic raw,
   );
 
@@ -46,8 +69,50 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  DocManager
+  dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDocManager(
+    dynamic raw,
+  );
+
+  @protected
+  OffbeatNode
+  dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerOffbeatNode(
+    dynamic raw,
+  );
+
+  @protected
+  SyncStatus
+  dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncStatus(
+    dynamic raw,
+  );
+
+  @protected
   AppNode
   dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerAppNode(
+    dynamic raw,
+  );
+
+  @protected
+  DocManager
+  dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDocManager(
+    dynamic raw,
+  );
+
+  @protected
+  OffbeatNode
+  dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerOffbeatNode(
+    dynamic raw,
+  );
+
+  @protected
+  PeerEntry
+  dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerEntry(
+    dynamic raw,
+  );
+
+  @protected
+  SyncStatus
+  dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncStatus(
     dynamic raw,
   );
 
@@ -260,6 +325,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  PeerEntry
+  sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerEntry(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   AppNode
   sse_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerAppNode(
     SseDeserializer deserializer,
@@ -272,8 +343,50 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  DocManager
+  sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDocManager(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  OffbeatNode
+  sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerOffbeatNode(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  SyncStatus
+  sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncStatus(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   AppNode
   sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerAppNode(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  DocManager
+  sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDocManager(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  OffbeatNode
+  sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerOffbeatNode(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  PeerEntry
+  sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerEntry(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  SyncStatus
+  sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncStatus(
     SseDeserializer deserializer,
   );
 
@@ -529,6 +642,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void
+  sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerEntry(
+    PeerEntry self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
   sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerAppNode(
     AppNode self,
     SseSerializer serializer,
@@ -543,8 +663,57 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void
+  sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDocManager(
+    DocManager self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
+  sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerOffbeatNode(
+    OffbeatNode self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
+  sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncStatus(
+    SyncStatus self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
   sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerAppNode(
     AppNode self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
+  sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDocManager(
+    DocManager self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
+  sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerOffbeatNode(
+    OffbeatNode self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
+  sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerEntry(
+    PeerEntry self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
+  sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncStatus(
+    SyncStatus self,
     SseSerializer serializer,
   );
 
@@ -875,6 +1044,70 @@ class RustLibWire implements BaseWire {
       .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerAppNode(
         ptr,
       );
+
+  void
+  rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDocManager(
+    int ptr,
+  ) => wasmModule
+      .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDocManager(
+        ptr,
+      );
+
+  void
+  rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDocManager(
+    int ptr,
+  ) => wasmModule
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDocManager(
+        ptr,
+      );
+
+  void
+  rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerOffbeatNode(
+    int ptr,
+  ) => wasmModule
+      .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerOffbeatNode(
+        ptr,
+      );
+
+  void
+  rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerOffbeatNode(
+    int ptr,
+  ) => wasmModule
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerOffbeatNode(
+        ptr,
+      );
+
+  void
+  rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerEntry(
+    int ptr,
+  ) => wasmModule
+      .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerEntry(
+        ptr,
+      );
+
+  void
+  rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerEntry(
+    int ptr,
+  ) => wasmModule
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerEntry(
+        ptr,
+      );
+
+  void
+  rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncStatus(
+    int ptr,
+  ) => wasmModule
+      .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncStatus(
+        ptr,
+      );
+
+  void
+  rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncStatus(
+    int ptr,
+  ) => wasmModule
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncStatus(
+        ptr,
+      );
 }
 
 @JS('wasm_bindgen')
@@ -890,6 +1123,46 @@ extension type RustLibWasmModule._(JSObject _) implements JSObject {
 
   external void
   rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerAppNode(
+    int ptr,
+  );
+
+  external void
+  rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDocManager(
+    int ptr,
+  );
+
+  external void
+  rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDocManager(
+    int ptr,
+  );
+
+  external void
+  rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerOffbeatNode(
+    int ptr,
+  );
+
+  external void
+  rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerOffbeatNode(
+    int ptr,
+  );
+
+  external void
+  rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerEntry(
+    int ptr,
+  );
+
+  external void
+  rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerEntry(
+    int ptr,
+  );
+
+  external void
+  rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncStatus(
+    int ptr,
+  );
+
+  external void
+  rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncStatus(
     int ptr,
   );
 }

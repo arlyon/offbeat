@@ -26,6 +26,7 @@ import 'services/bluetooth_service.dart';
 import 'widgets/connection_drawer.dart';
 import 'widgets/weather_pill.dart';
 import 'src/rust/api.dart';
+import 'src/rust/api/dto.dart';
 import 'src/rust/frb_generated.dart';
 
 Future<void> main() async {

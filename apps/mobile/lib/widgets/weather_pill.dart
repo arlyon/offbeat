@@ -4,7 +4,7 @@
 
 import 'package:flutter/material.dart';
 import '../theme/tokens.dart';
-import '../src/rust/api.dart';
+import '../src/rust/api/dto.dart';
 import 'weather_sheet.dart';
 
 /// Map WMO weather code to a unicode glyph.

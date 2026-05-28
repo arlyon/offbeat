@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/dotted_border.dart';
 import '../../src/rust/api.dart';
+import '../../src/rust/api/dto.dart';
 import 'create_group_sheet.dart';
 import 'invite_sheet.dart';
 import 'member_sheet.dart';

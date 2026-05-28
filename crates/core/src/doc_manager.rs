@@ -1,7 +1,9 @@
+use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use dashmap::DashMap;
 use yrs::any::Any;
+use yrs::types::map::MapRef;
 use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::Encode;
 use yrs::{Doc, Map, Out, ReadTxn, StateVector, Transact, Update};
@@ -14,10 +16,44 @@ use crate::types::SignedUpdate;
 /// Threshold of individual updates before triggering compaction.
 const COMPACTION_THRESHOLD: u32 = 100;
 
+// ---------------------------------------------------------------------------
+// Transaction wrappers
+// ---------------------------------------------------------------------------
+
 /// Manages Yrs CRDT documents with per-document locking.
 ///
 /// All methods take `&self` — concurrent access to different docs is lock-free.
 /// Same-doc access is protected by per-doc `RwLock`.
+///
+/// # Document layout convention
+///
+/// Each Yrs `Doc` uses **top-level shared types** (via `doc.get_or_insert_map()`)
+/// for every collection that multiple peers may concurrently insert into:
+///
+/// ```text
+///   doc
+///   ├── "root"     (YMap)  — scalar metadata (name, festival_id, …)
+///   ├── "members"  (YMap)  — keyed by user_id → YMap of fields
+///   ├── "pins"     (YMap)  — keyed by pin_id → YMap of fields
+///   ├── "stars"    (YMap)  — keyed by user_id → YMap { set_id: true }
+///   ├── "stages"   (YMap)  — keyed by stage_id → YMap of fields   (festival docs)
+///   ├── "days"     (YMap)  — keyed by day_id → YMap of fields     (festival docs)
+///   ├── "sets"     (YMap)  — keyed by set_id → YMap of fields     (festival docs)
+///   └── "weather"  (YMap)  — weather metadata + nested "hourly"   (festival docs)
+/// ```
+///
+/// **Why top-level shared types?** When two peers independently call
+/// `doc.get_or_insert_map("members")`, Yrs resolves both to the *same* CRDT
+/// instance — entries inserted on either peer merge correctly. By contrast, if
+/// we used a nested YMap inside root (`root.insert(txn, "members", MapPrelim)`)
+/// on two peers independently, Yrs would create *two competing values* for the
+/// `"members"` key, and only one would survive the merge (last-writer-wins),
+/// silently dropping the other's entries.
+///
+/// Individual entries *within* these maps (e.g., a specific member record)
+/// are created via [`get_or_init_map`] which inserts a `MapPrelim`. This is
+/// safe because each entry has a unique key (user_id, pin_id, set_id) and is
+/// only created by one peer.
 pub struct DocManager {
     docs: DashMap<String, Arc<RwLock<Doc>>>,
     db: Arc<Database>,
@@ -141,6 +177,84 @@ impl DocManager {
         Ok(())
     }
 
+    // --- Transaction helpers ---
+
+    /// Execute a mutation on a doc's named maps.
+    ///
+    /// `map_names` lists the top-level shared types the closure needs (e.g.
+    /// `&["root", "members"]`). These are resolved via
+    /// `doc.get_or_insert_map()` **before** opening the `TransactionMut`, since
+    /// `get_or_insert_map` may internally open an implicit transaction and would
+    /// deadlock if a `TransactionMut` is already held.
+    ///
+    /// The closure receives the resolved maps (same order as `map_names`) and a
+    /// mutable transaction.
+    ///
+    /// Handles write lock, SV capture, update encoding, and persistence.
+    /// Returns the encoded update bytes (diff from before the mutation).
+    pub fn mutate<F>(&self, doc_id: &str, map_names: &[&str], f: F) -> anyhow::Result<Vec<u8>>
+    where
+        F: FnOnce(&[MapRef], &mut yrs::TransactionMut),
+    {
+        let doc_arc = self.get_or_create(doc_id);
+        let doc = doc_arc
+            .write()
+            .map_err(|_| anyhow::anyhow!("doc lock poisoned"))?;
+
+        let sv_before = {
+            let txn = doc.transact();
+            txn.state_vector()
+        };
+
+        // Resolve all named maps before opening the transaction.
+        let maps: Vec<MapRef> = map_names
+            .iter()
+            .map(|name| doc.get_or_insert_map(*name))
+            .collect();
+
+        {
+            let mut txn = doc.transact_mut();
+            f(&maps, &mut txn);
+        }
+
+        let txn = doc.transact();
+        let update = txn.encode_state_as_update_v1(&sv_before);
+        drop(txn);
+        drop(doc);
+
+        self.db.append_doc_update(doc_id, &update)?;
+        Ok(update)
+    }
+
+    /// Execute a read on a doc's named maps.
+    ///
+    /// `map_names` lists the top-level shared types the closure needs.
+    /// Resolved before opening the read transaction (same reason as `mutate`).
+    pub fn read<F, T>(&self, doc_id: &str, map_names: &[&str], f: F) -> T
+    where
+        F: FnOnce(&[MapRef], &yrs::Transaction) -> T,
+    {
+        let doc_arc = self.get_or_create(doc_id);
+        let doc = match doc_arc.read() {
+            Ok(d) => d,
+            Err(_) => {
+                let fresh = Doc::new();
+                let maps: Vec<MapRef> = map_names
+                    .iter()
+                    .map(|name| fresh.get_or_insert_map(*name))
+                    .collect();
+                let txn = fresh.transact();
+                return f(&maps, &txn);
+            }
+        };
+        let maps: Vec<MapRef> = map_names
+            .iter()
+            .map(|name| doc.get_or_insert_map(*name))
+            .collect();
+        let txn = doc.transact();
+        f(&maps, &txn)
+    }
+
     // --- Festival doc helpers ---
 
     /// Apply a signed update, verifying the Ed25519 signature first.
@@ -168,22 +282,31 @@ impl DocManager {
         }
     }
 
-    /// Read all key-value pairs from the root map of a doc.
-    pub fn read_map_values_with_prefix(&self, doc_id: &str) -> Vec<(String, String)> {
-        let doc_arc = self.get_or_create(doc_id);
-        let doc = match doc_arc.read() {
-            Ok(d) => d,
-            Err(_) => return vec![],
-        };
-        let map = doc.get_or_insert_map("root");
-        let txn = doc.transact();
-        let mut out = Vec::new();
-        for (k, v) in map.iter(&txn) {
-            if let Out::Any(Any::String(s)) = v {
-                out.push((k.to_string(), s.to_string()));
+    /// Read all entries from a top-level named map in the doc, where each entry
+    /// value is itself a YMap. Returns `(key, fields)` pairs.
+    pub fn read_nested_map_entries(
+        &self,
+        doc_id: &str,
+        map_name: &str,
+    ) -> Vec<(String, HashMap<String, Any>)> {
+        self.read(doc_id, &[map_name], |maps, txn| {
+            read_map_entries(&maps[0], txn)
+        })
+    }
+
+    /// Read a single entry from a top-level named map in the doc.
+    pub fn read_nested_map_entry(
+        &self,
+        doc_id: &str,
+        map_name: &str,
+        entry_key: &str,
+    ) -> Option<HashMap<String, Any>> {
+        self.read(doc_id, &[map_name], |maps, txn| {
+            match maps[0].get(txn, entry_key) {
+                Some(Out::YMap(inner)) => read_map_entry_fields(&inner, txn),
+                _ => None,
             }
-        }
-        out
+        })
     }
 
     // --- Peer list helpers ---
@@ -283,63 +406,138 @@ impl DocManager {
         crypto::encrypt(group_key, update)
     }
 
-    /// Remove a key from the root map of a doc. Returns the encoded update bytes.
-    pub fn remove_map_value(
-        &self,
-        doc_id: &str,
-        key: &str,
-    ) -> anyhow::Result<Vec<u8>> {
-        let doc_arc = self.get_or_create(doc_id);
-        let doc = doc_arc.write().map_err(|_| anyhow::anyhow!("doc lock poisoned"))?;
-
-        let sv_before = {
-            let txn = doc.transact();
-            txn.state_vector()
-        };
-
-        {
-            let map = doc.get_or_insert_map("root");
-            let mut txn = doc.transact_mut();
-            map.remove(&mut txn, key);
-        }
-
-        let txn = doc.transact();
-        let update = txn.encode_state_as_update_v1(&sv_before);
-        drop(txn);
-        drop(doc);
-
-        self.db.append_doc_update(doc_id, &update)?;
-        Ok(update)
+    /// Remove a key from the `"root"` top-level map of a doc.
+    /// Returns the encoded update bytes.
+    pub fn remove_map_value(&self, doc_id: &str, key: &str) -> anyhow::Result<Vec<u8>> {
+        let key = key.to_string();
+        self.mutate(doc_id, &["root"], |maps, txn| {
+            maps[0].remove(txn, &key);
+        })
     }
 
-    /// Set a value in the root map of a doc. Returns the encoded update bytes.
-    pub fn set_map_value(
-        &self,
-        doc_id: &str,
-        key: &str,
-        value: &str,
-    ) -> anyhow::Result<Vec<u8>> {
-        let doc_arc = self.get_or_create(doc_id);
-        let doc = doc_arc.write().map_err(|_| anyhow::anyhow!("doc lock poisoned"))?;
+    /// Set a string value in the `"root"` top-level map of a doc.
+    /// Returns the encoded update bytes.
+    pub fn set_map_value(&self, doc_id: &str, key: &str, value: &str) -> anyhow::Result<Vec<u8>> {
+        let key = key.to_string();
+        let value = value.to_string();
+        self.mutate(doc_id, &["root"], |maps, txn| {
+            maps[0].insert(txn, key.as_str(), value);
+        })
+    }
+}
 
-        let sv_before = {
-            let txn = doc.transact();
-            txn.state_vector()
-        };
+// ---------------------------------------------------------------------------
+// Free functions for nested YMap operations
+// ---------------------------------------------------------------------------
 
-        {
-            let map = doc.get_or_insert_map("root");
-            let mut txn = doc.transact_mut();
-            map.insert(&mut txn, key, value);
+/// Get or create a nested YMap at `map[key]`.
+///
+/// Use this for **leaf entries** within a top-level shared map — e.g., a single
+/// member record inside the `"members"` map. Because each entry key is unique
+/// (user_id, pin_id, etc.) and only one peer creates it, the `MapPrelim`
+/// insertion won't conflict.
+///
+/// **Do NOT use this for collection-level maps** that multiple peers might
+/// independently create (like `"members"` itself). For those, use
+/// `doc.get_or_insert_map("members")` which is a top-level shared type
+/// guaranteed to merge correctly.
+pub fn get_or_init_map(map: &MapRef, txn: &mut yrs::TransactionMut, key: &str) -> MapRef {
+    match map.get(txn, key) {
+        Some(Out::YMap(m)) => m,
+        _ => {
+            let empty: [(&str, &str); 0] = [];
+            map.insert(txn, key, yrs::MapPrelim::from(empty));
+            match map.get(txn, key) {
+                Some(Out::YMap(m)) => m,
+                _ => unreachable!("just inserted a map"),
+            }
         }
+    }
+}
 
-        let txn = doc.transact();
-        let update = txn.encode_state_as_update_v1(&sv_before);
-        drop(txn);
-        drop(doc);
+/// Read all entries from a nested YMap within `parent[map_key]`.
+/// Each entry's value is expected to be a YMap; its fields are collected into a HashMap.
+pub fn read_map_entries_from(
+    parent: &MapRef,
+    txn: &yrs::Transaction,
+    map_key: &str,
+) -> Vec<(String, HashMap<String, Any>)> {
+    let nested = match parent.get(txn, map_key) {
+        Some(Out::YMap(m)) => m,
+        _ => return vec![],
+    };
+    read_map_entries(&nested, txn)
+}
 
-        self.db.append_doc_update(doc_id, &update)?;
-        Ok(update)
+/// Read all entries from a YMap where values are YMaps.
+pub fn read_map_entries(
+    map: &MapRef,
+    txn: &yrs::Transaction,
+) -> Vec<(String, HashMap<String, Any>)> {
+    let mut out = Vec::new();
+    for (k, v) in map.iter(txn) {
+        if let Out::YMap(inner) = v
+            && let Some(fields) = read_map_entry_fields(&inner, txn)
+        {
+            out.push((k.to_string(), fields));
+        }
+    }
+    out
+}
+
+/// Read all fields from a YMap entry, collecting Any values into a HashMap.
+pub fn read_map_entry_fields(
+    map: &MapRef,
+    txn: &yrs::Transaction,
+) -> Option<HashMap<String, Any>> {
+    let mut fields = HashMap::new();
+    for (k, v) in map.iter(txn) {
+        if let Out::Any(a) = v {
+            fields.insert(k.to_string(), a);
+        }
+    }
+    if fields.is_empty() {
+        None
+    } else {
+        Some(fields)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Any extraction helpers
+// ---------------------------------------------------------------------------
+
+/// Extract a string from an Any-valued HashMap.
+pub fn any_str(fields: &HashMap<String, Any>, key: &str) -> Option<String> {
+    match fields.get(key)? {
+        Any::String(s) => Some(s.to_string()),
+        _ => None,
+    }
+}
+
+/// Extract an i32 (from BigInt) from an Any-valued HashMap.
+pub fn any_i32(fields: &HashMap<String, Any>, key: &str) -> Option<i32> {
+    match fields.get(key)? {
+        Any::BigInt(n) => Some(*n as i32),
+        Any::Number(n) => Some(*n as i32),
+        _ => None,
+    }
+}
+
+/// Extract an f64 from an Any-valued HashMap.
+pub fn any_f64(fields: &HashMap<String, Any>, key: &str) -> Option<f64> {
+    match fields.get(key)? {
+        Any::Number(n) => Some(*n),
+        Any::BigInt(n) => Some(*n as f64),
+        _ => None,
+    }
+}
+
+/// Extract a bool from an Any-valued HashMap.
+pub fn any_bool(fields: &HashMap<String, Any>, key: &str) -> Option<bool> {
+    match fields.get(key)? {
+        Any::Bool(b) => Some(*b),
+        _ => None,
     }
 }
 
@@ -509,27 +707,66 @@ mod tests {
 
     #[test]
     fn test_lineup_crdt_roundtrip() {
-        let stages = r##"[{"id":"s1","name":"Main Stage","short":"MS","color":"#ff0000","order":0}]"##;
-        let days = r#"[{"id":"d1","label":"Friday","num":13,"month":"Jun"}]"#;
-        let sets = r#"[{"id":"set1","day":"d1","stage":"s1","artist":"Test Act","startMin":720,"durationMin":60,"genre":"rock","cancelled":false}]"#;
+        use super::get_or_init_map;
 
+        // Simulate server writing lineup data using top-level named maps
         let server_doc = Doc::new();
-        let root = server_doc.get_or_insert_map("root");
         {
+            let stages_map = server_doc.get_or_insert_map("stages");
+            let days_map = server_doc.get_or_insert_map("days");
+            let sets_map = server_doc.get_or_insert_map("sets");
+
             let mut txn = server_doc.transact_mut();
-            root.insert(&mut txn, "stages", stages);
-            root.insert(&mut txn, "days", days);
-            root.insert(&mut txn, "sets", sets);
+
+            let s1 = get_or_init_map(&stages_map, &mut txn, "s1");
+            s1.insert(&mut txn, "name", "Main Stage");
+            s1.insert(&mut txn, "short", "MS");
+            s1.insert(&mut txn, "color", "#ff0000");
+            s1.insert(&mut txn, "order", 0i64);
+
+            let d1 = get_or_init_map(&days_map, &mut txn, "d1");
+            d1.insert(&mut txn, "label", "Friday");
+            d1.insert(&mut txn, "num", 13i64);
+            d1.insert(&mut txn, "month", "Jun");
+
+            let set1 = get_or_init_map(&sets_map, &mut txn, "set1");
+            set1.insert(&mut txn, "day", "d1");
+            set1.insert(&mut txn, "stage", "s1");
+            set1.insert(&mut txn, "artist", "Test Act");
+            set1.insert(&mut txn, "startMin", 720i64);
+            set1.insert(&mut txn, "durationMin", 60i64);
+            set1.insert(&mut txn, "genre", "rock");
+            set1.insert(&mut txn, "cancelled", false);
         }
-        let update_bytes = server_doc.transact().encode_state_as_update_v1(&StateVector::default());
+        let update_bytes = server_doc
+            .transact()
+            .encode_state_as_update_v1(&StateVector::default());
 
         let db = test_db();
         let mgr = DocManager::new(db);
-        mgr.apply_update("festival/test/state", &update_bytes).unwrap();
+        mgr.apply_update("festival/test/state", &update_bytes)
+            .unwrap();
 
-        assert_eq!(mgr.read_map_value("festival/test/state", "stages"), Some(stages.to_string()));
-        assert_eq!(mgr.read_map_value("festival/test/state", "days"), Some(days.to_string()));
-        assert_eq!(mgr.read_map_value("festival/test/state", "sets"), Some(sets.to_string()));
+        let stages = mgr.read_nested_map_entries("festival/test/state", "stages");
+        assert_eq!(stages.len(), 1);
+        assert_eq!(
+            super::any_str(&stages[0].1, "name"),
+            Some("Main Stage".to_string())
+        );
+
+        let days = mgr.read_nested_map_entries("festival/test/state", "days");
+        assert_eq!(days.len(), 1);
+        assert_eq!(
+            super::any_str(&days[0].1, "label"),
+            Some("Friday".to_string())
+        );
+
+        let sets = mgr.read_nested_map_entries("festival/test/state", "sets");
+        assert_eq!(sets.len(), 1);
+        assert_eq!(
+            super::any_str(&sets[0].1, "artist"),
+            Some("Test Act".to_string())
+        );
     }
 
     #[test]
@@ -537,6 +774,99 @@ mod tests {
         let db = test_db();
         let mgr = DocManager::new(db);
         assert_eq!(mgr.read_map_value("festival/missing/state", "stages"), None);
+    }
+
+    #[test]
+    fn test_mutate_and_read_helpers() {
+        let db = test_db();
+        let mgr = DocManager::new(db);
+
+        mgr.mutate("test-doc", &["root"], |maps, txn| {
+            maps[0].insert(txn, "name", "hello");
+        })
+        .unwrap();
+
+        let val = mgr.read("test-doc", &["root"], |maps, txn| {
+            match maps[0].get(txn, "name") {
+                Some(Out::Any(Any::String(s))) => Some(s.to_string()),
+                _ => None,
+            }
+        });
+        assert_eq!(val, Some("hello".to_string()));
+    }
+
+    #[test]
+    fn test_nested_map_operations() {
+        use super::{any_str, get_or_init_map};
+
+        let db = test_db();
+        let mgr = DocManager::new(db);
+
+        // Use top-level named map "members" (not nested inside root)
+        mgr.mutate("nested-doc", &["members"], |maps, txn| {
+            let alice = get_or_init_map(&maps[0], txn, "alice");
+            alice.insert(txn, "displayName", "Alice");
+            alice.insert(txn, "status", "active");
+
+            let bob = get_or_init_map(&maps[0], txn, "bob");
+            bob.insert(txn, "displayName", "Bob");
+            bob.insert(txn, "status", "active");
+        })
+        .unwrap();
+
+        let entries = mgr.read_nested_map_entries("nested-doc", "members");
+        assert_eq!(entries.len(), 2);
+
+        let alice = entries.iter().find(|(k, _)| k == "alice").unwrap();
+        assert_eq!(any_str(&alice.1, "displayName"), Some("Alice".to_string()));
+
+        let bob = entries.iter().find(|(k, _)| k == "bob").unwrap();
+        assert_eq!(any_str(&bob.1, "displayName"), Some("Bob".to_string()));
+
+        // Read single entry
+        let alice_entry = mgr.read_nested_map_entry("nested-doc", "members", "alice");
+        assert!(alice_entry.is_some());
+        assert_eq!(
+            any_str(&alice_entry.unwrap(), "status"),
+            Some("active".to_string())
+        );
+
+        // Read missing entry
+        let missing = mgr.read_nested_map_entry("nested-doc", "members", "charlie");
+        assert!(missing.is_none());
+    }
+
+    #[test]
+    fn test_nested_map_upsert() {
+        use super::{any_str, get_or_init_map};
+
+        let db = test_db();
+        let mgr = DocManager::new(db);
+
+        mgr.mutate("upsert-doc", &["members"], |maps, txn| {
+            let alice = get_or_init_map(&maps[0], txn, "alice");
+            alice.insert(txn, "displayName", "Alice");
+            alice.insert(txn, "status", "idle");
+        })
+        .unwrap();
+
+        // Upsert: change status
+        mgr.mutate("upsert-doc", &["members"], |maps, txn| {
+            let alice = get_or_init_map(&maps[0], txn, "alice");
+            alice.insert(txn, "status", "active");
+            alice.insert(txn, "stageId", "main-stage");
+        })
+        .unwrap();
+
+        let alice = mgr
+            .read_nested_map_entry("upsert-doc", "members", "alice")
+            .unwrap();
+        assert_eq!(any_str(&alice, "displayName"), Some("Alice".to_string()));
+        assert_eq!(any_str(&alice, "status"), Some("active".to_string()));
+        assert_eq!(
+            any_str(&alice, "stageId"),
+            Some("main-stage".to_string())
+        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::types::PeerInfo;
 
@@ -103,6 +103,80 @@ impl ConnectionManager {
             .values()
             .filter(|e| e.gossip_status == GossipStatus::Active)
             .count() as u32
+    }
+
+    /// Upsert a peer discovered via BLE.
+    pub fn on_ble_peer_discovered(&self, endpoint_id: &str) {
+        let mut table = self.peers.lock().expect("peer table lock poisoned");
+        if endpoint_id == self.own_endpoint_id {
+            return;
+        }
+        table
+            .entry(endpoint_id.to_string())
+            .and_modify(|entry| {
+                // BLE discovery is a more recent sighting; update source if it
+                // was previously only known from CRDT.
+                if entry.source == PeerSource::Crdt {
+                    entry.source = PeerSource::Ble;
+                }
+            })
+            .or_insert_with(|| PeerEntry {
+                endpoint_id: endpoint_id.to_string(),
+                relay_url: None,
+                last_seen: 0,
+                source: PeerSource::Ble,
+                ble_prefix_match: true,
+                gossip_status: GossipStatus::Unknown,
+                last_join_attempt: None,
+            });
+    }
+
+    /// Update the gossip status for a peer.
+    pub fn set_gossip_status(&self, endpoint_id: &str, status: GossipStatus) {
+        let mut table = self.peers.lock().expect("peer table lock poisoned");
+        if let Some(entry) = table.get_mut(endpoint_id) {
+            entry.gossip_status = status;
+        }
+    }
+
+    /// Record that a join attempt was made for this peer.
+    pub fn mark_join_attempted(&self, endpoint_id: &str) {
+        let mut table = self.peers.lock().expect("peer table lock poisoned");
+        if let Some(entry) = table.get_mut(endpoint_id) {
+            entry.last_join_attempt = Some(Instant::now());
+        }
+    }
+
+    /// Return endpoint IDs of peers that need a gossip join nudge.
+    ///
+    /// A peer needs a join if its gossip status is not Active and its last
+    /// join attempt is either None or older than `min_interval`.
+    pub fn peers_needing_join(&self, min_interval: Duration) -> Vec<String> {
+        let table = self.peers.lock().expect("peer table lock poisoned");
+        table
+            .values()
+            .filter(|e| {
+                e.gossip_status != GossipStatus::Active
+                    && match e.last_join_attempt {
+                        None => true,
+                        Some(t) => t.elapsed() >= min_interval,
+                    }
+            })
+            .map(|e| e.endpoint_id.clone())
+            .collect()
+    }
+
+    /// Per-peer throttle: returns true if enough time has passed since the
+    /// last join attempt for this peer.
+    pub fn should_nudge_join(&self, endpoint_id: &str, min_interval: Duration) -> bool {
+        let table = self.peers.lock().expect("peer table lock poisoned");
+        match table.get(endpoint_id) {
+            None => true,
+            Some(entry) => match entry.last_join_attempt {
+                None => true,
+                Some(t) => t.elapsed() >= min_interval,
+            },
+        }
     }
 }
 

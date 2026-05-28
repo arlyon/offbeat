@@ -168,16 +168,43 @@ impl GossipManager {
         }
     }
 
-    /// Join a gossip topic and return a receiver for events.
+    /// Join a gossip topic. The receiver is stored internally and can be
+    /// claimed by the event pump via [`take_receivers`].
     pub async fn subscribe(
         &mut self,
         topic_id: TopicId,
         bootstrap: Vec<EndpointId>,
-    ) -> anyhow::Result<GossipReceiver> {
+    ) -> anyhow::Result<()> {
         let topic = self.gossip.subscribe(topic_id, bootstrap).await?;
         let (sender, receiver) = topic.split();
         self.subscriptions.insert(topic_id, sender);
-        Ok(receiver)
+        self.receivers.insert(topic_id, receiver);
+        Ok(())
+    }
+
+    /// Call `join_peers` on every active subscription's sender.
+    ///
+    /// Used by BLE discovery/reconnect ticks to nudge gossip into dialling
+    /// newly-discovered or reconnecting peers across all topics.
+    pub async fn join_peers_all(&self, peers: Vec<EndpointId>) {
+        for (topic_id, sender) in &self.subscriptions {
+            if let Err(e) = sender.join_peers(peers.clone()).await {
+                tracing::debug!(?topic_id, "join_peers_all failed for topic: {e}");
+            }
+        }
+    }
+
+    /// Drain all stored receivers so the gossip event pump can claim them.
+    ///
+    /// Each receiver is returned exactly once; subsequent calls return an
+    /// empty map (until new subscriptions are created).
+    pub fn take_receivers(&mut self) -> HashMap<TopicId, GossipReceiver> {
+        std::mem::take(&mut self.receivers)
+    }
+
+    /// Number of active topic subscriptions.
+    pub fn topic_count(&self) -> usize {
+        self.subscriptions.len()
     }
 
     /// Leave a previously joined gossip topic.

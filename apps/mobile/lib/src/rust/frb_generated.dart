@@ -4,6 +4,7 @@
 // ignore_for_file: unused_import, unused_element, unnecessary_import, duplicate_ignore, invalid_use_of_internal_member, annotate_overrides, non_constant_identifier_names, curly_braces_in_flow_control_structures, prefer_const_literals_to_create_immutables, unused_field
 
 import 'api.dart';
+import 'api/dto.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'frb_generated.dart';
@@ -66,7 +67,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => -1473851032;
+  int get rustContentHash => 244991422;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -238,6 +239,8 @@ abstract class RustLibApi extends BaseApi {
     required String message,
   });
 
+  Future<void> crateApiAppNodeStartBleSync({required AppNode that});
+
   Future<void> crateApiAppNodeStoreAttestation({
     required AppNode that,
     required String message,
@@ -306,17 +309,69 @@ abstract class RustLibApi extends BaseApi {
     required String festivalId,
   });
 
-  Future<Uint8List> crateApiGenerateGroupKey();
+  Future<SyncStatusDto> crateApiDtoConvertSyncStatus({
+    required SyncStatus status,
+  });
 
-  Future<String> crateApiGroupIdFromKey({required List<int> key});
+  Future<Uint8List> crateApiDtoGenerateGroupKey();
+
+  Future<String> crateApiDtoGroupIdFromKey({required List<int> key});
 
   Future<void> crateApiInitApp();
+
+  Future<PeerStatusInfo> crateApiDtoPeerEntryToDto({required PeerEntry entry});
+
+  Future<LineupDto?> crateApiDtoReadLineupFromDoc({
+    required DocManager dm,
+    required String docId,
+  });
+
+  Future<WeatherForecastDto?> crateApiDtoReadWeatherFromDoc({
+    required DocManager dm,
+    required String docId,
+  });
+
+  Future<TransportStatusDto> crateApiDtoSnapshotTransport({
+    required OffbeatNode node,
+  });
 
   RustArcIncrementStrongCountFnType get rust_arc_increment_strong_count_AppNode;
 
   RustArcDecrementStrongCountFnType get rust_arc_decrement_strong_count_AppNode;
 
   CrossPlatformFinalizerArg get rust_arc_decrement_strong_count_AppNodePtr;
+
+  RustArcIncrementStrongCountFnType
+  get rust_arc_increment_strong_count_DocManager;
+
+  RustArcDecrementStrongCountFnType
+  get rust_arc_decrement_strong_count_DocManager;
+
+  CrossPlatformFinalizerArg get rust_arc_decrement_strong_count_DocManagerPtr;
+
+  RustArcIncrementStrongCountFnType
+  get rust_arc_increment_strong_count_OffbeatNode;
+
+  RustArcDecrementStrongCountFnType
+  get rust_arc_decrement_strong_count_OffbeatNode;
+
+  CrossPlatformFinalizerArg get rust_arc_decrement_strong_count_OffbeatNodePtr;
+
+  RustArcIncrementStrongCountFnType
+  get rust_arc_increment_strong_count_PeerEntry;
+
+  RustArcDecrementStrongCountFnType
+  get rust_arc_decrement_strong_count_PeerEntry;
+
+  CrossPlatformFinalizerArg get rust_arc_decrement_strong_count_PeerEntryPtr;
+
+  RustArcIncrementStrongCountFnType
+  get rust_arc_increment_strong_count_SyncStatus;
+
+  RustArcDecrementStrongCountFnType
+  get rust_arc_decrement_strong_count_SyncStatus;
+
+  CrossPlatformFinalizerArg get rust_arc_decrement_strong_count_SyncStatusPtr;
 }
 
 class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
@@ -1530,6 +1585,40 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   );
 
   @override
+  Future<void> crateApiAppNodeStartBleSync({required AppNode that}) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerAppNode(
+            that,
+            serializer,
+          );
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 33,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiAppNodeStartBleSyncConstMeta,
+        argValues: [that],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiAppNodeStartBleSyncConstMeta =>
+      const TaskConstMeta(
+        debugName: "AppNode_start_ble_sync",
+        argNames: ["that"],
+      );
+
+  @override
   Future<void> crateApiAppNodeStoreAttestation({
     required AppNode that,
     required String message,
@@ -1550,7 +1639,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 33,
+            funcId: 34,
             port: port_,
           );
         },
@@ -1590,7 +1679,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 34,
+            funcId: 35,
             port: port_,
           );
         },
@@ -1628,7 +1717,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 35,
+            funcId: 36,
             port: port_,
           );
         },
@@ -1666,7 +1755,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 36,
+            funcId: 37,
             port: port_,
           );
         },
@@ -1706,7 +1795,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 37,
+            funcId: 38,
             port: port_,
           );
         },
@@ -1745,7 +1834,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 38,
+            funcId: 39,
             port: port_,
           );
         },
@@ -1787,7 +1876,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 39,
+            funcId: 40,
             port: port_,
           );
         },
@@ -1827,7 +1916,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 40,
+            funcId: 41,
             port: port_,
           );
         },
@@ -1871,7 +1960,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 41,
+            funcId: 42,
             port: port_,
           );
         },
@@ -1909,7 +1998,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 42,
+            funcId: 43,
             port: port_,
           );
         },
@@ -1948,7 +2037,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 43,
+            funcId: 44,
             port: port_,
           );
         },
@@ -1987,7 +2076,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 44,
+            funcId: 45,
             port: port_,
           );
         },
@@ -2031,7 +2120,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 45,
+            funcId: 46,
             port: port_,
           );
         },
@@ -2054,39 +2143,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<Uint8List> crateApiGenerateGroupKey() {
+  Future<SyncStatusDto> crateApiDtoConvertSyncStatus({
+    required SyncStatus status,
+  }) {
     return handler.executeNormal(
       NormalTask(
         callFfi: (port_) {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncStatus(
+            status,
             serializer,
-            funcId: 46,
-            port: port_,
           );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_list_prim_u_8_strict,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiGenerateGroupKeyConstMeta,
-        argValues: [],
-        apiImpl: this,
-      ),
-    );
-  }
-
-  TaskConstMeta get kCrateApiGenerateGroupKeyConstMeta =>
-      const TaskConstMeta(debugName: "generate_group_key", argNames: []);
-
-  @override
-  Future<String> crateApiGroupIdFromKey({required List<int> key}) {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_list_prim_u_8_loose(key, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -2095,17 +2162,75 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           );
         },
         codec: SseCodec(
+          decodeSuccessData: sse_decode_sync_status_dto,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiDtoConvertSyncStatusConstMeta,
+        argValues: [status],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiDtoConvertSyncStatusConstMeta =>
+      const TaskConstMeta(
+        debugName: "convert_sync_status",
+        argNames: ["status"],
+      );
+
+  @override
+  Future<Uint8List> crateApiDtoGenerateGroupKey() {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 48,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_prim_u_8_strict,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiDtoGenerateGroupKeyConstMeta,
+        argValues: [],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiDtoGenerateGroupKeyConstMeta =>
+      const TaskConstMeta(debugName: "generate_group_key", argNames: []);
+
+  @override
+  Future<String> crateApiDtoGroupIdFromKey({required List<int> key}) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_list_prim_u_8_loose(key, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 49,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
           decodeSuccessData: sse_decode_String,
           decodeErrorData: sse_decode_AnyhowException,
         ),
-        constMeta: kCrateApiGroupIdFromKeyConstMeta,
+        constMeta: kCrateApiDtoGroupIdFromKeyConstMeta,
         argValues: [key],
         apiImpl: this,
       ),
     );
   }
 
-  TaskConstMeta get kCrateApiGroupIdFromKeyConstMeta =>
+  TaskConstMeta get kCrateApiDtoGroupIdFromKeyConstMeta =>
       const TaskConstMeta(debugName: "group_id_from_key", argNames: ["key"]);
 
   @override
@@ -2117,7 +2242,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 48,
+            funcId: 50,
             port: port_,
           );
         },
@@ -2135,6 +2260,146 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiInitAppConstMeta =>
       const TaskConstMeta(debugName: "init_app", argNames: []);
 
+  @override
+  Future<PeerStatusInfo> crateApiDtoPeerEntryToDto({required PeerEntry entry}) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerEntry(
+            entry,
+            serializer,
+          );
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 51,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_peer_status_info,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiDtoPeerEntryToDtoConstMeta,
+        argValues: [entry],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiDtoPeerEntryToDtoConstMeta =>
+      const TaskConstMeta(debugName: "peer_entry_to_dto", argNames: ["entry"]);
+
+  @override
+  Future<LineupDto?> crateApiDtoReadLineupFromDoc({
+    required DocManager dm,
+    required String docId,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDocManager(
+            dm,
+            serializer,
+          );
+          sse_encode_String(docId, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 52,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_opt_box_autoadd_lineup_dto,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiDtoReadLineupFromDocConstMeta,
+        argValues: [dm, docId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiDtoReadLineupFromDocConstMeta =>
+      const TaskConstMeta(
+        debugName: "read_lineup_from_doc",
+        argNames: ["dm", "docId"],
+      );
+
+  @override
+  Future<WeatherForecastDto?> crateApiDtoReadWeatherFromDoc({
+    required DocManager dm,
+    required String docId,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDocManager(
+            dm,
+            serializer,
+          );
+          sse_encode_String(docId, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 53,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_opt_box_autoadd_weather_forecast_dto,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiDtoReadWeatherFromDocConstMeta,
+        argValues: [dm, docId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiDtoReadWeatherFromDocConstMeta =>
+      const TaskConstMeta(
+        debugName: "read_weather_from_doc",
+        argNames: ["dm", "docId"],
+      );
+
+  @override
+  Future<TransportStatusDto> crateApiDtoSnapshotTransport({
+    required OffbeatNode node,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerOffbeatNode(
+            node,
+            serializer,
+          );
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 54,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_transport_status_dto,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiDtoSnapshotTransportConstMeta,
+        argValues: [node],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiDtoSnapshotTransportConstMeta =>
+      const TaskConstMeta(debugName: "snapshot_transport", argNames: ["node"]);
+
   RustArcIncrementStrongCountFnType
   get rust_arc_increment_strong_count_AppNode => wire
       .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerAppNode;
@@ -2142,6 +2407,38 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   RustArcDecrementStrongCountFnType
   get rust_arc_decrement_strong_count_AppNode => wire
       .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerAppNode;
+
+  RustArcIncrementStrongCountFnType
+  get rust_arc_increment_strong_count_DocManager => wire
+      .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDocManager;
+
+  RustArcDecrementStrongCountFnType
+  get rust_arc_decrement_strong_count_DocManager => wire
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDocManager;
+
+  RustArcIncrementStrongCountFnType
+  get rust_arc_increment_strong_count_OffbeatNode => wire
+      .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerOffbeatNode;
+
+  RustArcDecrementStrongCountFnType
+  get rust_arc_decrement_strong_count_OffbeatNode => wire
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerOffbeatNode;
+
+  RustArcIncrementStrongCountFnType
+  get rust_arc_increment_strong_count_PeerEntry => wire
+      .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerEntry;
+
+  RustArcDecrementStrongCountFnType
+  get rust_arc_decrement_strong_count_PeerEntry => wire
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerEntry;
+
+  RustArcIncrementStrongCountFnType
+  get rust_arc_increment_strong_count_SyncStatus => wire
+      .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncStatus;
+
+  RustArcDecrementStrongCountFnType
+  get rust_arc_decrement_strong_count_SyncStatus => wire
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncStatus;
 
   @protected
   AnyhowException dco_decode_AnyhowException(dynamic raw) {
@@ -2156,6 +2453,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return AppNodeImpl.frbInternalDcoDecode(raw as List<dynamic>);
+  }
+
+  @protected
+  PeerEntry
+  dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerEntry(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return PeerEntryImpl.frbInternalDcoDecode(raw as List<dynamic>);
   }
 
   @protected
@@ -2177,12 +2483,75 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  DocManager
+  dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDocManager(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return DocManagerImpl.frbInternalDcoDecode(raw as List<dynamic>);
+  }
+
+  @protected
+  OffbeatNode
+  dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerOffbeatNode(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return OffbeatNodeImpl.frbInternalDcoDecode(raw as List<dynamic>);
+  }
+
+  @protected
+  SyncStatus
+  dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncStatus(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return SyncStatusImpl.frbInternalDcoDecode(raw as List<dynamic>);
+  }
+
+  @protected
   AppNode
   dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerAppNode(
     dynamic raw,
   ) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return AppNodeImpl.frbInternalDcoDecode(raw as List<dynamic>);
+  }
+
+  @protected
+  DocManager
+  dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDocManager(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return DocManagerImpl.frbInternalDcoDecode(raw as List<dynamic>);
+  }
+
+  @protected
+  OffbeatNode
+  dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerOffbeatNode(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return OffbeatNodeImpl.frbInternalDcoDecode(raw as List<dynamic>);
+  }
+
+  @protected
+  PeerEntry
+  dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerEntry(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return PeerEntryImpl.frbInternalDcoDecode(raw as List<dynamic>);
+  }
+
+  @protected
+  SyncStatus
+  dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncStatus(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return SyncStatusImpl.frbInternalDcoDecode(raw as List<dynamic>);
   }
 
   @protected
@@ -2694,12 +3063,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TransportPeerDto dco_decode_transport_peer_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 3)
-      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    if (arr.length != 5)
+      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
     return TransportPeerDto(
       deviceId: dco_decode_String(arr[0]),
       phase: dco_decode_String(arr[1]),
       connectPath: dco_decode_opt_String(arr[2]),
+      verifiedEndpoint: dco_decode_opt_String(arr[3]),
+      consecutiveFailures: dco_decode_u_32(arr[4]),
     );
   }
 
@@ -2780,6 +3151,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  PeerEntry
+  sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerEntry(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return PeerEntryImpl.frbInternalSseDecode(
+      sse_decode_usize(deserializer),
+      sse_decode_i_32(deserializer),
+    );
+  }
+
+  @protected
   AppNode
   sse_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerAppNode(
     SseDeserializer deserializer,
@@ -2804,12 +3187,96 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  DocManager
+  sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDocManager(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return DocManagerImpl.frbInternalSseDecode(
+      sse_decode_usize(deserializer),
+      sse_decode_i_32(deserializer),
+    );
+  }
+
+  @protected
+  OffbeatNode
+  sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerOffbeatNode(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return OffbeatNodeImpl.frbInternalSseDecode(
+      sse_decode_usize(deserializer),
+      sse_decode_i_32(deserializer),
+    );
+  }
+
+  @protected
+  SyncStatus
+  sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncStatus(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return SyncStatusImpl.frbInternalSseDecode(
+      sse_decode_usize(deserializer),
+      sse_decode_i_32(deserializer),
+    );
+  }
+
+  @protected
   AppNode
   sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerAppNode(
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return AppNodeImpl.frbInternalSseDecode(
+      sse_decode_usize(deserializer),
+      sse_decode_i_32(deserializer),
+    );
+  }
+
+  @protected
+  DocManager
+  sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDocManager(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return DocManagerImpl.frbInternalSseDecode(
+      sse_decode_usize(deserializer),
+      sse_decode_i_32(deserializer),
+    );
+  }
+
+  @protected
+  OffbeatNode
+  sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerOffbeatNode(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return OffbeatNodeImpl.frbInternalSseDecode(
+      sse_decode_usize(deserializer),
+      sse_decode_i_32(deserializer),
+    );
+  }
+
+  @protected
+  PeerEntry
+  sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerEntry(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return PeerEntryImpl.frbInternalSseDecode(
+      sse_decode_usize(deserializer),
+      sse_decode_i_32(deserializer),
+    );
+  }
+
+  @protected
+  SyncStatus
+  sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncStatus(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return SyncStatusImpl.frbInternalSseDecode(
       sse_decode_usize(deserializer),
       sse_decode_i_32(deserializer),
     );
@@ -3459,10 +3926,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_deviceId = sse_decode_String(deserializer);
     var var_phase = sse_decode_String(deserializer);
     var var_connectPath = sse_decode_opt_String(deserializer);
+    var var_verifiedEndpoint = sse_decode_opt_String(deserializer);
+    var var_consecutiveFailures = sse_decode_u_32(deserializer);
     return TransportPeerDto(
       deviceId: var_deviceId,
       phase: var_phase,
       connectPath: var_connectPath,
+      verifiedEndpoint: var_verifiedEndpoint,
+      consecutiveFailures: var_consecutiveFailures,
     );
   }
 
@@ -3548,6 +4019,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void
+  sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerEntry(
+    PeerEntry self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_usize(
+      (self as PeerEntryImpl).frbInternalSseEncode(move: true),
+      serializer,
+    );
+  }
+
+  @protected
+  void
   sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerAppNode(
     AppNode self,
     SseSerializer serializer,
@@ -3574,6 +4058,45 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void
+  sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDocManager(
+    DocManager self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_usize(
+      (self as DocManagerImpl).frbInternalSseEncode(move: false),
+      serializer,
+    );
+  }
+
+  @protected
+  void
+  sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerOffbeatNode(
+    OffbeatNode self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_usize(
+      (self as OffbeatNodeImpl).frbInternalSseEncode(move: false),
+      serializer,
+    );
+  }
+
+  @protected
+  void
+  sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncStatus(
+    SyncStatus self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_usize(
+      (self as SyncStatusImpl).frbInternalSseEncode(move: false),
+      serializer,
+    );
+  }
+
+  @protected
+  void
   sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerAppNode(
     AppNode self,
     SseSerializer serializer,
@@ -3581,6 +4104,58 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_usize(
       (self as AppNodeImpl).frbInternalSseEncode(move: null),
+      serializer,
+    );
+  }
+
+  @protected
+  void
+  sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDocManager(
+    DocManager self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_usize(
+      (self as DocManagerImpl).frbInternalSseEncode(move: null),
+      serializer,
+    );
+  }
+
+  @protected
+  void
+  sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerOffbeatNode(
+    OffbeatNode self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_usize(
+      (self as OffbeatNodeImpl).frbInternalSseEncode(move: null),
+      serializer,
+    );
+  }
+
+  @protected
+  void
+  sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerEntry(
+    PeerEntry self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_usize(
+      (self as PeerEntryImpl).frbInternalSseEncode(move: null),
+      serializer,
+    );
+  }
+
+  @protected
+  void
+  sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncStatus(
+    SyncStatus self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_usize(
+      (self as SyncStatusImpl).frbInternalSseEncode(move: null),
       serializer,
     );
   }
@@ -4213,6 +4788,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_String(self.deviceId, serializer);
     sse_encode_String(self.phase, serializer);
     sse_encode_opt_String(self.connectPath, serializer);
+    sse_encode_opt_String(self.verifiedEndpoint, serializer);
+    sse_encode_u_32(self.consecutiveFailures, serializer);
   }
 
   @protected
@@ -4533,6 +5110,14 @@ class AppNodeImpl extends RustOpaque implements AppNode {
   Future<String> signMessage({required String message}) => RustLib.instance.api
       .crateApiAppNodeSignMessage(that: this, message: message);
 
+  /// Start BLE auto-connection background tasks.
+  ///
+  /// Spawns discovery tick, reconnect tick, and gossip event pump tasks that
+  /// transition BLE-discovered peers to gossip-connected. Call after
+  /// subscribing to festival/group topics.
+  Future<void> startBleSync() =>
+      RustLib.instance.api.crateApiAppNodeStartBleSync(that: this);
+
   /// Store an attestation received from the MainDO.
   Future<void> storeAttestation({
     required String message,
@@ -4641,5 +5226,85 @@ class AppNodeImpl extends RustOpaque implements AppNode {
   }) => RustLib.instance.api.crateApiAppNodeWatchWeather(
     that: this,
     festivalId: festivalId,
+  );
+}
+
+@sealed
+class DocManagerImpl extends RustOpaque implements DocManager {
+  // Not to be used by end users
+  DocManagerImpl.frbInternalDcoDecode(List<dynamic> wire)
+    : super.frbInternalDcoDecode(wire, _kStaticData);
+
+  // Not to be used by end users
+  DocManagerImpl.frbInternalSseDecode(BigInt ptr, int externalSizeOnNative)
+    : super.frbInternalSseDecode(ptr, externalSizeOnNative, _kStaticData);
+
+  static final _kStaticData = RustArcStaticData(
+    rustArcIncrementStrongCount:
+        RustLib.instance.api.rust_arc_increment_strong_count_DocManager,
+    rustArcDecrementStrongCount:
+        RustLib.instance.api.rust_arc_decrement_strong_count_DocManager,
+    rustArcDecrementStrongCountPtr:
+        RustLib.instance.api.rust_arc_decrement_strong_count_DocManagerPtr,
+  );
+}
+
+@sealed
+class OffbeatNodeImpl extends RustOpaque implements OffbeatNode {
+  // Not to be used by end users
+  OffbeatNodeImpl.frbInternalDcoDecode(List<dynamic> wire)
+    : super.frbInternalDcoDecode(wire, _kStaticData);
+
+  // Not to be used by end users
+  OffbeatNodeImpl.frbInternalSseDecode(BigInt ptr, int externalSizeOnNative)
+    : super.frbInternalSseDecode(ptr, externalSizeOnNative, _kStaticData);
+
+  static final _kStaticData = RustArcStaticData(
+    rustArcIncrementStrongCount:
+        RustLib.instance.api.rust_arc_increment_strong_count_OffbeatNode,
+    rustArcDecrementStrongCount:
+        RustLib.instance.api.rust_arc_decrement_strong_count_OffbeatNode,
+    rustArcDecrementStrongCountPtr:
+        RustLib.instance.api.rust_arc_decrement_strong_count_OffbeatNodePtr,
+  );
+}
+
+@sealed
+class PeerEntryImpl extends RustOpaque implements PeerEntry {
+  // Not to be used by end users
+  PeerEntryImpl.frbInternalDcoDecode(List<dynamic> wire)
+    : super.frbInternalDcoDecode(wire, _kStaticData);
+
+  // Not to be used by end users
+  PeerEntryImpl.frbInternalSseDecode(BigInt ptr, int externalSizeOnNative)
+    : super.frbInternalSseDecode(ptr, externalSizeOnNative, _kStaticData);
+
+  static final _kStaticData = RustArcStaticData(
+    rustArcIncrementStrongCount:
+        RustLib.instance.api.rust_arc_increment_strong_count_PeerEntry,
+    rustArcDecrementStrongCount:
+        RustLib.instance.api.rust_arc_decrement_strong_count_PeerEntry,
+    rustArcDecrementStrongCountPtr:
+        RustLib.instance.api.rust_arc_decrement_strong_count_PeerEntryPtr,
+  );
+}
+
+@sealed
+class SyncStatusImpl extends RustOpaque implements SyncStatus {
+  // Not to be used by end users
+  SyncStatusImpl.frbInternalDcoDecode(List<dynamic> wire)
+    : super.frbInternalDcoDecode(wire, _kStaticData);
+
+  // Not to be used by end users
+  SyncStatusImpl.frbInternalSseDecode(BigInt ptr, int externalSizeOnNative)
+    : super.frbInternalSseDecode(ptr, externalSizeOnNative, _kStaticData);
+
+  static final _kStaticData = RustArcStaticData(
+    rustArcIncrementStrongCount:
+        RustLib.instance.api.rust_arc_increment_strong_count_SyncStatus,
+    rustArcDecrementStrongCount:
+        RustLib.instance.api.rust_arc_decrement_strong_count_SyncStatus,
+    rustArcDecrementStrongCountPtr:
+        RustLib.instance.api.rust_arc_decrement_strong_count_SyncStatusPtr,
   );
 }

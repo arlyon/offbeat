@@ -5,7 +5,7 @@
 import 'package:flutter/material.dart';
 import '../theme/tokens.dart';
 import '../services/bluetooth_service.dart';
-import '../src/rust/api.dart';
+import '../src/rust/api/dto.dart';
 
 void showConnectionDrawer(
   BuildContext context, {
@@ -407,32 +407,85 @@ class _ChannelCard extends StatelessWidget {
                       Icon(
                         Icons.circle,
                         size: 5,
-                        color:
-                            p.phase == 'Connected' ? colorOk : colorWarn,
+                        color: p.phase == 'Connected'
+                            ? colorOk
+                            : p.phase == 'Discovered'
+                                ? colorFg4
+                                : colorWarn,
                       ),
                       const SizedBox(width: 8),
                       Expanded(
-                        child: Text(
-                          p.deviceId.length > 12
-                              ? '${p.deviceId.substring(0, 12)}...'
-                              : p.deviceId,
-                          style: const TextStyle(
-                            fontFamily: 'JetBrainsMono',
-                            fontSize: 10,
-                            color: colorFg2,
-                            height: 1,
-                          ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              p.deviceId.length > 16
+                                  ? '${p.deviceId.substring(0, 16)}...'
+                                  : p.deviceId,
+                              style: const TextStyle(
+                                fontFamily: 'JetBrainsMono',
+                                fontSize: 10,
+                                color: colorFg2,
+                                height: 1,
+                              ),
+                            ),
+                            if (p.verifiedEndpoint != null) ...[
+                              const SizedBox(height: 3),
+                              Text(
+                                'EP: ${p.verifiedEndpoint!.length > 16 ? '${p.verifiedEndpoint!.substring(0, 16)}...' : p.verifiedEndpoint!}',
+                                style: const TextStyle(
+                                  fontFamily: 'JetBrainsMono',
+                                  fontSize: 9,
+                                  color: colorOk,
+                                  height: 1,
+                                ),
+                              ),
+                            ],
+                            if (p.connectPath != null) ...[
+                              const SizedBox(height: 3),
+                              Text(
+                                p.connectPath!,
+                                style: const TextStyle(
+                                  fontFamily: 'JetBrainsMono',
+                                  fontSize: 9,
+                                  color: colorFg4,
+                                  height: 1,
+                                ),
+                              ),
+                            ],
+                          ],
                         ),
                       ),
-                      Text(
-                        p.phase.toUpperCase(),
-                        style: const TextStyle(
-                          fontFamily: 'JetBrainsMono',
-                          fontSize: 9,
-                          letterSpacing: trMeta * 9,
-                          color: colorFg3,
-                          height: 1,
-                        ),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text(
+                            p.phase.toUpperCase(),
+                            style: TextStyle(
+                              fontFamily: 'JetBrainsMono',
+                              fontSize: 9,
+                              letterSpacing: trMeta * 9,
+                              color: p.phase == 'Connected'
+                                  ? colorOk
+                                  : p.phase == 'Discovered'
+                                      ? colorFg3
+                                      : colorWarn,
+                              height: 1,
+                            ),
+                          ),
+                          if (p.consecutiveFailures > 0) ...[
+                            const SizedBox(height: 3),
+                            Text(
+                              '${p.consecutiveFailures} FAIL',
+                              style: const TextStyle(
+                                fontFamily: 'JetBrainsMono',
+                                fontSize: 9,
+                                color: colorErr,
+                                height: 1,
+                              ),
+                            ),
+                          ],
+                        ],
                       ),
                     ],
                   ),

@@ -1,9 +1,19 @@
+pub mod dto;
+
 use base64::Engine as _;
 use crate::frb_generated::StreamSink;
-use offbeat_core::OffbeatNode;
 use once_cell::sync::Lazy;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
+
+// Re-export DTOs and utilities for convenience
+pub use dto::*;
+
+// Re-export types used in public function signatures for FRB
+pub use offbeat_core::connection_manager::PeerEntry;
+pub use offbeat_core::doc_manager::DocManager;
+pub use offbeat_core::notifier::SyncStatus;
+pub use offbeat_core::OffbeatNode;
 
 /// Global tokio runtime for spawning watch tasks.
 /// FRB's async executor isn't a full tokio runtime, so we need our own.
@@ -58,193 +68,6 @@ pub fn init_app() {
 }
 
 // ---------------------------------------------------------------------------
-// DTOs
-// ---------------------------------------------------------------------------
-
-pub struct GroupInfo {
-    pub id: String,
-    pub name: String,
-}
-
-pub struct ChatMessageDto {
-    pub id: String,
-    pub user_id: String,
-    pub display_name: String,
-    pub text: String,
-    pub topic: String,
-    pub stage_id: Option<String>,
-    pub timestamp: String,
-}
-
-pub struct GroupCreateResultDto {
-    pub group_id: String,
-    pub festival_id: String,
-    pub invite_payload: String,
-}
-
-pub struct GroupJoinResultDto {
-    pub group_id: String,
-    pub festival_id: String,
-}
-
-pub struct GroupMemberDto {
-    pub user_id: String,
-    pub display_name: String,
-    pub status: String,
-    pub stage_id: Option<String>,
-    pub custom_location: Option<String>,
-}
-
-pub struct GroupPinDto {
-    pub id: String,
-    pub label: String,
-    pub location: String,
-    pub pinned_by: String,
-}
-
-pub struct GroupStateDto {
-    pub name: String,
-    pub members: Vec<GroupMemberDto>,
-    pub pins: Vec<GroupPinDto>,
-}
-
-pub struct IdentityDto {
-    pub user_id: String,
-    pub display_name: Option<String>,
-}
-
-pub struct AuthStateDto {
-    pub state: String,
-    pub expires_at: Option<String>,
-}
-
-pub struct AttestationDto {
-    pub message: String,
-    pub signature: String,
-    pub issuer: String,
-}
-
-pub struct LineupStageDto {
-    pub id: String,
-    pub name: String,
-    pub short: String,
-    pub color: String,
-    pub order: i32,
-}
-
-pub struct LineupDayDto {
-    pub id: String,
-    pub label: String,
-    pub num: i32,
-    pub month: String,
-    pub year: i32,
-}
-
-pub struct LineupSetDto {
-    pub id: String,
-    pub day: String,
-    pub stage: String,
-    pub artist: String,
-    pub start_min: i32,
-    pub duration_min: i32,
-    pub genre: String,
-    pub cancelled: bool,
-}
-
-pub struct LineupDto {
-    pub stages: Vec<LineupStageDto>,
-    pub days: Vec<LineupDayDto>,
-    pub sets: Vec<LineupSetDto>,
-}
-
-pub struct HourlyWeatherDto {
-    pub time: Vec<String>,
-    pub temperature_2m: Vec<f64>,
-    pub precipitation_probability: Vec<f64>,
-    pub weather_code: Vec<u32>,
-    pub wind_speed_10m: Vec<f64>,
-}
-
-pub struct WeatherForecastDto {
-    pub updated_at: String,
-    pub lat: f64,
-    pub lon: f64,
-    pub timezone: String,
-    pub hourly: HourlyWeatherDto,
-}
-
-/// Per-resource sync status.
-pub struct ResourceSyncStatusDto {
-    pub id: String,
-    pub syncing: bool,
-    pub last_synced: Option<String>,
-    pub error: Option<String>,
-    pub messages_received: u32,
-    pub messages_sent: u32,
-    /// Number of peers subscribed to this topic on the relay.
-    pub peer_count: u32,
-}
-
-/// Overall sync status for the node.
-pub struct SyncStatusDto {
-    pub syncing: bool,
-    pub resources: Vec<ResourceSyncStatusDto>,
-    pub pending_ops: u32,
-}
-
-// ---------------------------------------------------------------------------
-// Transport DTOs
-// ---------------------------------------------------------------------------
-
-pub struct TransportStatusDto {
-    /// Relay (Festival DO WebSocket) connection status.
-    pub relay: RelayStatusDto,
-    /// BLE transport status.
-    pub ble: BleStatusDto,
-}
-
-pub struct RelayStatusDto {
-    pub connected: bool,
-    pub authenticated: bool,
-    /// Bytes per second sent to the relay (computed over last interval).
-    pub tx_bytes_per_sec: u64,
-    /// Bytes per second received from the relay.
-    pub rx_bytes_per_sec: u64,
-}
-
-pub struct BleStatusDto {
-    pub active: bool,
-    pub peer_count: u32,
-    /// Aggregate BLE bytes per second sent.
-    pub tx_bytes_per_sec: u64,
-    /// Aggregate BLE bytes per second received.
-    pub rx_bytes_per_sec: u64,
-    pub retransmits: u64,
-    pub peers: Vec<TransportPeerDto>,
-}
-
-pub struct TransportPeerDto {
-    pub device_id: String,
-    pub phase: String,
-    pub connect_path: Option<String>,
-}
-
-// ---------------------------------------------------------------------------
-// Peer / Connection Manager DTOs
-// ---------------------------------------------------------------------------
-
-/// A simplified view of a tracked peer for the Flutter UI.
-pub struct PeerStatusInfo {
-    pub endpoint_id: String,
-    /// Discovery source: "crdt", "ble", or "gossip".
-    pub source: String,
-    /// Gossip connection status: "unknown", "joining", "active", or "stale".
-    pub status: String,
-    pub ble_visible: bool,
-    pub relay_url: Option<String>,
-}
-
-// ---------------------------------------------------------------------------
 // Opaque node handle
 // ---------------------------------------------------------------------------
 
@@ -252,6 +75,8 @@ pub struct PeerStatusInfo {
 #[flutter_rust_bridge::frb(opaque)]
 pub struct AppNode {
     inner: OffbeatNode,
+    /// Join handles for BLE connection background tasks.
+    ble_task_handles: Vec<tokio::task::JoinHandle<()>>,
 }
 
 impl AppNode {
@@ -260,13 +85,19 @@ impl AppNode {
     pub async fn create(db_path: String) -> anyhow::Result<AppNode> {
         let path = std::path::Path::new(&db_path);
         let inner = OffbeatNode::new_with_networking(path).await?;
-        Ok(AppNode { inner })
+        Ok(AppNode {
+            inner,
+            ble_task_handles: Vec::new(),
+        })
     }
 
     /// Create an in-memory node (useful for testing).
     pub fn create_in_memory() -> anyhow::Result<AppNode> {
         let inner = OffbeatNode::new_in_memory()?;
-        Ok(AppNode { inner })
+        Ok(AppNode {
+            inner,
+            ble_task_handles: Vec::new(),
+        })
     }
 
     /// Return the set IDs that are starred for the given festival.
@@ -281,54 +112,10 @@ impl AppNode {
 
     /// Read the lineup from the local Yrs doc for a festival.
     ///
-    /// The Yrs doc at `festival/{id}/state` has separate root-map keys:
-    /// `"stages"`, `"days"`, `"sets"` — each a JSON array string that
-    /// arrives via signed gossip updates and merges independently.
-    ///
     /// Returns `None` if no lineup data has synced yet.
     pub async fn get_lineup(&self, festival_id: String) -> Option<LineupDto> {
         let doc_id = format!("festival/{festival_id}/state");
-        let dm = &self.inner.doc_manager;
-
-        let stages = parse_json_array(dm.read_map_value(&doc_id, "stages"), |s| {
-            Some(LineupStageDto {
-                id: s.get("id")?.as_str()?.to_string(),
-                name: s.get("name")?.as_str()?.to_string(),
-                short: s.get("short")?.as_str()?.to_string(),
-                color: s.get("color")?.as_str()?.to_string(),
-                order: s.get("order")?.as_i64()? as i32,
-            })
-        });
-
-        let days = parse_json_array(dm.read_map_value(&doc_id, "days"), |d| {
-            Some(LineupDayDto {
-                id: d.get("id")?.as_str()?.to_string(),
-                label: d.get("label")?.as_str()?.to_string(),
-                num: d.get("num")?.as_i64()? as i32,
-                month: d.get("month")?.as_str()?.to_string(),
-                year: d.get("year")?.as_i64().unwrap_or(0) as i32,
-            })
-        });
-
-        let sets = parse_json_array(dm.read_map_value(&doc_id, "sets"), |s| {
-            Some(LineupSetDto {
-                id: s.get("id")?.as_str()?.to_string(),
-                day: s.get("day")?.as_str()?.to_string(),
-                stage: s.get("stage")?.as_str()?.to_string(),
-                artist: s.get("artist")?.as_str()?.to_string(),
-                start_min: s.get("startMin")?.as_i64()? as i32,
-                duration_min: s.get("durationMin")?.as_i64()? as i32,
-                genre: s.get("genre")?.as_str()?.to_string(),
-                cancelled: s.get("cancelled")?.as_bool().unwrap_or(false),
-            })
-        });
-
-        // Return None only if we have no data at all
-        if stages.is_empty() && days.is_empty() && sets.is_empty() {
-            return None;
-        }
-
-        Some(LineupDto { stages, days, sets })
+        read_lineup_from_doc(&self.inner.doc_manager, &doc_id)
     }
 
     /// Read the weather forecast from the local Yrs doc for a festival.
@@ -1427,6 +1214,38 @@ impl AppNode {
     // Transport methods
     // -----------------------------------------------------------------------
 
+    /// Start BLE auto-connection background tasks.
+    ///
+    /// Spawns discovery tick, reconnect tick, and gossip event pump tasks that
+    /// transition BLE-discovered peers to gossip-connected. Call after
+    /// subscribing to festival/group topics.
+    pub fn start_ble_sync(&mut self) {
+        // Only start if BLE transport + gossip + connection manager are all present
+        let Some(ble) = self.inner.ble_transport.clone() else {
+            tracing::debug!("start_ble_sync: no BLE transport, skipping");
+            return;
+        };
+        let Some(gm) = self.inner.gossip_manager.clone() else {
+            tracing::debug!("start_ble_sync: no gossip manager, skipping");
+            return;
+        };
+        let Some(cm) = self.inner.connection_manager.clone() else {
+            tracing::debug!("start_ble_sync: no connection manager, skipping");
+            return;
+        };
+
+        // Don't start twice
+        if !self.ble_task_handles.is_empty() {
+            tracing::debug!("start_ble_sync: already running");
+            return;
+        }
+
+        let so = std::sync::Arc::clone(&self.inner.sync_orchestrator);
+        let handles = offbeat_core::ble_sync::spawn_ble_connection_tasks(ble, gm, cm, so);
+        self.ble_task_handles = handles;
+        tracing::info!("BLE auto-connection tasks started");
+    }
+
     /// Get a snapshot of transport status (no rate computation).
     pub fn get_transport_status(&self) -> TransportStatusDto {
         snapshot_transport(&self.inner)
@@ -1554,6 +1373,8 @@ impl AppNode {
                                 device_id: p.device_id.to_string(),
                                 phase: format!("{:?}", p.phase),
                                 connect_path: p.connect_path.map(|c| format!("{c:?}")),
+                                verified_endpoint: p.verified_endpoint.map(|e| e.to_string()),
+                                consecutive_failures: p.consecutive_failures,
                             })
                             .collect();
                         let dto = BleStatusDto {
@@ -1634,197 +1455,4 @@ impl AppNode {
 
         Ok(())
     }
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/// Parse a JSON array string from a Yrs map value, mapping each element with `f`.
-fn parse_json_array<T>(
-    raw: Option<String>,
-    f: impl Fn(&serde_json::Value) -> Option<T>,
-) -> Vec<T> {
-    let Some(s) = raw else { return vec![] };
-    let Ok(arr) = serde_json::from_str::<Vec<serde_json::Value>>(&s) else {
-        return vec![];
-    };
-    arr.iter().filter_map(f).collect()
-}
-
-/// Read lineup from a doc manager (used by watch_lineup).
-fn read_lineup_from_doc(
-    dm: &offbeat_core::doc_manager::DocManager,
-    doc_id: &str,
-) -> Option<LineupDto> {
-    let stages = parse_json_array(dm.read_map_value(doc_id, "stages"), |s| {
-        Some(LineupStageDto {
-            id: s.get("id")?.as_str()?.to_string(),
-            name: s.get("name")?.as_str()?.to_string(),
-            short: s.get("short")?.as_str()?.to_string(),
-            color: s.get("color")?.as_str()?.to_string(),
-            order: s.get("order")?.as_i64()? as i32,
-        })
-    });
-
-    let days = parse_json_array(dm.read_map_value(doc_id, "days"), |d| {
-        Some(LineupDayDto {
-            id: d.get("id")?.as_str()?.to_string(),
-            label: d.get("label")?.as_str()?.to_string(),
-            num: d.get("num")?.as_i64()? as i32,
-            month: d.get("month")?.as_str()?.to_string(),
-            year: d.get("year")?.as_i64().unwrap_or(0) as i32,
-        })
-    });
-
-    let sets = parse_json_array(dm.read_map_value(doc_id, "sets"), |s| {
-        Some(LineupSetDto {
-            id: s.get("id")?.as_str()?.to_string(),
-            day: s.get("day")?.as_str()?.to_string(),
-            stage: s.get("stage")?.as_str()?.to_string(),
-            artist: s.get("artist")?.as_str()?.to_string(),
-            start_min: s.get("startMin")?.as_i64()? as i32,
-            duration_min: s.get("durationMin")?.as_i64()? as i32,
-            genre: s.get("genre")?.as_str()?.to_string(),
-            cancelled: s.get("cancelled")?.as_bool().unwrap_or(false),
-        })
-    });
-
-    if stages.is_empty() && days.is_empty() && sets.is_empty() {
-        return None;
-    }
-
-    Some(LineupDto { stages, days, sets })
-}
-
-/// Read weather from a doc manager (used by get_weather / watch_weather).
-fn read_weather_from_doc(
-    dm: &offbeat_core::doc_manager::DocManager,
-    doc_id: &str,
-) -> Option<WeatherForecastDto> {
-    let raw = dm.read_map_value(doc_id, "weather")?;
-    let forecast: offbeat_core::types::WeatherForecast = serde_json::from_str(&raw).ok()?;
-    Some(WeatherForecastDto {
-        updated_at: forecast.updated_at,
-        lat: forecast.lat,
-        lon: forecast.lon,
-        timezone: forecast.timezone,
-        hourly: HourlyWeatherDto {
-            time: forecast.hourly.time,
-            temperature_2m: forecast.hourly.temperature_2m,
-            precipitation_probability: forecast.hourly.precipitation_probability,
-            weather_code: forecast.hourly.weather_code,
-            wind_speed_10m: forecast.hourly.wind_speed_10m,
-        },
-    })
-}
-
-/// Convert a `PeerEntry` from the connection manager into a DTO for Flutter.
-fn peer_entry_to_dto(entry: offbeat_core::connection_manager::PeerEntry) -> PeerStatusInfo {
-    use offbeat_core::connection_manager::{GossipStatus, PeerSource};
-
-    let source = match entry.source {
-        PeerSource::Crdt => "crdt",
-        PeerSource::Ble => "ble",
-        PeerSource::Gossip => "gossip",
-    };
-    let status = match entry.gossip_status {
-        GossipStatus::Unknown => "unknown",
-        GossipStatus::Joining => "joining",
-        GossipStatus::Active => "active",
-        GossipStatus::Stale => "stale",
-    };
-    PeerStatusInfo {
-        endpoint_id: entry.endpoint_id,
-        source: source.to_string(),
-        status: status.to_string(),
-        ble_visible: entry.ble_prefix_match,
-        relay_url: entry.relay_url,
-    }
-}
-
-/// One-shot transport snapshot (no rate computation — rates are zero).
-fn snapshot_transport(node: &OffbeatNode) -> TransportStatusDto {
-    let relay = match &*node.ws_relay.read() {
-        Some(ws) => RelayStatusDto {
-            connected: ws.is_connected(),
-            authenticated: ws.is_authenticated(),
-            tx_bytes_per_sec: 0,
-            rx_bytes_per_sec: 0,
-        },
-        None => RelayStatusDto {
-            connected: false,
-            authenticated: false,
-            tx_bytes_per_sec: 0,
-            rx_bytes_per_sec: 0,
-        },
-    };
-    let ble = match &node.ble_transport {
-        Some(ble) => {
-            let peers: Vec<TransportPeerDto> = ble
-                .snapshot_peers()
-                .into_iter()
-                .map(|p| TransportPeerDto {
-                    device_id: p.device_id.to_string(),
-                    phase: format!("{:?}", p.phase),
-                    connect_path: p.connect_path.map(|c| format!("{c:?}")),
-                })
-                .collect();
-            BleStatusDto {
-                active: true,
-                peer_count: peers.len() as u32,
-                tx_bytes_per_sec: 0,
-                rx_bytes_per_sec: 0,
-                retransmits: ble.metrics().retransmits,
-                peers,
-            }
-        }
-        None => BleStatusDto {
-            active: false,
-            peer_count: 0,
-            tx_bytes_per_sec: 0,
-            rx_bytes_per_sec: 0,
-            retransmits: 0,
-            peers: vec![],
-        },
-    };
-    TransportStatusDto { relay, ble }
-}
-
-/// Convert SyncStatus from notifier to DTO.
-fn convert_sync_status(status: &offbeat_core::notifier::SyncStatus) -> SyncStatusDto {
-    SyncStatusDto {
-        syncing: status.syncing,
-        resources: status
-            .resources
-            .iter()
-            .map(|r| ResourceSyncStatusDto {
-                id: r.id.clone(),
-                syncing: r.syncing,
-                last_synced: r.last_synced.clone(),
-                error: r.error.clone(),
-                messages_received: r.messages_received,
-                messages_sent: r.messages_sent,
-                peer_count: r.peer_count,
-            })
-            .collect(),
-        pending_ops: status.pending_ops,
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Crypto utilities
-// ---------------------------------------------------------------------------
-
-/// Generate a fresh random 32-byte group key.
-pub fn generate_group_key() -> Vec<u8> {
-    offbeat_core::crypto::generate_group_key().to_vec()
-}
-
-/// Derive a stable group ID string from a 32-byte group key.
-pub fn group_id_from_key(key: Vec<u8>) -> anyhow::Result<String> {
-    let arr: [u8; 32] = key
-        .try_into()
-        .map_err(|_| anyhow::anyhow!("key must be exactly 32 bytes"))?;
-    Ok(offbeat_core::crypto::group_id_from_key(&arr))
 }

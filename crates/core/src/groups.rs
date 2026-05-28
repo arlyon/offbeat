@@ -2,10 +2,11 @@ use std::sync::Arc;
 
 use base64::Engine as _;
 use iroh_gossip::proto::TopicId;
+use yrs::Map;
 
 use crate::crypto;
 use crate::db::Database;
-use crate::doc_manager::DocManager;
+use crate::doc_manager::{self, DocManager};
 use crate::topics;
 use crate::types::GroupPin;
 
@@ -74,18 +75,22 @@ impl GroupManager {
         self.db.save_group(&group_id, festival_id, name, &key)?;
 
         let doc_id = format!("group/{group_id}");
-        self.doc_manager.set_map_value(&doc_id, "name", name)?;
-        self.doc_manager.set_map_value(&doc_id, "festival_id", festival_id)?;
-        self.doc_manager.set_map_value(&doc_id, "created_by", user_id)?;
 
-        let member_json = serde_json::json!({
-            "displayName": display_name,
-            "status": "active"
-        })
-        .to_string();
-        self.doc_manager.set_map_value(&doc_id, &format!("member/{user_id}"), &member_json)?;
+        // Set scalar fields + add member in a single mutation
+        let name = name.to_string();
+        let festival_id_s = festival_id.to_string();
+        let user_id_s = user_id.to_string();
+        let display_name_s = display_name.to_string();
+        self.doc_manager.mutate(&doc_id, &["root", "members"], |maps, txn| {
+            let (root, members) = (&maps[0], &maps[1]);
+            root.insert(txn, "name", name);
+            root.insert(txn, "festival_id", festival_id_s);
+            root.insert(txn, "created_by", user_id_s.clone());
 
-
+            let member = doc_manager::get_or_init_map(members, txn, &user_id_s);
+            member.insert(txn, "displayName", display_name_s);
+            member.insert(txn, "status", "active");
+        })?;
 
         let b64key = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(key);
         let invite_payload = format!("offbeat://group/{festival_id}/{group_id}/{b64key}");
@@ -130,7 +135,10 @@ impl GroupManager {
                 // Old format: group_id/key (backward compat)
                 (String::new(), segments[0], segments[1])
             }
-            _ => anyhow::bail!("invite payload has unexpected number of segments: {}", segments.len()),
+            _ => anyhow::bail!(
+                "invite payload has unexpected number of segments: {}",
+                segments.len()
+            ),
         };
 
         let key_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
@@ -154,12 +162,13 @@ impl GroupManager {
 
         let doc_id = format!("group/{derived_id}");
 
-        let member_json = serde_json::json!({
-            "displayName": display_name,
-            "status": "active"
-        })
-        .to_string();
-        self.doc_manager.set_map_value(&doc_id, &format!("member/{user_id}"), &member_json)?;
+        let user_id_s = user_id.to_string();
+        let display_name_s = display_name.to_string();
+        self.doc_manager.mutate(&doc_id, &["members"], |maps, txn| {
+            let member = doc_manager::get_or_init_map(&maps[0], txn, &user_id_s);
+            member.insert(txn, "displayName", display_name_s);
+            member.insert(txn, "status", "active");
+        })?;
 
         let topic_state = topics::group_topic(&group_key, "state");
         let topic_chat = topics::group_topic(&group_key, "chat");
@@ -177,7 +186,7 @@ impl GroupManager {
     // leave_group
     // -----------------------------------------------------------------------
 
-    /// Remove self from the group.  Returns the Yrs update bytes for the
+    /// Remove self from the group. Returns the Yrs update bytes for the
     /// tombstone entry (so the caller can broadcast it), or `None` if the doc
     /// was not found.
     pub async fn leave_group(
@@ -186,8 +195,10 @@ impl GroupManager {
         user_id: &str,
     ) -> anyhow::Result<Option<Vec<u8>>> {
         let doc_id = format!("group/{group_id}");
-        let update = self.doc_manager.remove_map_value(&doc_id, &format!("member/{user_id}"))?;
-
+        let user_id_s = user_id.to_string();
+        let update = self.doc_manager.mutate(&doc_id, &["members"], |maps, txn| {
+            maps[0].remove(txn, &user_id_s);
+        })?;
 
         self.db.delete_group(group_id)?;
 
@@ -198,7 +209,7 @@ impl GroupManager {
     // check_in
     // -----------------------------------------------------------------------
 
-    /// Record the user's current location in the group Yrs doc.  Returns the
+    /// Record the user's current location in the group Yrs doc. Returns the
     /// encrypted update bytes ready to publish over gossip.
     pub async fn check_in(
         &self,
@@ -212,17 +223,24 @@ impl GroupManager {
             .load_group_key(group_id)?
             .ok_or_else(|| anyhow::anyhow!("group not found: {group_id}"))?;
 
-        let location_json = serde_json::json!({
-            "stageId": stage_id,
-            "customLocation": custom_location,
-            "status": "active",
-            "updatedAt": now_rfc3339(),
-        })
-        .to_string();
-
         let doc_id = format!("group/{group_id}");
-        let diff = self.doc_manager.set_map_value(&doc_id, &format!("location/{user_id}"), &location_json)?;
+        let user_id_s = user_id.to_string();
+        let stage_id_s = stage_id.map(String::from);
+        let custom_loc_s = custom_location.map(String::from);
+        let updated_at = now_rfc3339();
 
+        let diff = self.doc_manager.mutate(&doc_id, &["members"], |maps, txn| {
+            let member = doc_manager::get_or_init_map(&maps[0], txn, &user_id_s);
+            member.insert(txn, "status", "active");
+            member.insert(txn, "updatedAt", updated_at);
+            if let Some(sid) = stage_id_s {
+                member.insert(txn, "stageId", sid);
+                member.remove(txn, "customLocation");
+            } else if let Some(cl) = custom_loc_s {
+                member.insert(txn, "customLocation", cl);
+                member.remove(txn, "stageId");
+            }
+        })?;
 
         let encrypted = crypto::encrypt(&group_key, &diff)?;
         Ok(encrypted)
@@ -243,10 +261,18 @@ impl GroupManager {
             .load_group_key(group_id)?
             .ok_or_else(|| anyhow::anyhow!("group not found: {group_id}"))?;
 
-        let stars_json = serde_json::to_string(&set_ids)?;
         let doc_id = format!("group/{group_id}");
-        let diff = self.doc_manager.set_map_value(&doc_id, &format!("stars/{user_id}"), &stars_json)?;
-
+        let user_id_s = user_id.to_string();
+        let diff = self.doc_manager.mutate(&doc_id, &["stars"], |maps, txn| {
+            let user_stars = doc_manager::get_or_init_map(&maps[0], txn, &user_id_s);
+            let old_keys: Vec<String> = user_stars.keys(txn).map(|k| k.to_string()).collect();
+            for k in &old_keys {
+                user_stars.remove(txn, k);
+            }
+            for set_id in &set_ids {
+                user_stars.insert(txn, set_id.as_str(), true);
+            }
+        })?;
 
         let encrypted = crypto::encrypt(&group_key, &diff)?;
         Ok(encrypted)
@@ -269,17 +295,20 @@ impl GroupManager {
             .load_group_key(group_id)?
             .ok_or_else(|| anyhow::anyhow!("group not found: {group_id}"))?;
 
-        let pin_json = serde_json::json!({
-            "label": label,
-            "location": location,
-            "pinnedBy": pinned_by,
-            "createdAt": now_rfc3339(),
-        })
-        .to_string();
-
         let doc_id = format!("group/{group_id}");
-        let diff = self.doc_manager.set_map_value(&doc_id, &format!("pin/{pin_id}"), &pin_json)?;
+        let pin_id_s = pin_id.to_string();
+        let label_s = label.to_string();
+        let location_s = location.to_string();
+        let pinned_by_s = pinned_by.to_string();
+        let created_at = now_rfc3339();
 
+        let diff = self.doc_manager.mutate(&doc_id, &["pins"], |maps, txn| {
+            let pin = doc_manager::get_or_init_map(&maps[0], txn, &pin_id_s);
+            pin.insert(txn, "label", label_s);
+            pin.insert(txn, "location", location_s);
+            pin.insert(txn, "pinnedBy", pinned_by_s);
+            pin.insert(txn, "createdAt", created_at);
+        })?;
 
         let encrypted = crypto::encrypt(&group_key, &diff)?;
         Ok(encrypted)
@@ -291,58 +320,37 @@ impl GroupManager {
 
     pub async fn get_group_state(&self, group_id: &str) -> anyhow::Result<GroupState> {
         let doc_id = format!("group/{group_id}");
-        let name = self.doc_manager
+        let name = self
+            .doc_manager
             .read_map_value(&doc_id, "name")
             .unwrap_or_default();
 
-        let prefixed = self.doc_manager.read_map_values_with_prefix(&doc_id);
+        let members_raw = self.doc_manager.read_nested_map_entries(&doc_id, "members");
+        let pins_raw = self.doc_manager.read_nested_map_entries(&doc_id, "pins");
 
+        let members = members_raw
+            .into_iter()
+            .map(|(uid, fields)| GroupMember {
+                user_id: uid,
+                display_name: doc_manager::any_str(&fields, "displayName")
+                    .unwrap_or_default(),
+                status: doc_manager::any_str(&fields, "status")
+                    .unwrap_or_else(|| "active".to_string()),
+                stage_id: doc_manager::any_str(&fields, "stageId"),
+                custom_location: doc_manager::any_str(&fields, "customLocation"),
+            })
+            .collect();
 
-        let mut members = Vec::new();
-        let mut pins = Vec::new();
-        // Collect locations keyed by user_id for merging into members.
-        let mut locations: std::collections::HashMap<
-            String,
-            (Option<String>, Option<String>),
-        > = std::collections::HashMap::new();
-
-        for (key, value) in &prefixed {
-            if let Some(uid) = key.strip_prefix("member/") {
-                let v: serde_json::Value = serde_json::from_str(value).unwrap_or_default();
-                members.push(GroupMember {
-                    user_id: uid.to_string(),
-                    display_name: v["displayName"]
-                        .as_str()
-                        .unwrap_or("")
-                        .to_string(),
-                    status: v["status"].as_str().unwrap_or("active").to_string(),
-                    stage_id: None,
-                    custom_location: None,
-                });
-            } else if let Some(uid) = key.strip_prefix("location/") {
-                let v: serde_json::Value = serde_json::from_str(value).unwrap_or_default();
-                let stage = v["stageId"].as_str().map(ToOwned::to_owned);
-                let custom = v["customLocation"].as_str().map(ToOwned::to_owned);
-                locations.insert(uid.to_string(), (stage, custom));
-            } else if let Some(pid) = key.strip_prefix("pin/") {
-                let v: serde_json::Value = serde_json::from_str(value).unwrap_or_default();
-                pins.push(GroupPin {
-                    id: pid.to_string(),
-                    label: v["label"].as_str().unwrap_or("").to_string(),
-                    location: v["location"].as_str().unwrap_or("").to_string(),
-                    pinned_by: v["pinnedBy"].as_str().unwrap_or("").to_string(),
-                    created_at: v["createdAt"].as_str().unwrap_or("").to_string(),
-                });
-            }
-        }
-
-        // Merge location data into members
-        for member in &mut members {
-            if let Some((stage, custom)) = locations.remove(&member.user_id) {
-                member.stage_id = stage;
-                member.custom_location = custom;
-            }
-        }
+        let pins = pins_raw
+            .into_iter()
+            .map(|(pid, fields)| GroupPin {
+                id: pid,
+                label: doc_manager::any_str(&fields, "label").unwrap_or_default(),
+                location: doc_manager::any_str(&fields, "location").unwrap_or_default(),
+                pinned_by: doc_manager::any_str(&fields, "pinnedBy").unwrap_or_default(),
+                created_at: doc_manager::any_str(&fields, "createdAt").unwrap_or_default(),
+            })
+            .collect();
 
         Ok(GroupState {
             name,
@@ -356,7 +364,7 @@ impl GroupManager {
     // -----------------------------------------------------------------------
 
     /// Build an encrypted `sync_request` payload containing the local Yrs
-    /// state vector for the group doc.  The caller should send this as a relay
+    /// state vector for the group doc. The caller should send this as a relay
     /// message so other peers can compute and return a targeted diff.
     pub async fn request_group_sync(&self, group_id: &str) -> anyhow::Result<Vec<u8>> {
         let group_key = self
@@ -367,7 +375,6 @@ impl GroupManager {
         let doc_id = format!("group/{group_id}");
         self.doc_manager.get_or_create(&doc_id);
         let sv_bytes = self.doc_manager.get_state_vector(&doc_id)?;
-
 
         // Encrypt the SV so it doesn't leak doc structure to bystanders.
         let encrypted_sv = crypto::encrypt(&group_key, &sv_bytes)?;
@@ -391,9 +398,33 @@ impl GroupManager {
         let doc_id = format!("group/{group_id}");
         let diff = self.doc_manager.encode_diff(&doc_id, &remote_sv)?;
 
-
         let encrypted_diff = crypto::encrypt(&group_key, &diff)?;
         Ok(encrypted_diff)
+    }
+
+    // -----------------------------------------------------------------------
+    // Read stars (for sync verification)
+    // -----------------------------------------------------------------------
+
+    /// Read the starred set IDs for a user from the group doc.
+    pub fn read_user_stars(&self, group_id: &str, user_id: &str) -> Vec<String> {
+        use yrs::{any::Any, Out};
+        let doc_id = format!("group/{group_id}");
+        self.doc_manager.read(&doc_id, &["stars"], |maps, txn| {
+            match maps[0].get(txn, user_id) {
+                Some(Out::YMap(user_stars)) => user_stars
+                    .keys(txn)
+                    .filter(|k| {
+                        matches!(
+                            user_stars.get(txn, k),
+                            Some(Out::Any(Any::Bool(true)))
+                        )
+                    })
+                    .map(|k| k.to_string())
+                    .collect(),
+                _ => vec![],
+            }
+        })
     }
 }
 
@@ -442,21 +473,24 @@ mod tests {
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].0, result.group_id);
 
-        // Yrs doc has name and member
+        // Yrs doc has name
         let doc_id = format!("group/{}", result.group_id);
-        let name = gm
-            .doc_manager
-            .read_map_value(&doc_id, "name")
-            .unwrap();
+        let name = gm.doc_manager.read_map_value(&doc_id, "name").unwrap();
         assert_eq!(name, "Crew A");
 
-        let member_json = gm
+        // Member is in nested members map
+        let member = gm
             .doc_manager
-            .read_map_value(&doc_id, "member/user1")
+            .read_nested_map_entry(&doc_id, "members", "user1")
             .unwrap();
-        let v: serde_json::Value = serde_json::from_str(&member_json).unwrap();
-        assert_eq!(v["displayName"], "Alice");
-        assert_eq!(v["status"], "active");
+        assert_eq!(
+            doc_manager::any_str(&member, "displayName"),
+            Some("Alice".to_string())
+        );
+        assert_eq!(
+            doc_manager::any_str(&member, "status"),
+            Some("active".to_string())
+        );
     }
 
     #[tokio::test]
@@ -478,10 +512,10 @@ mod tests {
         let doc_id = format!("group/{}", create.group_id);
         let m1 = gm
             .doc_manager
-            .read_map_value(&doc_id, "member/user1");
+            .read_nested_map_entry(&doc_id, "members", "user1");
         let m2 = gm
             .doc_manager
-            .read_map_value(&doc_id, "member/user2");
+            .read_nested_map_entry(&doc_id, "members", "user2");
         assert!(m1.is_some(), "user1 should be in doc");
         assert!(m2.is_some(), "user2 should be in doc");
     }
@@ -514,16 +548,16 @@ mod tests {
         let doc_id = format!("group/{}", create.group_id);
         let val = gm
             .doc_manager
-            .read_map_value(&doc_id, "member/user1");
+            .read_nested_map_entry(&doc_id, "members", "user1");
         assert!(val.is_some(), "member should exist before leave");
 
         gm.leave_group(&create.group_id, "user1").await.unwrap();
 
-        // After leaving, the key should be gone (not a tombstone)
+        // After leaving, the member should be gone
         let val = gm
             .doc_manager
-            .read_map_value(&doc_id, "member/user1");
-        assert_eq!(val, None, "member key should be removed, not tombstoned");
+            .read_nested_map_entry(&doc_id, "members", "user1");
+        assert!(val.is_none(), "member should be removed after leave");
     }
 
     #[tokio::test]
@@ -565,14 +599,11 @@ mod tests {
         let plaintext = crypto::decrypt(&group_key, &encrypted).unwrap();
         assert!(!plaintext.is_empty());
 
-        // Value should be in the doc
-        let doc_id = format!("group/{}", create.group_id);
-        let raw = gm
-            .doc_manager
-            .read_map_value(&doc_id, "stars/user1")
-            .unwrap();
-        let parsed: Vec<String> = serde_json::from_str(&raw).unwrap();
-        assert_eq!(parsed, set_ids);
+        // Stars should be in the nested map
+        let stars = gm.read_user_stars(&create.group_id, "user1");
+        assert_eq!(stars.len(), 2);
+        assert!(stars.contains(&"set-a".to_string()));
+        assert!(stars.contains(&"set-b".to_string()));
     }
 
     #[tokio::test]
@@ -584,7 +615,13 @@ mod tests {
             .unwrap();
 
         let encrypted = gm
-            .add_pin(&create.group_id, "pin-1", "Tent area", "53.5,-2.2", "user1")
+            .add_pin(
+                &create.group_id,
+                "pin-1",
+                "Tent area",
+                "53.5,-2.2",
+                "user1",
+            )
             .await
             .unwrap();
 
@@ -593,13 +630,18 @@ mod tests {
         assert!(!plaintext.is_empty());
 
         let doc_id = format!("group/{}", create.group_id);
-        let raw = gm
+        let pin = gm
             .doc_manager
-            .read_map_value(&doc_id, "pin/pin-1")
+            .read_nested_map_entry(&doc_id, "pins", "pin-1")
             .unwrap();
-        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
-        assert_eq!(v["label"], "Tent area");
-        assert_eq!(v["pinnedBy"], "user1");
+        assert_eq!(
+            doc_manager::any_str(&pin, "label"),
+            Some("Tent area".to_string())
+        );
+        assert_eq!(
+            doc_manager::any_str(&pin, "pinnedBy"),
+            Some("user1".to_string())
+        );
     }
 
     #[tokio::test]
@@ -632,7 +674,11 @@ mod tests {
         assert_eq!(state.pins.len(), 1);
         assert_eq!(state.pins[0].label, "Meeting point");
 
-        let alice = state.members.iter().find(|m| m.user_id == "user1").unwrap();
+        let alice = state
+            .members
+            .iter()
+            .find(|m| m.user_id == "user1")
+            .unwrap();
         assert_eq!(alice.stage_id.as_deref(), Some("main-stage"));
     }
 
@@ -664,13 +710,22 @@ mod tests {
             .unwrap();
 
         // New format: offbeat://group/{festival_id}/{group_id}/{key}
-        assert!(create.invite_payload.starts_with("offbeat://group/wavelength26/"));
+        assert!(create
+            .invite_payload
+            .starts_with("offbeat://group/wavelength26/"));
         assert_eq!(create.festival_id, "wavelength26");
 
         // Should have 3 segments after "offbeat://group/"
-        let stripped = create.invite_payload.strip_prefix("offbeat://group/").unwrap();
+        let stripped = create
+            .invite_payload
+            .strip_prefix("offbeat://group/")
+            .unwrap();
         let segments: Vec<&str> = stripped.split('/').collect();
-        assert_eq!(segments.len(), 3, "new format should have 3 segments: festival_id/group_id/key");
+        assert_eq!(
+            segments.len(),
+            3,
+            "new format should have 3 segments: festival_id/group_id/key"
+        );
         assert_eq!(segments[0], "wavelength26");
         assert_eq!(segments[1], create.group_id);
     }
@@ -690,10 +745,7 @@ mod tests {
 
         // Create a fresh manager to join (simulate different device)
         let gm2 = make_manager();
-        let join = gm2
-            .join_group(&old_payload, "u2", "Bob")
-            .await
-            .unwrap();
+        let join = gm2.join_group(&old_payload, "u2", "Bob").await.unwrap();
 
         assert_eq!(join.group_id, create.group_id);
         assert_eq!(join.festival_id, ""); // old format has no festival_id
@@ -752,13 +804,16 @@ mod tests {
 
         // --- User A: star (like) some events ---
         let _encrypted_stars = gm_a
-            .update_stars(group_id, "alice", vec!["event-1".into(), "event-2".into()])
+            .update_stars(
+                group_id,
+                "alice",
+                vec!["event-1".into(), "event-2".into()],
+            )
             .await
             .unwrap();
 
         // --- User B: join the group ---
-        gm_b
-            .join_group(&create.invite_payload, "bob", "Bob")
+        gm_b.join_group(&create.invite_payload, "bob", "Bob")
             .await
             .unwrap();
 
@@ -798,26 +853,33 @@ mod tests {
 
         // Both members present
         assert_eq!(state.members.len(), 2);
-        let alice = state.members.iter().find(|m| m.user_id == "alice").expect("alice should be a member");
-        let bob = state.members.iter().find(|m| m.user_id == "bob").expect("bob should be a member");
+        let alice = state
+            .members
+            .iter()
+            .find(|m| m.user_id == "alice")
+            .expect("alice should be a member");
+        let bob = state
+            .members
+            .iter()
+            .find(|m| m.user_id == "bob")
+            .expect("bob should be a member");
         assert_eq!(alice.display_name, "Alice");
         assert_eq!(bob.display_name, "Bob");
 
         // Alice's check-in location
         assert_eq!(alice.stage_id.as_deref(), Some("main-stage"));
 
-        // Alice's starred events
-        let stars_raw = doc_b
-            .read_map_value(&format!("group/{group_id}"), "stars/alice")
-            .expect("alice's stars should be synced");
-        let stars: Vec<String> = serde_json::from_str(&stars_raw).unwrap();
-        assert_eq!(stars, vec!["event-1".to_string(), "event-2".to_string()]);
+        // Alice's starred events (read from nested map)
+        let stars = gm_b.read_user_stars(group_id, "alice");
+        assert_eq!(stars.len(), 2);
+        assert!(stars.contains(&"event-1".to_string()));
+        assert!(stars.contains(&"event-2".to_string()));
     }
 
-    /// D1 creates a group and makes some changes.  D2 joins and has only its
-    /// own member entry.  D2 sends its SV (encrypted) as a sync_request; D1
+    /// D1 creates a group and makes some changes. D2 joins and has only its
+    /// own member entry. D2 sends its SV (encrypted) as a sync_request; D1
     /// computes the diff and returns it as a sync_response; D2 applies the diff
-    /// and now has all of D1's changes.  Then D2 makes a change, sends the diff
+    /// and now has all of D1's changes. Then D2 makes a change, sends the diff
     /// to D1, and D1 applies it successfully because they are now in sync.
     #[tokio::test]
     async fn test_sync_request_response_roundtrip() {
@@ -876,14 +938,13 @@ mod tests {
         assert_eq!(d1_member.stage_id.as_deref(), Some("main-stage"));
 
         // First, also sync D2's state (member/d2) to D1 via a reverse handshake.
-        // D1 sends its current SV; D2 computes the diff (containing member/d2) and
-        // sends it back; D1 applies it so D1 knows about D2 as a member.
         let encrypted_sv_d1 = gm_d1.request_group_sync(group_id).await.unwrap();
         let encrypted_diff_d2_to_d1 = gm_d2
             .handle_sync_request(group_id, &encrypted_sv_d1)
             .await
             .unwrap();
-        let diff_join = crate::crypto::decrypt(&group_key, &encrypted_diff_d2_to_d1).unwrap();
+        let diff_join =
+            crate::crypto::decrypt(&group_key, &encrypted_diff_d2_to_d1).unwrap();
         gm_d1
             .doc_manager
             .apply_update(&format!("group/{group_id}"), &diff_join)

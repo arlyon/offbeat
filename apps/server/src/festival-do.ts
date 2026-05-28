@@ -27,6 +27,7 @@ export class FestivalDO extends DurableObject {
 	#festivalId: string | null = null;
 	#lat: number | null = null;
 	#lon: number | null = null;
+	#publicStateDoc: Y.Doc | null = null;
 
 	get sql() {
 		return this.ctx.storage.sql;
@@ -39,20 +40,42 @@ export class FestivalDO extends DurableObject {
 			this.#initSchema();
 			await this.#initKeypair();
 			await this.#loadConfig();
+			this.#loadPublicStateDoc();
 		});
 	}
 
 	#initSchema() {
 		this.sql.exec(`
-			CREATE TABLE IF NOT EXISTS gossip_log (
+			CREATE TABLE IF NOT EXISTS public_gossip_log (
 				seq INTEGER PRIMARY KEY AUTOINCREMENT,
 				topic TEXT NOT NULL,
 				message BLOB NOT NULL,
 				timestamp TEXT NOT NULL DEFAULT (datetime('now'))
 			);
 
-			CREATE INDEX IF NOT EXISTS idx_gossip_topic_seq
-				ON gossip_log(topic, seq);
+			CREATE INDEX IF NOT EXISTS idx_public_gossip_topic_seq
+				ON public_gossip_log(topic, seq);
+
+			CREATE TABLE IF NOT EXISTS group_gossip_log (
+				seq INTEGER PRIMARY KEY AUTOINCREMENT,
+				group_id TEXT NOT NULL,
+				message BLOB NOT NULL,
+				timestamp TEXT NOT NULL DEFAULT (datetime('now'))
+			);
+
+			CREATE INDEX IF NOT EXISTS idx_group_gossip_group_seq
+				ON group_gossip_log(group_id, seq);
+
+			CREATE TABLE IF NOT EXISTS group_yrs_updates (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				group_id TEXT NOT NULL,
+				client_id TEXT,
+				sequence_number INTEGER,
+				update_data BLOB NOT NULL
+			);
+
+			CREATE INDEX IF NOT EXISTS idx_group_yrs_group
+				ON group_yrs_updates(group_id);
 
 			CREATE TABLE IF NOT EXISTS admins (
 				public_key TEXT PRIMARY KEY
@@ -63,7 +86,96 @@ export class FestivalDO extends DurableObject {
 				data BLOB NOT NULL,
 				updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 			);
+
+			DROP TABLE IF EXISTS gossip_log;
 		`);
+	}
+
+	/** Load the public state doc from yrs_docs into memory at boot. */
+	#loadPublicStateDoc() {
+		if (!this.#festivalId) return;
+		const docId = `festival/${this.#festivalId}/state`;
+		const doc = new Y.Doc();
+		const stored = this.sql.exec("SELECT data FROM yrs_docs WHERE doc_id = ?", docId).toArray() as {
+			data: ArrayBuffer;
+		}[];
+		if (stored.length > 0) {
+			Y.applyUpdate(doc, new Uint8Array(stored[0].data));
+		}
+		this.#publicStateDoc = doc;
+	}
+
+	/**
+	 * Mutate the in-memory public state doc, sign the delta, persist, and broadcast.
+	 * Shared helper for all festival state mutations (lineup, checkin, weather, prune).
+	 */
+	async #mutatePublicDoc(mutate: (doc: Y.Doc) => void): Promise<void> {
+		if (!this.#secretKey || !this.#publicKey || !this.#festivalId) {
+			throw new Error("Not configured for public doc mutation");
+		}
+
+		const docId = `festival/${this.#festivalId}/state`;
+		const topic = docId;
+
+		if (!this.#publicStateDoc) {
+			// Load from disk if available (e.g. after hibernation or late config)
+			const doc = new Y.Doc();
+			const stored = this.sql
+				.exec("SELECT data FROM yrs_docs WHERE doc_id = ?", docId)
+				.toArray() as { data: ArrayBuffer }[];
+			if (stored.length > 0) {
+				Y.applyUpdate(doc, new Uint8Array(stored[0].data));
+			}
+			this.#publicStateDoc = doc;
+		}
+
+		const doc = this.#publicStateDoc;
+		const prevSV = Y.encodeStateVector(doc);
+
+		mutate(doc);
+
+		const update = Y.encodeStateAsUpdate(doc, prevSV);
+		const signature = await sign(this.#secretKey, update);
+
+		const envelope = create(GossipEnvelopeSchema, {
+			payload: {
+				case: "festivalUpdate",
+				value: {
+					docId,
+					signedUpdate: {
+						update,
+						author: "festival-do",
+						signature,
+					},
+				},
+			},
+		});
+
+		// Persist squashed snapshot to yrs_docs (no log table for festival state)
+		const fullState = Y.encodeStateAsUpdate(doc);
+		this.sql.exec(
+			"INSERT OR REPLACE INTO yrs_docs (doc_id, data, updated_at) VALUES (?, ?, datetime('now'))",
+			docId,
+			fullState,
+		);
+
+		// Broadcast to subscribed WS clients
+		const broadcastMsg = create(RelayServerMessageSchema, {
+			msg: {
+				case: "gossip",
+				value: {
+					topic,
+					seq: 0n,
+					message: envelope,
+				},
+			},
+		});
+		const broadcastBytes = toBinary(RelayServerMessageSchema, broadcastMsg);
+		for (const [ws, sess] of this.#sessions) {
+			if (sess.topics.has(topic)) {
+				ws.send(broadcastBytes);
+			}
+		}
 	}
 
 	async #initKeypair() {
@@ -343,6 +455,7 @@ export class FestivalDO extends DurableObject {
 			// Reinitialize
 			this.#initSchema();
 			await this.#initKeypair();
+			this.#publicStateDoc = null;
 
 			return Response.json({ ok: true });
 		}
@@ -386,55 +499,16 @@ export class FestivalDO extends DurableObject {
 				return new Response("Keypair not initialized", { status: 500 });
 			}
 
-			// Decode the update, sign it with the DO's key
+			// Apply the update to the in-memory public state doc via mutatePublicDoc
 			const updateBytes = base64ToBytes(body.update);
+			await this.#mutatePublicDoc((doc) => {
+				Y.applyUpdate(doc, updateBytes);
+			});
+
+			// Compute the DO's signature over the raw update for the response
 			const doSignature = await sign(this.#secretKey, updateBytes);
 
-			// Build the GossipEnvelope as protobuf
-			const envelope = create(GossipEnvelopeSchema, {
-				payload: {
-					case: "festivalUpdate",
-					value: {
-						docId: body.docId,
-						signedUpdate: {
-							update: updateBytes,
-							author: "festival-do",
-							signature: doSignature,
-						},
-					},
-				},
-			});
-
-			// Store envelope as BLOB in gossip log
-			const envelopeBytes = toBinary(GossipEnvelopeSchema, envelope);
-			const result = this.sql
-				.exec(
-					"INSERT INTO gossip_log (topic, message) VALUES (?, ?) RETURNING seq",
-					body.topic,
-					envelopeBytes,
-				)
-				.one() as { seq: number };
-
-			// Broadcast to subscribed WS clients
-			const broadcastMsg = create(RelayServerMessageSchema, {
-				msg: {
-					case: "gossip",
-					value: {
-						topic: body.topic,
-						seq: BigInt(result.seq),
-						message: envelope,
-					},
-				},
-			});
-			const broadcastBytes = toBinary(RelayServerMessageSchema, broadcastMsg);
-			for (const [ws, sess] of this.#sessions) {
-				if (sess.topics.has(body.topic)) {
-					ws.send(broadcastBytes);
-				}
-			}
-
 			return Response.json({
-				seq: result.seq,
 				signedUpdate: {
 					update: body.update,
 					author: "festival-do",
@@ -491,7 +565,7 @@ export class FestivalDO extends DurableObject {
 			});
 		}
 
-		// Store-and-forward: replay last N gossip messages per topic
+		// Store-and-forward: replay last N public chat messages
 		// so late joiners get caught up immediately on connect.
 		this.#replayRecentMessages(server);
 
@@ -654,15 +728,71 @@ export class FestivalDO extends DurableObject {
 					break;
 				}
 
-				// Store the GossipEnvelope as BLOB
+				// Route by payload case
 				const envelopeBytes = toBinary(GossipEnvelopeSchema, envelope);
-				const result = this.sql
-					.exec(
-						"INSERT INTO gossip_log (topic, message) VALUES (?, ?) RETURNING seq",
-						topic,
-						envelopeBytes,
-					)
-					.one() as { seq: number };
+				let seq = 0;
+
+				switch (envelope.payload.case) {
+					case "festivalUpdate":
+						// Reject — only the DO signs these
+						this.#sendError(ws, "Clients cannot send festival updates", ErrorCode.UNAUTHORIZED);
+						return;
+
+					case "chat":
+						seq = (
+							this.sql
+								.exec(
+									"INSERT INTO public_gossip_log (topic, message) VALUES (?, ?) RETURNING seq",
+									topic,
+									envelopeBytes,
+								)
+								.one() as { seq: number }
+						).seq;
+						break;
+
+					case "encryptedChat": {
+						this.sql.exec(
+							"INSERT INTO group_gossip_log (group_id, message) VALUES (?, ?)",
+							topic,
+							envelopeBytes,
+						);
+						break;
+					}
+
+					case "groupUpdate": {
+						this.sql.exec(
+							"INSERT INTO group_yrs_updates (group_id, update_data) VALUES (?, ?)",
+							topic,
+							envelopeBytes,
+						);
+						break;
+					}
+
+					case "syncRequest":
+					case "syncResponse":
+					case "syncUpdate": {
+						// Group sync messages — store as group yrs updates keyed by topic
+						this.sql.exec(
+							"INSERT INTO group_yrs_updates (group_id, update_data) VALUES (?, ?)",
+							topic,
+							envelopeBytes,
+						);
+						break;
+					}
+
+					default:
+						// Unknown payload type — store in public log as fallback
+						seq = (
+							this.sql
+								.exec(
+									"INSERT INTO public_gossip_log (topic, message) VALUES (?, ?) RETURNING seq",
+									topic,
+									envelopeBytes,
+								)
+								.one() as { seq: number }
+						).seq;
+						break;
+				}
 
 				// Broadcast to other subscribed WS clients
 				const broadcastMsg = create(RelayServerMessageSchema, {
@@ -670,7 +800,7 @@ export class FestivalDO extends DurableObject {
 						case: "gossip",
 						value: {
 							topic,
-							seq: BigInt(result.seq),
+							seq: BigInt(seq),
 							message: envelope,
 						},
 					},
@@ -689,26 +819,51 @@ export class FestivalDO extends DurableObject {
 				const { topic, sinceSeq } = msg.value;
 				if (!topic) break;
 
-				const rows = this.sql
-					.exec(
-						"SELECT seq, message, timestamp FROM gossip_log WHERE topic = ? AND seq > ? ORDER BY seq",
-						topic,
-						Number(sinceSeq),
-					)
-					.toArray() as { seq: number; message: ArrayBuffer; timestamp: string }[];
+				// Route by topic prefix: festival/ → public_gossip_log, else → group_gossip_log
+				if (topic.startsWith("festival/")) {
+					const rows = this.sql
+						.exec(
+							"SELECT seq, message, timestamp FROM public_gossip_log WHERE topic = ? AND seq > ? ORDER BY seq",
+							topic,
+							Number(sinceSeq),
+						)
+						.toArray() as { seq: number; message: ArrayBuffer; timestamp: string }[];
 
-				const messages = rows.map((r) => ({
-					seq: BigInt(r.seq),
-					message: fromBinary(GossipEnvelopeSchema, new Uint8Array(r.message)),
-					timestamp: r.timestamp,
-				}));
+					const messages = rows.map((r) => ({
+						seq: BigInt(r.seq),
+						message: fromBinary(GossipEnvelopeSchema, new Uint8Array(r.message)),
+						timestamp: r.timestamp,
+					}));
 
-				console.log(
-					`[ws] catchup: topic=${topic} sinceSeq=${sinceSeq} sending ${messages.length} messages`,
-				);
-				this.#sendServerMsg(ws, {
-					msg: { case: "catchup", value: { topic, messages } },
-				});
+					console.log(
+						`[ws] catchup: topic=${topic} sinceSeq=${sinceSeq} sending ${messages.length} messages`,
+					);
+					this.#sendServerMsg(ws, {
+						msg: { case: "catchup", value: { topic, messages } },
+					});
+				} else {
+					// Group topic — query group_gossip_log by group_id (use topic as group_id)
+					const rows = this.sql
+						.exec(
+							"SELECT seq, message, timestamp FROM group_gossip_log WHERE group_id = ? AND seq > ? ORDER BY seq",
+							topic,
+							Number(sinceSeq),
+						)
+						.toArray() as { seq: number; message: ArrayBuffer; timestamp: string }[];
+
+					const messages = rows.map((r) => ({
+						seq: BigInt(r.seq),
+						message: fromBinary(GossipEnvelopeSchema, new Uint8Array(r.message)),
+						timestamp: r.timestamp,
+					}));
+
+					console.log(
+						`[ws] catchup (group): topic=${topic} sinceSeq=${sinceSeq} sending ${messages.length} messages`,
+					);
+					this.#sendServerMsg(ws, {
+						msg: { case: "catchup", value: { topic, messages } },
+					});
+				}
 				break;
 			}
 
@@ -719,41 +874,13 @@ export class FestivalDO extends DurableObject {
 					break;
 				}
 
-				// Determine topic from docId (e.g., "festival/fest-1/state")
-				const topic = docId;
-
-				// Load or create server doc
-				const serverDoc = new Y.Doc();
-				const stored = this.sql
-					.exec("SELECT data FROM yrs_docs WHERE doc_id = ?", docId)
-					.toArray() as { data: ArrayBuffer }[];
-
-				if (stored.length > 0) {
-					Y.applyUpdate(serverDoc, new Uint8Array(stored[0].data));
+				// Use in-memory public state doc — 0 disk reads
+				if (!this.#publicStateDoc) {
+					this.#publicStateDoc = new Y.Doc();
 				}
-
-				// Apply any gossip_log entries that are festival_updates for this topic
-				const logEntries = this.sql
-					.exec("SELECT message FROM gossip_log WHERE topic = ? ORDER BY seq", topic)
-					.toArray() as { message: ArrayBuffer }[];
-
-				for (const entry of logEntries) {
-					const envelope = fromBinary(GossipEnvelopeSchema, new Uint8Array(entry.message));
-					if (envelope.payload.case === "festivalUpdate" && envelope.payload.value.signedUpdate) {
-						Y.applyUpdate(serverDoc, envelope.payload.value.signedUpdate.update);
-					}
-				}
-
-				// Save the consolidated doc
-				const fullState = Y.encodeStateAsUpdate(serverDoc);
-				this.sql.exec(
-					"INSERT OR REPLACE INTO yrs_docs (doc_id, data, updated_at) VALUES (?, ?, datetime('now'))",
-					docId,
-					fullState,
-				);
 
 				// Compute diff from client's state vector
-				const diff = Y.encodeStateAsUpdate(serverDoc, clientSV);
+				const diff = Y.encodeStateAsUpdate(this.#publicStateDoc, clientSV);
 
 				this.#sendServerMsg(ws, {
 					msg: { case: "svDiff", value: { docId, diff } },
@@ -770,44 +897,61 @@ export class FestivalDO extends DurableObject {
 
 				const maxLimit = chatLimit || 50;
 
-				// Get chat messages from gossip_log for this topic
-				const chatRows = this.sql
-					.exec(
-						"SELECT message FROM gossip_log WHERE topic = ? ORDER BY seq DESC LIMIT ?",
-						chatTopic,
-						maxLimit * 10,
-					)
-					.toArray() as { message: ArrayBuffer }[];
+				if (chatTopic.startsWith("festival/")) {
+					// Public chat — query public_gossip_log with writer SV filtering
+					const chatRows = this.sql
+						.exec(
+							"SELECT message FROM public_gossip_log WHERE topic = ? ORDER BY seq DESC LIMIT ?",
+							chatTopic,
+							maxLimit * 10,
+						)
+						.toArray() as { message: ArrayBuffer }[];
 
-				// Filter: parse each envelope, extract userId and writerSeq (if chat)
-				// Only include messages from writers not in sv, or with writerSeq > sv[writer]
-				const chatMessages = [];
-				for (const row of chatRows) {
-					const envelope = fromBinary(GossipEnvelopeSchema, new Uint8Array(row.message));
-					if (envelope.payload.case === "chat") {
-						const chatPayload = envelope.payload.value;
-						const userId = chatPayload.userId;
-						const writerSeq = chatPayload.writerSeq ?? 0n;
-						if (userId && userId in chatSv) {
-							if (writerSeq > chatSv[userId]) {
+					const chatMessages = [];
+					for (const row of chatRows) {
+						const envelope = fromBinary(GossipEnvelopeSchema, new Uint8Array(row.message));
+						if (envelope.payload.case === "chat") {
+							const chatPayload = envelope.payload.value;
+							const userId = chatPayload.userId;
+							const writerSeq = chatPayload.writerSeq ?? 0n;
+							if (userId && userId in chatSv) {
+								if (writerSeq > chatSv[userId]) {
+									chatMessages.push(envelope);
+								}
+							} else {
 								chatMessages.push(envelope);
 							}
-						} else {
-							chatMessages.push(envelope);
 						}
-					} else if (envelope.payload.case === "encryptedChat") {
-						// Can't filter encrypted chat by writer — include all
-						chatMessages.push(envelope);
+						if (chatMessages.length >= maxLimit) break;
 					}
-					if (chatMessages.length >= maxLimit) break;
-				}
 
-				this.#sendServerMsg(ws, {
-					msg: {
-						case: "chatDiff",
-						value: { topic: chatTopic, messages: chatMessages },
-					},
-				});
+					this.#sendServerMsg(ws, {
+						msg: {
+							case: "chatDiff",
+							value: { topic: chatTopic, messages: chatMessages },
+						},
+					});
+				} else {
+					// Group chat — query group_gossip_log (return all, can't filter encrypted)
+					const chatRows = this.sql
+						.exec(
+							"SELECT message FROM group_gossip_log WHERE group_id = ? ORDER BY seq DESC LIMIT ?",
+							chatTopic,
+							maxLimit,
+						)
+						.toArray() as { message: ArrayBuffer }[];
+
+					const chatMessages = chatRows.map((row) =>
+						fromBinary(GossipEnvelopeSchema, new Uint8Array(row.message)),
+					);
+
+					this.#sendServerMsg(ws, {
+						msg: {
+							case: "chatDiff",
+							value: { topic: chatTopic, messages: chatMessages },
+						},
+					});
+				}
 				break;
 			}
 
@@ -825,23 +969,16 @@ export class FestivalDO extends DurableObject {
 	}
 
 	// -----------------------------------------------------------------------
-	// Store-and-forward: replay recent gossip on new connection / subscribe
+	// Store-and-forward: replay recent public chat on new connection / subscribe
 	// -----------------------------------------------------------------------
 
 	/**
-	 * Replay the last 100 gossip messages (across all topics) to a newly
-	 * connected WebSocket. This provides store-and-forward semantics so that
-	 * clients joining mid-festival get caught up immediately without waiting
-	 * for the next live broadcast.
-	 *
-	 * Called once on initial WS connection (before the client subscribes to
-	 * specific topics). Since the client hasn't subscribed yet, messages are
-	 * sent unfiltered; the client will ignore messages for topics it hasn't
-	 * subscribed to internally.
+	 * Replay the last 100 public chat messages (across all topics) to a newly
+	 * connected WebSocket. Festival state uses svExchange, not replay.
 	 */
 	#replayRecentMessages(ws: WebSocket) {
 		const rows = this.sql
-			.exec("SELECT topic, seq, message FROM gossip_log ORDER BY seq DESC LIMIT 100")
+			.exec("SELECT topic, seq, message FROM public_gossip_log ORDER BY seq DESC LIMIT 100")
 			.toArray() as { topic: string; seq: number; message: ArrayBuffer }[];
 
 		if (rows.length === 0) return;
@@ -866,18 +1003,16 @@ export class FestivalDO extends DurableObject {
 	}
 
 	/**
-	 * Replay recent gossip messages for specific topics to a WebSocket.
-	 * Called when a client subscribes to new topics, so they get caught up
-	 * on messages they might have missed.
+	 * Replay recent public chat messages for specific topics to a WebSocket.
+	 * Called when a client subscribes to new topics.
 	 */
 	#replayTopicMessages(ws: WebSocket, topics: string[]) {
 		if (topics.length === 0) return;
 
-		// Query last 100 messages per topic
 		for (const topic of topics) {
 			const rows = this.sql
 				.exec(
-					"SELECT seq, message FROM gossip_log WHERE topic = ? ORDER BY seq DESC LIMIT 100",
+					"SELECT seq, message FROM public_gossip_log WHERE topic = ? ORDER BY seq DESC LIMIT 100",
 					topic,
 				)
 				.toArray() as { seq: number; message: ArrayBuffer }[];
@@ -923,9 +1058,8 @@ export class FestivalDO extends DurableObject {
 	 * Seed the Festival DO with lineup data as a signed Yrs CRDT document.
 	 * Called by `ensureFestivalConfig` when the Festival DO is first initialised.
 	 *
-	 * Creates a Yrs doc with root-map keys "stages", "days", "sets" (JSON array
-	 * strings), signs the update with the DO's Ed25519 key, and stores it in the
-	 * gossip_log so that `sv_exchange` returns the lineup to connecting clients.
+	 * Creates a Yrs doc with root-map keys "stages", "days", "sets" (Y.Maps),
+	 * signs the update with the DO's Ed25519 key, and persists to yrs_docs.
 	 */
 	async seedLineup(
 		festivalId: string,
@@ -949,47 +1083,48 @@ export class FestivalDO extends DurableObject {
 		}
 
 		const docId = `festival/${festivalId}/state`;
-		const topic = docId;
 
 		// Check if we already have a seeded doc — skip if so
 		const existing = this.sql
-			.exec("SELECT 1 FROM gossip_log WHERE topic = ? LIMIT 1", topic)
+			.exec("SELECT 1 FROM yrs_docs WHERE doc_id = ? LIMIT 1", docId)
 			.toArray();
 		if (existing.length > 0) return;
 
-		// Build a Yrs doc with the lineup data in the root map
+		// Build a Yrs doc using top-level shared maps
 		const doc = new Y.Doc();
-		const root = doc.getMap("root");
-		root.set("stages", JSON.stringify(lineup.stages));
-		root.set("days", JSON.stringify(lineup.days));
-		root.set("sets", JSON.stringify(lineup.sets));
+		const stagesMap = doc.getMap("stages");
+		for (const stage of lineup.stages) {
+			const m = new Y.Map();
+			m.set("name", stage.name);
+			m.set("short", stage.short);
+			m.set("color", stage.color);
+			m.set("order", stage.order);
+			stagesMap.set(stage.id, m);
+		}
+		const daysMap = doc.getMap("days");
+		for (const day of lineup.days) {
+			const m = new Y.Map();
+			m.set("label", day.label);
+			m.set("num", day.num);
+			m.set("month", day.month);
+			m.set("year", day.year);
+			daysMap.set(day.id, m);
+		}
+		const setsMap = doc.getMap("sets");
+		for (const set of lineup.sets) {
+			const m = new Y.Map();
+			m.set("day", set.day);
+			m.set("stage", set.stage);
+			m.set("artist", set.artist);
+			m.set("startMin", set.startMin);
+			m.set("durationMin", set.durationMin);
+			m.set("genre", set.genre);
+			m.set("cancelled", set.cancelled);
+			setsMap.set(set.id, m);
+		}
 
-		// Encode the full state as the update bytes
-		const updateBytes = Y.encodeStateAsUpdate(doc);
-
-		// Sign with the DO's Ed25519 key
-		const signature = await sign(this.#secretKey, updateBytes);
-
-		// Build the GossipEnvelope as protobuf
-		const envelope = create(GossipEnvelopeSchema, {
-			payload: {
-				case: "festivalUpdate",
-				value: {
-					docId,
-					signedUpdate: {
-						update: updateBytes,
-						author: "festival-do",
-						signature,
-					},
-				},
-			},
-		});
-
-		// Store envelope as BLOB in gossip_log
-		const envelopeBytes = toBinary(GossipEnvelopeSchema, envelope);
-		this.sql.exec("INSERT INTO gossip_log (topic, message) VALUES (?, ?)", topic, envelopeBytes);
-
-		// Also persist the consolidated Yrs doc for faster sv_exchange
+		// Assign to in-memory doc and persist
+		this.#publicStateDoc = doc;
 		const fullState = Y.encodeStateAsUpdate(doc);
 		this.sql.exec(
 			"INSERT OR REPLACE INTO yrs_docs (doc_id, data, updated_at) VALUES (?, ?, datetime('now'))",
@@ -1005,10 +1140,7 @@ export class FestivalDO extends DurableObject {
 	 * Update the Festival DO's Yrs CRDT document with a new lineup.
 	 * Called when an admin refreshes the lineup via PUT /festivals/:id/lineup.
 	 *
-	 * Loads the existing Yrs doc, applies the new stages/days/sets as an
-	 * incremental update, signs it, stores in gossip_log, persists to yrs_docs,
-	 * and broadcasts to all subscribed WS clients.
-	 *
+	 * Uses #mutatePublicDoc to load, mutate, sign, persist, and broadcast.
 	 * If no existing doc is found, falls through to seedLineup().
 	 */
 	async updateLineup(
@@ -1033,103 +1165,72 @@ export class FestivalDO extends DurableObject {
 		}
 
 		const docId = `festival/${festivalId}/state`;
-		const topic = docId;
 
 		// If there's no existing doc, delegate to seedLineup for genesis
 		const existing = this.sql
-			.exec("SELECT 1 FROM gossip_log WHERE topic = ? LIMIT 1", topic)
+			.exec("SELECT 1 FROM yrs_docs WHERE doc_id = ? LIMIT 1", docId)
 			.toArray();
 		if (existing.length === 0) {
 			return this.seedLineup(festivalId, lineup);
 		}
 
-		// Load the existing Yrs doc
-		const doc = new Y.Doc();
-		const stored = this.sql.exec("SELECT data FROM yrs_docs WHERE doc_id = ?", docId).toArray() as {
-			data: ArrayBuffer;
-		}[];
+		await this.#mutatePublicDoc((doc) => {
+			const stagesMap = doc.getMap("stages") as Y.Map<Y.Map<unknown>>;
+			const daysMap = doc.getMap("days") as Y.Map<Y.Map<unknown>>;
+			const setsMap = doc.getMap("sets") as Y.Map<Y.Map<unknown>>;
 
-		if (stored.length > 0) {
-			Y.applyUpdate(doc, new Uint8Array(stored[0].data));
-		}
-
-		// Replay gossip_log entries
-		const logEntries = this.sql
-			.exec("SELECT message FROM gossip_log WHERE topic = ? ORDER BY seq", topic)
-			.toArray() as { message: ArrayBuffer }[];
-
-		for (const entry of logEntries) {
-			const envelope = fromBinary(GossipEnvelopeSchema, new Uint8Array(entry.message));
-			if (envelope.payload.case === "festivalUpdate" && envelope.payload.value.signedUpdate) {
-				Y.applyUpdate(doc, envelope.payload.value.signedUpdate.update);
+			// Remove stale entries
+			const newStageIds = new Set(lineup.stages.map((s) => s.id));
+			for (const key of [...stagesMap.keys()]) {
+				if (!newStageIds.has(key)) stagesMap.delete(key);
 			}
-		}
-
-		// Capture state vector before mutation
-		const prevSV = Y.encodeStateVector(doc);
-
-		// Apply new lineup data
-		const root = doc.getMap("root");
-		root.set("stages", JSON.stringify(lineup.stages));
-		root.set("days", JSON.stringify(lineup.days));
-		root.set("sets", JSON.stringify(lineup.sets));
-
-		// Encode incremental update
-		const update = Y.encodeStateAsUpdate(doc, prevSV);
-
-		// Sign with DO's Ed25519 key
-		const signature = await sign(this.#secretKey, update);
-
-		// Build the GossipEnvelope
-		const envelope = create(GossipEnvelopeSchema, {
-			payload: {
-				case: "festivalUpdate",
-				value: {
-					docId,
-					signedUpdate: {
-						update,
-						author: "festival-do",
-						signature,
-					},
-				},
-			},
-		});
-
-		// Store in gossip_log
-		const envelopeBytes = toBinary(GossipEnvelopeSchema, envelope);
-		const result = this.sql
-			.exec(
-				"INSERT INTO gossip_log (topic, message) VALUES (?, ?) RETURNING seq",
-				topic,
-				envelopeBytes,
-			)
-			.one() as { seq: number };
-
-		// Persist consolidated doc
-		const fullState = Y.encodeStateAsUpdate(doc);
-		this.sql.exec(
-			"INSERT OR REPLACE INTO yrs_docs (doc_id, data, updated_at) VALUES (?, ?, datetime('now'))",
-			docId,
-			fullState,
-		);
-
-		// Broadcast to subscribed WS clients
-		const broadcastMsg = create(RelayServerMessageSchema, {
-			msg: {
-				case: "gossip",
-				value: {
-					topic,
-					seq: BigInt(result.seq),
-					message: envelope,
-				},
-			},
-		});
-		const broadcastBytes = toBinary(RelayServerMessageSchema, broadcastMsg);
-		for (const [ws, sess] of this.#sessions) {
-			if (sess.topics.has(topic)) {
-				ws.send(broadcastBytes);
+			const newDayIds = new Set(lineup.days.map((d) => d.id));
+			for (const key of [...daysMap.keys()]) {
+				if (!newDayIds.has(key)) daysMap.delete(key);
 			}
-		}
+			const newSetIds = new Set(lineup.sets.map((s) => s.id));
+			for (const key of [...setsMap.keys()]) {
+				if (!newSetIds.has(key)) setsMap.delete(key);
+			}
+
+			// Upsert entries
+			for (const stage of lineup.stages) {
+				let m = stagesMap.get(stage.id);
+				if (!m || !(m instanceof Y.Map)) {
+					m = new Y.Map();
+					stagesMap.set(stage.id, m);
+				}
+				m.set("name", stage.name);
+				m.set("short", stage.short);
+				m.set("color", stage.color);
+				m.set("order", stage.order);
+			}
+			for (const day of lineup.days) {
+				let m = daysMap.get(day.id);
+				if (!m || !(m instanceof Y.Map)) {
+					m = new Y.Map();
+					daysMap.set(day.id, m);
+				}
+				m.set("label", day.label);
+				m.set("num", day.num);
+				m.set("month", day.month);
+				m.set("year", day.year);
+			}
+			for (const set of lineup.sets) {
+				let m = setsMap.get(set.id);
+				if (!m || !(m instanceof Y.Map)) {
+					m = new Y.Map();
+					setsMap.set(set.id, m);
+				}
+				m.set("day", set.day);
+				m.set("stage", set.stage);
+				m.set("artist", set.artist);
+				m.set("startMin", set.startMin);
+				m.set("durationMin", set.durationMin);
+				m.set("genre", set.genre);
+				m.set("cancelled", set.cancelled);
+			}
+		});
 
 		console.log(
 			`[updateLineup] updated ${docId}: ${lineup.stages.length} stages, ${lineup.days.length} days, ${lineup.sets.length} sets`,
@@ -1150,131 +1251,45 @@ export class FestivalDO extends DurableObject {
 		relayUrl: string | null,
 		userId: string,
 	): Promise<number> {
-		if (!this.#secretKey || !this.#publicKey || !this.#festivalId) {
-			throw new Error("Not configured for peer checkin");
-		}
-
-		const docId = `festival/${this.#festivalId}/state`;
-		const topic = docId;
 		const nowSec = Math.floor(Date.now() / 1000);
+		let peerCount = 0;
 
-		// Load existing Yrs doc
-		const doc = new Y.Doc();
-		const stored = this.sql.exec("SELECT data FROM yrs_docs WHERE doc_id = ?", docId).toArray() as {
-			data: ArrayBuffer;
-		}[];
-
-		if (stored.length > 0) {
-			Y.applyUpdate(doc, new Uint8Array(stored[0].data));
-		}
-
-		// Replay gossip_log entries
-		const logEntries = this.sql
-			.exec("SELECT message FROM gossip_log WHERE topic = ? ORDER BY seq", topic)
-			.toArray() as { message: ArrayBuffer }[];
-
-		for (const entry of logEntries) {
-			const envelope = fromBinary(GossipEnvelopeSchema, new Uint8Array(entry.message));
-			if (envelope.payload.case === "festivalUpdate" && envelope.payload.value.signedUpdate) {
-				Y.applyUpdate(doc, envelope.payload.value.signedUpdate.update);
+		await this.#mutatePublicDoc((doc) => {
+			const root = doc.getMap("root");
+			let peers = root.get("peers") as Y.Map<string> | undefined;
+			if (!peers || !(peers instanceof Y.Map)) {
+				peers = new Y.Map<string>();
+				root.set("peers", peers);
 			}
-		}
 
-		// Get previous state vector for incremental diff
-		const prevSV = Y.encodeStateVector(doc);
+			// Set this peer's entry
+			peers.set(
+				endpointId,
+				JSON.stringify({ relay_url: relayUrl, last_seen: nowSec, user_id: userId }),
+			);
 
-		// Get or create the "peers" YMap under root
-		const root = doc.getMap("root");
-		let peers = root.get("peers") as Y.Map<string> | undefined;
-		if (!peers || !(peers instanceof Y.Map)) {
-			peers = new Y.Map<string>();
-			root.set("peers", peers);
-		}
-
-		// Set this peer's entry
-		peers.set(
-			endpointId,
-			JSON.stringify({ relay_url: relayUrl, last_seen: nowSec, user_id: userId }),
-		);
-
-		// Prune stale entries (older than 2 hours)
-		const cutoff = nowSec - 7200;
-		const keysToDelete: string[] = [];
-		for (const [key, value] of peers.entries()) {
-			try {
-				const entry = JSON.parse(value) as { last_seen: number };
-				if (entry.last_seen < cutoff) {
+			// Prune stale entries (older than 2 hours)
+			const cutoff = nowSec - 7200;
+			const keysToDelete: string[] = [];
+			for (const [key, value] of peers.entries()) {
+				try {
+					const entry = JSON.parse(value) as { last_seen: number };
+					if (entry.last_seen < cutoff) {
+						keysToDelete.push(key);
+					}
+				} catch {
 					keysToDelete.push(key);
 				}
-			} catch {
-				keysToDelete.push(key);
 			}
-		}
-		for (const key of keysToDelete) {
-			peers.delete(key);
-		}
-
-		const peerCount = peers.size;
-
-		// Encode incremental update
-		const update = Y.encodeStateAsUpdate(doc, prevSV);
-
-		// Sign with DO's Ed25519 key
-		const signature = await sign(this.#secretKey, update);
-
-		// Build the GossipEnvelope as protobuf
-		const envelope = create(GossipEnvelopeSchema, {
-			payload: {
-				case: "festivalUpdate",
-				value: {
-					docId,
-					signedUpdate: {
-						update,
-						author: "festival-do",
-						signature,
-					},
-				},
-			},
-		});
-
-		// Store envelope as BLOB in gossip_log
-		const envelopeBytes = toBinary(GossipEnvelopeSchema, envelope);
-		const result = this.sql
-			.exec(
-				"INSERT INTO gossip_log (topic, message) VALUES (?, ?) RETURNING seq",
-				topic,
-				envelopeBytes,
-			)
-			.one() as { seq: number };
-
-		// Persist consolidated doc
-		const fullState = Y.encodeStateAsUpdate(doc);
-		this.sql.exec(
-			"INSERT OR REPLACE INTO yrs_docs (doc_id, data, updated_at) VALUES (?, ?, datetime('now'))",
-			docId,
-			fullState,
-		);
-
-		// Broadcast to subscribed WS clients
-		const broadcastMsg = create(RelayServerMessageSchema, {
-			msg: {
-				case: "gossip",
-				value: {
-					topic,
-					seq: BigInt(result.seq),
-					message: envelope,
-				},
-			},
-		});
-		const broadcastBytes = toBinary(RelayServerMessageSchema, broadcastMsg);
-		for (const [ws, sess] of this.#sessions) {
-			if (sess.topics.has(topic)) {
-				ws.send(broadcastBytes);
+			for (const key of keysToDelete) {
+				peers.delete(key);
 			}
-		}
+
+			peerCount = peers.size;
+		});
 
 		console.log(
-			`[writePeerCheckin] peer ${endpointId.slice(0, 8)}… checked in for ${docId}, ${peerCount} active peers`,
+			`[writePeerCheckin] peer ${endpointId.slice(0, 8)}… checked in, ${peerCount} active peers`,
 		);
 
 		return peerCount;
@@ -1289,41 +1304,17 @@ export class FestivalDO extends DurableObject {
 			return;
 		}
 
-		const docId = `festival/${this.#festivalId}/state`;
-		const topic = docId;
-		const nowSec = Math.floor(Date.now() / 1000);
-		const cutoff = nowSec - 7200;
+		if (!this.#publicStateDoc) return;
 
-		// Load existing Yrs doc
-		const doc = new Y.Doc();
-		const stored = this.sql.exec("SELECT data FROM yrs_docs WHERE doc_id = ?", docId).toArray() as {
-			data: ArrayBuffer;
-		}[];
-
-		if (stored.length > 0) {
-			Y.applyUpdate(doc, new Uint8Array(stored[0].data));
-		}
-
-		// Replay gossip_log entries
-		const logEntries = this.sql
-			.exec("SELECT message FROM gossip_log WHERE topic = ? ORDER BY seq", topic)
-			.toArray() as { message: ArrayBuffer }[];
-
-		for (const entry of logEntries) {
-			const envelope = fromBinary(GossipEnvelopeSchema, new Uint8Array(entry.message));
-			if (envelope.payload.case === "festivalUpdate" && envelope.payload.value.signedUpdate) {
-				Y.applyUpdate(doc, envelope.payload.value.signedUpdate.update);
-			}
-		}
-
-		// Check if there's a peers map at all
-		const root = doc.getMap("root");
+		const root = this.#publicStateDoc.getMap("root");
 		const peers = root.get("peers") as Y.Map<string> | undefined;
 		if (!peers || !(peers instanceof Y.Map) || peers.size === 0) {
 			return;
 		}
 
-		// Find stale entries
+		// Check if any entries are stale before mutating
+		const nowSec = Math.floor(Date.now() / 1000);
+		const cutoff = nowSec - 7200;
 		const keysToDelete: string[] = [];
 		for (const [key, value] of peers.entries()) {
 			try {
@@ -1340,73 +1331,16 @@ export class FestivalDO extends DurableObject {
 			return;
 		}
 
-		// Get previous state vector for incremental diff
-		const prevSV = Y.encodeStateVector(doc);
-
-		// Delete stale entries
-		for (const key of keysToDelete) {
-			peers.delete(key);
-		}
-
-		// Encode incremental update
-		const update = Y.encodeStateAsUpdate(doc, prevSV);
-
-		// Sign with DO's Ed25519 key
-		const signature = await sign(this.#secretKey, update);
-
-		// Build the GossipEnvelope as protobuf
-		const envelope = create(GossipEnvelopeSchema, {
-			payload: {
-				case: "festivalUpdate",
-				value: {
-					docId,
-					signedUpdate: {
-						update,
-						author: "festival-do",
-						signature,
-					},
-				},
-			},
-		});
-
-		// Store envelope as BLOB in gossip_log
-		const envelopeBytes = toBinary(GossipEnvelopeSchema, envelope);
-		const result = this.sql
-			.exec(
-				"INSERT INTO gossip_log (topic, message) VALUES (?, ?) RETURNING seq",
-				topic,
-				envelopeBytes,
-			)
-			.one() as { seq: number };
-
-		// Persist consolidated doc
-		const fullState = Y.encodeStateAsUpdate(doc);
-		this.sql.exec(
-			"INSERT OR REPLACE INTO yrs_docs (doc_id, data, updated_at) VALUES (?, ?, datetime('now'))",
-			docId,
-			fullState,
-		);
-
-		// Broadcast to subscribed WS clients
-		const broadcastMsg = create(RelayServerMessageSchema, {
-			msg: {
-				case: "gossip",
-				value: {
-					topic,
-					seq: BigInt(result.seq),
-					message: envelope,
-				},
-			},
-		});
-		const broadcastBytes = toBinary(RelayServerMessageSchema, broadcastMsg);
-		for (const [ws, sess] of this.#sessions) {
-			if (sess.topics.has(topic)) {
-				ws.send(broadcastBytes);
+		await this.#mutatePublicDoc((doc) => {
+			const r = doc.getMap("root");
+			const p = r.get("peers") as Y.Map<string>;
+			for (const key of keysToDelete) {
+				p.delete(key);
 			}
-		}
+		});
 
 		console.log(
-			`[pruneStalePeers] pruned ${keysToDelete.length} stale peers for ${docId}, ${peers.size} remaining`,
+			`[pruneStalePeers] pruned ${keysToDelete.length} stale peers, ${peers.size} remaining`,
 		);
 	}
 
@@ -1498,178 +1432,46 @@ export class FestivalDO extends DurableObject {
 		};
 	}
 
-	/** Merge weather into the Yrs doc and broadcast, following seedLineup pattern. */
+	/** Merge weather into the Yrs doc and broadcast, using #mutatePublicDoc. */
 	async #writeWeatherToDoc(weather: WeatherData) {
-		if (!this.#secretKey || !this.#publicKey || !this.#festivalId) {
-			throw new Error("Not configured for weather writes");
-		}
+		await this.#mutatePublicDoc((doc) => {
+			const weatherMap = doc.getMap("weather") as Y.Map<Y.Map<unknown>>;
+			const hourlyMap = doc.getMap("hourly") as Y.Map<Y.Map<unknown>>;
 
-		const docId = `festival/${this.#festivalId}/state`;
-		const topic = docId;
+			// Determine which hourly entries to keep/add
+			const nowIso = new Date().toISOString().slice(0, 16);
+			const cutoff = this.#closesAt ? this.#closesAt.slice(0, 16) : null;
 
-		// Load existing Yrs doc
-		const doc = new Y.Doc();
-		const stored = this.sql.exec("SELECT data FROM yrs_docs WHERE doc_id = ?", docId).toArray() as {
-			data: ArrayBuffer;
-		}[];
-
-		if (stored.length > 0) {
-			Y.applyUpdate(doc, new Uint8Array(stored[0].data));
-		}
-
-		// Replay gossip_log entries
-		const logEntries = this.sql
-			.exec("SELECT message FROM gossip_log WHERE topic = ? ORDER BY seq", topic)
-			.toArray() as { message: ArrayBuffer }[];
-
-		for (const entry of logEntries) {
-			const envelope = fromBinary(GossipEnvelopeSchema, new Uint8Array(entry.message));
-			if (envelope.payload.case === "festivalUpdate" && envelope.payload.value.signedUpdate) {
-				Y.applyUpdate(doc, envelope.payload.value.signedUpdate.update);
+			// Remove stale future entries (they'll be replaced by fresh forecast)
+			for (const key of [...hourlyMap.keys()]) {
+				if (key >= nowIso) hourlyMap.delete(key);
 			}
-		}
 
-		// Merge weather: keep past entries, replace from "now" onwards
-		const root = doc.getMap("root");
-		const existingRaw = root.get("weather") as string | undefined;
-		let merged = weather;
-
-		if (existingRaw) {
-			try {
-				const existing = JSON.parse(existingRaw) as WeatherData;
-				const nowIso = new Date().toISOString().slice(0, 16); // "YYYY-MM-DDTHH:MM"
-
-				// Find cutoff: entries before "now" from existing, from "now" onwards from fresh
-				const pastTimes: string[] = [];
-				const pastTemp: number[] = [];
-				const pastPrecip: number[] = [];
-				const pastCode: number[] = [];
-				const pastWind: number[] = [];
-
-				for (let i = 0; i < existing.hourly.time.length; i++) {
-					if (existing.hourly.time[i] < nowIso) {
-						pastTimes.push(existing.hourly.time[i]);
-						pastTemp.push(existing.hourly.temperature_2m[i]);
-						pastPrecip.push(existing.hourly.precipitation_probability[i]);
-						pastCode.push(existing.hourly.weather_code[i]);
-						pastWind.push(existing.hourly.wind_speed_10m[i]);
-					}
-				}
-
-				// Fresh entries from "now" onwards
-				const freshTimes: string[] = [];
-				const freshTemp: number[] = [];
-				const freshPrecip: number[] = [];
-				const freshCode: number[] = [];
-				const freshWind: number[] = [];
-
-				for (let i = 0; i < weather.hourly.time.length; i++) {
-					if (weather.hourly.time[i] >= nowIso) {
-						freshTimes.push(weather.hourly.time[i]);
-						freshTemp.push(weather.hourly.temperature_2m[i]);
-						freshPrecip.push(weather.hourly.precipitation_probability[i]);
-						freshCode.push(weather.hourly.weather_code[i]);
-						freshWind.push(weather.hourly.wind_speed_10m[i]);
-					}
-				}
-
-				merged = {
-					...weather,
-					hourly: {
-						time: [...pastTimes, ...freshTimes],
-						temperature_2m: [...pastTemp, ...freshTemp],
-						precipitation_probability: [...pastPrecip, ...freshPrecip],
-						weather_code: [...pastCode, ...freshCode],
-						wind_speed_10m: [...pastWind, ...freshWind],
-					},
-				};
-			} catch {
-				// If existing weather is corrupt, just use fresh data
+			// Add fresh hourly entries
+			for (let i = 0; i < weather.hourly.time.length; i++) {
+				const t = weather.hourly.time[i];
+				if (cutoff && t > cutoff) break;
+				const m = new Y.Map();
+				m.set("temp", weather.hourly.temperature_2m[i]);
+				m.set("precip", weather.hourly.precipitation_probability[i]);
+				m.set("code", weather.hourly.weather_code[i]);
+				m.set("wind", weather.hourly.wind_speed_10m[i]);
+				hourlyMap.set(t, m);
 			}
-		}
 
-		// Trim entries past closesAt
-		if (this.#closesAt) {
-			const cutoff = this.#closesAt.slice(0, 16); // "YYYY-MM-DDTHH:MM"
-			const end = merged.hourly.time.findIndex((t) => t > cutoff);
-			if (end !== -1) {
-				merged.hourly.time = merged.hourly.time.slice(0, end);
-				merged.hourly.temperature_2m = merged.hourly.temperature_2m.slice(0, end);
-				merged.hourly.precipitation_probability = merged.hourly.precipitation_probability.slice(
-					0,
-					end,
-				);
-				merged.hourly.weather_code = merged.hourly.weather_code.slice(0, end);
-				merged.hourly.wind_speed_10m = merged.hourly.wind_speed_10m.slice(0, end);
+			// Write metadata
+			let meta = weatherMap.get("meta");
+			if (!meta || !(meta instanceof Y.Map)) {
+				meta = new Y.Map();
+				weatherMap.set("meta", meta);
 			}
-		}
-
-		// Get previous state vector for incremental diff
-		const prevSV = Y.encodeStateVector(doc);
-
-		// Write to Yrs doc
-		root.set("weather", JSON.stringify(merged));
-
-		// Encode incremental update
-		const update = Y.encodeStateAsUpdate(doc, prevSV);
-
-		// Sign with DO's Ed25519 key
-		const signature = await sign(this.#secretKey, update);
-
-		// Build the GossipEnvelope as protobuf
-		const envelope = create(GossipEnvelopeSchema, {
-			payload: {
-				case: "festivalUpdate",
-				value: {
-					docId,
-					signedUpdate: {
-						update,
-						author: "festival-do",
-						signature,
-					},
-				},
-			},
+			meta.set("updatedAt", weather.updatedAt);
+			meta.set("lat", weather.lat);
+			meta.set("lon", weather.lon);
+			meta.set("timezone", weather.timezone);
 		});
 
-		// Store envelope as BLOB in gossip_log
-		const envelopeBytes = toBinary(GossipEnvelopeSchema, envelope);
-		const result = this.sql
-			.exec(
-				"INSERT INTO gossip_log (topic, message) VALUES (?, ?) RETURNING seq",
-				topic,
-				envelopeBytes,
-			)
-			.one() as { seq: number };
-
-		// Persist consolidated doc
-		const fullState = Y.encodeStateAsUpdate(doc);
-		this.sql.exec(
-			"INSERT OR REPLACE INTO yrs_docs (doc_id, data, updated_at) VALUES (?, ?, datetime('now'))",
-			docId,
-			fullState,
-		);
-
-		// Broadcast to subscribed WS clients
-		const broadcastMsg = create(RelayServerMessageSchema, {
-			msg: {
-				case: "gossip",
-				value: {
-					topic,
-					seq: BigInt(result.seq),
-					message: envelope,
-				},
-			},
-		});
-		const broadcastBytes = toBinary(RelayServerMessageSchema, broadcastMsg);
-		for (const [ws, sess] of this.#sessions) {
-			if (sess.topics.has(topic)) {
-				ws.send(broadcastBytes);
-			}
-		}
-
-		console.log(
-			`[writeWeatherToDoc] wrote weather for ${docId}: ${merged.hourly.time.length} hourly entries`,
-		);
+		console.log(`[writeWeatherToDoc] wrote weather for festival/${this.#festivalId}/state`);
 	}
 
 	/** Arm the weather alarm. If no alarm is set, triggers immediately. */
