@@ -11,6 +11,19 @@ const MIGRATIONS: &[(u32, &str)] = &[
         created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE INDEX IF NOT EXISTS idx_doc_updates_doc_id ON doc_updates(doc_id);"),
+    // Durable peer directory: persists peers learned online so the mesh can
+    // cold-start offline. Scoped per festival because gossip bootstrap is
+    // per-topic — only peers seen on a festival's topics seed that topic.
+    (3, "CREATE TABLE IF NOT EXISTS festival_peers (
+        festival_id TEXT NOT NULL,
+        endpoint_id TEXT NOT NULL,
+        relay_url TEXT,
+        last_seen INTEGER NOT NULL,
+        source TEXT NOT NULL,
+        PRIMARY KEY (festival_id, endpoint_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_festival_peers_recency
+        ON festival_peers(festival_id, last_seen DESC);"),
 ];
 
 /// Ensure the `_migrations` table exists and apply any pending migrations.
@@ -83,6 +96,7 @@ mod tests {
         assert!(tables.contains(&"chat_messages".to_string()));
         assert!(tables.contains(&"credentials".to_string()));
         assert!(tables.contains(&"starred_sets".to_string()));
+        assert!(tables.contains(&"festival_peers".to_string()));
         assert!(tables.contains(&"_migrations".to_string()));
     }
 }

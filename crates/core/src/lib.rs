@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod ble_discovery;
 pub mod ble_sync;
 pub mod chat;
 pub mod connection_manager;
@@ -188,8 +189,12 @@ impl OffbeatNode {
 
         let endpoint = builder.bind().await?;
 
-        // Create the connection manager with the hex-encoded endpoint ID.
-        let connection_manager = Arc::new(ConnectionManager::new(own_endpoint_id.to_string()));
+        // Create the connection manager with the hex-encoded endpoint ID,
+        // backed by the durable peer directory for offline cold-start.
+        let connection_manager = Arc::new(ConnectionManager::new_with_db(
+            own_endpoint_id.to_string(),
+            db.clone(),
+        ));
 
         // Spawn the gossip actor; it takes ownership of a clone of the endpoint.
         let gossip = Gossip::builder().spawn(endpoint.clone());

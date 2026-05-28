@@ -417,6 +417,76 @@ impl Database {
             Ok(None)
         }
     }
+
+    // --- festival peer directory ---
+
+    /// Upsert a peer learned for a festival. On conflict the row's `last_seen`
+    /// only advances (never regresses on a stale sighting), `relay_url` is
+    /// overwritten when the new value is present, and `source` reflects the
+    /// most recent sighting.
+    pub fn upsert_festival_peer(
+        &self,
+        festival_id: &str,
+        endpoint_id: &str,
+        relay_url: Option<&str>,
+        last_seen: u64,
+        source: &str,
+    ) -> Result<()> {
+        self.conn.lock().unwrap().execute(
+            "INSERT INTO festival_peers (festival_id, endpoint_id, relay_url, last_seen, source)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(festival_id, endpoint_id) DO UPDATE SET
+                 last_seen = MAX(last_seen, excluded.last_seen),
+                 relay_url = COALESCE(excluded.relay_url, relay_url),
+                 source = excluded.source",
+            params![festival_id, endpoint_id, relay_url, last_seen as i64, source],
+        )?;
+        Ok(())
+    }
+
+    /// Load the freshest known peers for a festival, newest first, capped at
+    /// `limit`. This is the cold-start bootstrap set fed to gossip `subscribe`.
+    pub fn load_festival_peers(&self, festival_id: &str, limit: usize) -> Result<Vec<BootstrapPeer>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT endpoint_id, relay_url, last_seen, source FROM festival_peers
+             WHERE festival_id = ?1 ORDER BY last_seen DESC LIMIT ?2",
+        )?;
+        let peers = stmt
+            .query_map(params![festival_id, limit as i64], |row| {
+                Ok(BootstrapPeer {
+                    endpoint_id: row.get(0)?,
+                    relay_url: row.get(1)?,
+                    last_seen: row.get::<_, i64>(2)? as u64,
+                    source: row.get(3)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(peers)
+    }
+
+    /// Bound the directory: keep only the `keep` freshest peers per festival,
+    /// deleting older entries. Prevents unbounded growth across many sessions.
+    pub fn prune_festival_peers(&self, festival_id: &str, keep: usize) -> Result<()> {
+        self.conn.lock().unwrap().execute(
+            "DELETE FROM festival_peers
+             WHERE festival_id = ?1 AND endpoint_id NOT IN (
+                 SELECT endpoint_id FROM festival_peers
+                 WHERE festival_id = ?1 ORDER BY last_seen DESC LIMIT ?2
+             )",
+            params![festival_id, keep as i64],
+        )?;
+        Ok(())
+    }
+}
+
+/// A peer row from the durable directory, used to seed gossip bootstrap.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BootstrapPeer {
+    pub endpoint_id: String,
+    pub relay_url: Option<String>,
+    pub last_seen: u64,
+    pub source: String,
 }
 
 #[cfg(test)]
@@ -442,6 +512,81 @@ mod tests {
         let db = test_db();
         let loaded = db.load_doc("nonexistent").unwrap();
         assert_eq!(loaded, None);
+    }
+
+    #[test]
+    fn test_festival_peer_upsert_and_load() {
+        let db = test_db();
+        db.upsert_festival_peer("fest-a", "peer-1", Some("https://relay"), 100, "crdt")
+            .unwrap();
+        db.upsert_festival_peer("fest-a", "peer-2", None, 200, "gossip")
+            .unwrap();
+
+        let peers = db.load_festival_peers("fest-a", 10).unwrap();
+        assert_eq!(peers.len(), 2);
+        // Newest first.
+        assert_eq!(peers[0].endpoint_id, "peer-2");
+        assert_eq!(peers[0].relay_url, None);
+        assert_eq!(peers[0].source, "gossip");
+        assert_eq!(peers[1].endpoint_id, "peer-1");
+        assert_eq!(peers[1].relay_url.as_deref(), Some("https://relay"));
+    }
+
+    #[test]
+    fn test_festival_peer_scoped_by_festival() {
+        let db = test_db();
+        db.upsert_festival_peer("fest-a", "peer-1", None, 100, "crdt")
+            .unwrap();
+        db.upsert_festival_peer("fest-b", "peer-2", None, 100, "crdt")
+            .unwrap();
+        assert_eq!(db.load_festival_peers("fest-a", 10).unwrap().len(), 1);
+        assert_eq!(db.load_festival_peers("fest-b", 10).unwrap().len(), 1);
+        assert_eq!(db.load_festival_peers("fest-c", 10).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_festival_peer_last_seen_never_regresses() {
+        let db = test_db();
+        db.upsert_festival_peer("fest-a", "peer-1", Some("https://r1"), 500, "crdt")
+            .unwrap();
+        // Stale sighting with an older timestamp and no relay must not regress.
+        db.upsert_festival_peer("fest-a", "peer-1", None, 100, "ble")
+            .unwrap();
+        let peers = db.load_festival_peers("fest-a", 10).unwrap();
+        assert_eq!(peers.len(), 1);
+        assert_eq!(peers[0].last_seen, 500);
+        // relay_url preserved (COALESCE keeps existing when new is NULL).
+        assert_eq!(peers[0].relay_url.as_deref(), Some("https://r1"));
+        // source reflects most recent write.
+        assert_eq!(peers[0].source, "ble");
+    }
+
+    #[test]
+    fn test_festival_peer_load_respects_limit() {
+        let db = test_db();
+        for i in 0..5 {
+            db.upsert_festival_peer("fest-a", &format!("peer-{i}"), None, 100 + i, "crdt")
+                .unwrap();
+        }
+        let peers = db.load_festival_peers("fest-a", 3).unwrap();
+        assert_eq!(peers.len(), 3);
+        // Highest last_seen first.
+        assert_eq!(peers[0].endpoint_id, "peer-4");
+        assert_eq!(peers[2].endpoint_id, "peer-2");
+    }
+
+    #[test]
+    fn test_festival_peer_prune_keeps_freshest() {
+        let db = test_db();
+        for i in 0..5 {
+            db.upsert_festival_peer("fest-a", &format!("peer-{i}"), None, 100 + i, "crdt")
+                .unwrap();
+        }
+        db.prune_festival_peers("fest-a", 2).unwrap();
+        let peers = db.load_festival_peers("fest-a", 10).unwrap();
+        assert_eq!(peers.len(), 2);
+        assert_eq!(peers[0].endpoint_id, "peer-4");
+        assert_eq!(peers[1].endpoint_id, "peer-3");
     }
 
     #[test]

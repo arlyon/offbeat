@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::db::{BootstrapPeer, Database};
 use crate::types::PeerInfo;
 
 /// Source of peer discovery.
@@ -10,6 +11,17 @@ pub enum PeerSource {
     Crdt,
     Ble,
     Gossip,
+}
+
+impl PeerSource {
+    /// Stable string tag persisted in the `festival_peers.source` column.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            PeerSource::Crdt => "crdt",
+            PeerSource::Ble => "ble",
+            PeerSource::Gossip => "gossip",
+        }
+    }
 }
 
 /// Gossip connection status for a peer.
@@ -42,6 +54,9 @@ pub struct PeerEntry {
 pub struct ConnectionManager {
     peers: Arc<Mutex<HashMap<String, PeerEntry>>>,
     own_endpoint_id: String,
+    /// Durable peer directory. `None` in tests/contexts without persistence;
+    /// when present, peer sightings are written through for offline cold-start.
+    db: Option<Arc<Database>>,
 }
 
 impl ConnectionManager {
@@ -49,6 +64,16 @@ impl ConnectionManager {
         Self {
             peers: Arc::new(Mutex::new(HashMap::new())),
             own_endpoint_id,
+            db: None,
+        }
+    }
+
+    /// Construct with a durable directory backing store.
+    pub fn new_with_db(own_endpoint_id: String, db: Arc<Database>) -> Self {
+        Self {
+            peers: Arc::new(Mutex::new(HashMap::new())),
+            own_endpoint_id,
+            db: Some(db),
         }
     }
 
@@ -94,6 +119,44 @@ impl ConnectionManager {
     pub fn peer_snapshot(&self) -> Vec<PeerEntry> {
         let table = self.peers.lock().expect("peer table lock poisoned");
         table.values().cloned().collect()
+    }
+
+    /// Persist peers learned for a festival into the durable directory so the
+    /// mesh can cold-start offline next session. No-op without a backing store.
+    /// Peers matching `own_endpoint_id` are skipped. Errors are logged, not
+    /// propagated — a directory write failure must never break live sync.
+    pub fn record_festival_peers(&self, festival_id: &str, peers: &[PeerInfo], source: PeerSource) {
+        let Some(db) = &self.db else { return };
+        for peer in peers {
+            if peer.endpoint_id == self.own_endpoint_id {
+                continue;
+            }
+            if let Err(e) = db.upsert_festival_peer(
+                festival_id,
+                &peer.endpoint_id,
+                peer.relay_url.as_deref(),
+                peer.last_seen,
+                source.as_str(),
+            ) {
+                tracing::warn!(festival_id, peer = %peer.endpoint_id, ?e, "failed to persist festival peer");
+            }
+        }
+    }
+
+    /// Load the freshest bootstrap peers for a festival from the durable
+    /// directory, newest first, capped at `limit`. Returns empty without a
+    /// backing store or on read error. Phase 2 maps these to gossip bootstrap.
+    pub fn bootstrap_peers(&self, festival_id: &str, limit: usize) -> Vec<BootstrapPeer> {
+        let Some(db) = &self.db else {
+            return Vec::new();
+        };
+        match db.load_festival_peers(festival_id, limit) {
+            Ok(peers) => peers,
+            Err(e) => {
+                tracing::warn!(festival_id, ?e, "failed to load bootstrap peers");
+                Vec::new()
+            }
+        }
     }
 
     /// Get the number of active peers (those with `GossipStatus::Active`).
@@ -260,6 +323,34 @@ mod tests {
         }
 
         assert_eq!(cm.active_peer_count(), 2);
+    }
+
+    #[test]
+    fn test_record_and_bootstrap_peers_roundtrip() {
+        let db = Arc::new(Database::new_in_memory().unwrap());
+        let cm = ConnectionManager::new_with_db("own-id".to_string(), db);
+
+        let peers = vec![
+            make_peer("peer-a", Some("https://relay"), 100),
+            make_peer("peer-b", None, 200),
+            make_peer("own-id", None, 300), // must be skipped
+        ];
+        cm.record_festival_peers("fest-1", &peers, PeerSource::Crdt);
+
+        let boot = cm.bootstrap_peers("fest-1", 10);
+        assert_eq!(boot.len(), 2);
+        // Newest first.
+        assert_eq!(boot[0].endpoint_id, "peer-b");
+        assert_eq!(boot[0].source, "crdt");
+        assert_eq!(boot[1].endpoint_id, "peer-a");
+        assert_eq!(boot[1].relay_url.as_deref(), Some("https://relay"));
+    }
+
+    #[test]
+    fn test_bootstrap_peers_without_db_is_empty() {
+        let cm = ConnectionManager::new("own-id".to_string());
+        cm.record_festival_peers("fest-1", &[make_peer("peer-a", None, 100)], PeerSource::Crdt);
+        assert!(cm.bootstrap_peers("fest-1", 10).is_empty());
     }
 
     #[test]
