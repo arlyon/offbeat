@@ -350,9 +350,24 @@ impl AppNode {
             .get_festival_chat_topics(&festival_id, &stage_refs);
 
         if let Some(gm) = &self.inner.gossip_manager {
+            // Seed the gossip overlay from the durable peer directory so it can
+            // form even when the relay is unreachable (offline cold-start).
+            let bootstrap: Vec<offbeat_core::EndpointId> = self
+                .inner
+                .connection_manager
+                .as_ref()
+                .map(|cm| {
+                    cm.bootstrap_peers(&festival_id, 8)
+                        .into_iter()
+                        .filter_map(|p| p.endpoint_id.parse().ok())
+                        .collect()
+                })
+                .unwrap_or_default();
             let mut gm_locked = gm.lock().await;
             for (_topic_str, topic_id) in &chat_topics {
-                gm_locked.subscribe(*topic_id, vec![]).await?;
+                gm_locked
+                    .subscribe(*topic_id, &festival_id, bootstrap.clone())
+                    .await?;
             }
         }
 

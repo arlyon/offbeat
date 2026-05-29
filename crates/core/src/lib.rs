@@ -20,6 +20,10 @@ pub mod transport;
 pub mod types;
 pub mod ws_relay;
 
+/// Re-exported so downstream crates can name peer identities for the gossip
+/// bootstrap / join APIs without depending on `iroh` directly.
+pub use iroh::EndpointId;
+
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, RwLock};

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::db::{BootstrapPeer, Database};
 use crate::types::PeerInfo;
@@ -140,6 +140,26 @@ impl ConnectionManager {
             ) {
                 tracing::warn!(festival_id, peer = %peer.endpoint_id, ?e, "failed to persist festival peer");
             }
+        }
+    }
+
+    /// Persist a gossip neighbor (from a `NeighborUp` event) into the durable
+    /// directory so the mesh can re-bootstrap from it next session. Source is
+    /// tagged `gossip`; the sighting timestamp is now. No-op without a backing
+    /// store or for our own endpoint. Errors are logged, never propagated.
+    pub fn record_gossip_neighbor(&self, festival_id: &str, endpoint_id: &str) {
+        let Some(db) = &self.db else { return };
+        if endpoint_id == self.own_endpoint_id {
+            return;
+        }
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        if let Err(e) =
+            db.upsert_festival_peer(festival_id, endpoint_id, None, now, PeerSource::Gossip.as_str())
+        {
+            tracing::warn!(festival_id, peer = %endpoint_id, ?e, "failed to harvest gossip neighbor");
         }
     }
 
@@ -351,6 +371,21 @@ mod tests {
         let cm = ConnectionManager::new("own-id".to_string());
         cm.record_festival_peers("fest-1", &[make_peer("peer-a", None, 100)], PeerSource::Crdt);
         assert!(cm.bootstrap_peers("fest-1", 10).is_empty());
+    }
+
+    #[test]
+    fn test_record_gossip_neighbor_persists_to_directory() {
+        let db = Arc::new(Database::new_in_memory().unwrap());
+        let cm = ConnectionManager::new_with_db("own-id".to_string(), db);
+
+        cm.record_gossip_neighbor("fest-1", "neighbor-x");
+        cm.record_gossip_neighbor("fest-1", "own-id"); // skipped
+
+        let boot = cm.bootstrap_peers("fest-1", 10);
+        assert_eq!(boot.len(), 1);
+        assert_eq!(boot[0].endpoint_id, "neighbor-x");
+        assert_eq!(boot[0].source, "gossip");
+        assert!(boot[0].last_seen > 0);
     }
 
     #[test]
