@@ -708,6 +708,93 @@ mod tests {
         }
     }
 
+    /// A `PeerConnection` that performs a *real* state-vector exchange against a
+    /// separate "remote" `DocManager` and applies the returned diff locally —
+    /// modelling the transient ALPN catch-up fired on `NeighborUp`, with no
+    /// network. The `offbeat/sync/1` ALPN impl is the same exchange over a wire.
+    struct InMemoryPeer {
+        remote: Arc<crate::doc_manager::DocManager>,
+        local: Arc<crate::doc_manager::DocManager>,
+    }
+
+    impl PeerConnection for InMemoryPeer {
+        async fn subscribe(&self, _topics: Vec<String>) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn sv_exchange(&self, doc_id: &str, sv: &[u8]) -> anyhow::Result<()> {
+            // Remote computes the diff since our state vector; we apply it
+            // locally, exactly as the ALPN response would be dispatched.
+            let diff = self.remote.encode_diff(doc_id, sv)?;
+            self.local.apply_update(doc_id, &diff)?;
+            Ok(())
+        }
+
+        async fn chat_catchup(
+            &self,
+            _topic: &str,
+            _sv: &ChatStateVector,
+            _limit: u32,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn broadcast(&self, _topic: &str, _data: &[u8]) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sv_exchange_converges_stale_local_to_remote() {
+        use crate::resource::Resource;
+        use yrs::{Doc, Map, ReadTxn, StateVector, Transact};
+
+        let doc_id = "festival/fest1/state";
+
+        // Remote node already has the festival doc populated.
+        let remote_db = test_db();
+        let remote = Arc::new(crate::doc_manager::DocManager::new(remote_db));
+        remote.get_or_create(doc_id);
+        let update = {
+            let d = Doc::new();
+            let m = d.get_or_insert_map("root");
+            {
+                let mut txn = d.transact_mut();
+                m.insert(&mut txn, "stage", "main");
+            }
+            d.transact()
+                .encode_state_as_update_v1(&StateVector::default())
+        };
+        remote.apply_update(doc_id, &update).unwrap();
+
+        // Local node starts empty, with the festival resource registered.
+        let db = test_db();
+        let local = Arc::new(crate::doc_manager::DocManager::new(db.clone()));
+        let chat_manager = Arc::new(crate::chat::ChatManager::new(db.clone(), local.clone()));
+        let registry = Arc::new(RwLock::new(ResourceRegistry::new()));
+        {
+            let mut reg = registry.write().unwrap();
+            reg.register(Resource::festival_state("fest1", [0u8; 32]));
+        }
+        let notifier = Arc::new(ResourceNotifier::new());
+        let orch = SyncOrchestrator::new(registry, local.clone(), chat_manager, db, notifier);
+
+        assert_eq!(local.read_map_value(doc_id, "stage"), None);
+
+        // NeighborUp → transient sv_exchange against the neighbor.
+        let peer = InMemoryPeer {
+            remote: remote.clone(),
+            local: local.clone(),
+        };
+        orch.sync_resource(doc_id, &peer).await.unwrap();
+
+        // Local has converged to the remote's state.
+        assert_eq!(
+            local.read_map_value(doc_id, "stage"),
+            Some("main".to_string())
+        );
+    }
+
     #[tokio::test]
     async fn test_sync_with_peer_empty_registry() {
         let orch = create_orchestrator();

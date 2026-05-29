@@ -1256,7 +1256,11 @@ impl AppNode {
         }
 
         let so = std::sync::Arc::clone(&self.inner.sync_orchestrator);
-        let handles = offbeat_core::ble_sync::spawn_ble_connection_tasks(ble, gm, cm, so);
+        let endpoint = self.inner.endpoint.clone();
+        let doc_manager = std::sync::Arc::clone(&self.inner.doc_manager);
+        let handles = offbeat_core::ble_sync::spawn_ble_connection_tasks(
+            ble, gm, cm, so, endpoint, doc_manager,
+        );
         self.ble_task_handles = handles;
         tracing::info!("BLE auto-connection tasks started");
     }

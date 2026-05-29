@@ -16,8 +16,10 @@ use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
 use crate::connection_manager::{ConnectionManager, GossipStatus};
+use crate::doc_manager::DocManager;
 use crate::gossip_manager::{GossipManager, GossipReceiver};
 use crate::sync::SyncOrchestrator;
+use crate::sync_protocol::IrohSyncPeer;
 
 /// Minimum interval between join nudges for a single peer (discovery tick).
 const DISCOVERY_NUDGE_MIN_INTERVAL: Duration = Duration::from_secs(5);
@@ -39,6 +41,8 @@ pub fn spawn_ble_connection_tasks(
     gossip_manager: Arc<Mutex<GossipManager>>,
     connection_manager: Arc<ConnectionManager>,
     sync_orchestrator: Arc<SyncOrchestrator>,
+    endpoint: Option<iroh::Endpoint>,
+    doc_manager: Arc<DocManager>,
 ) -> Vec<JoinHandle<()>> {
     vec![
         // Task A: BLE discovery tick — poll BLE peers and nudge gossip join
@@ -53,11 +57,14 @@ pub fn spawn_ble_connection_tasks(
             gossip_manager.clone(),
             connection_manager.clone(),
         )),
-        // Task C: Gossip event pump — drain receivers, update connection state
+        // Task C: Gossip event pump — drain receivers, update connection state,
+        // and fire transient sv_exchange catch-up on NeighborUp.
         tokio::spawn(gossip_event_pump(
             gossip_manager,
             connection_manager,
             sync_orchestrator,
+            endpoint,
+            doc_manager,
         )),
     ]
 }
@@ -187,6 +194,8 @@ async fn gossip_event_pump(
     gossip_manager: Arc<Mutex<GossipManager>>,
     connection_manager: Arc<ConnectionManager>,
     sync_orchestrator: Arc<SyncOrchestrator>,
+    endpoint: Option<iroh::Endpoint>,
+    doc_manager: Arc<DocManager>,
 ) {
     // Wait briefly to let subscriptions get established before draining
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -207,9 +216,14 @@ async fn gossip_event_pump(
         let gm = gossip_manager.lock().await;
         for (topic_id, receiver) in receivers {
             let festival_id = gm.festival_for_topic(&topic_id);
-            let cm = connection_manager.clone();
-            let so = sync_orchestrator.clone();
-            handles.push(tokio::spawn(pump_single_receiver(receiver, festival_id, cm, so)));
+            handles.push(tokio::spawn(pump_single_receiver(
+                receiver,
+                festival_id,
+                connection_manager.clone(),
+                sync_orchestrator.clone(),
+                endpoint.clone(),
+                doc_manager.clone(),
+            )));
         }
     }
 
@@ -221,20 +235,29 @@ async fn gossip_event_pump(
         let new_receivers: HashMap<TopicId, GossipReceiver> = gm.take_receivers();
         for (topic_id, receiver) in new_receivers {
             let festival_id = gm.festival_for_topic(&topic_id);
-            let cm = connection_manager.clone();
-            let so = sync_orchestrator.clone();
-            handles.push(tokio::spawn(pump_single_receiver(receiver, festival_id, cm, so)));
+            handles.push(tokio::spawn(pump_single_receiver(
+                receiver,
+                festival_id,
+                connection_manager.clone(),
+                sync_orchestrator.clone(),
+                endpoint.clone(),
+                doc_manager.clone(),
+            )));
         }
     }
 }
 
 /// Pump a single gossip receiver, handling events. `festival_id` is the
 /// festival this topic belongs to (when known), used to scope neighbor harvest.
+/// When an `endpoint` is present, a `NeighborUp` also fires a transient
+/// `offbeat/sync/1` sv_exchange to catch up CRDT state from the new neighbor.
 async fn pump_single_receiver(
     mut receiver: GossipReceiver,
     festival_id: Option<String>,
     connection_manager: Arc<ConnectionManager>,
     sync_orchestrator: Arc<SyncOrchestrator>,
+    endpoint: Option<iroh::Endpoint>,
+    doc_manager: Arc<DocManager>,
 ) {
     use iroh_gossip::api::Event;
 
@@ -256,6 +279,19 @@ async fn pump_single_receiver(
                 // mesh can re-bootstrap from this peer offline next session.
                 if let Some(fid) = &festival_id {
                     connection_manager.record_gossip_neighbor(fid, &peer_str);
+                }
+                // Reactive anti-entropy: open a transient offbeat/sync/1 channel
+                // to the new neighbor and reconcile CRDT state. Spawned so it
+                // doesn't block the event loop; failures are non-fatal (gossip
+                // still carries live updates).
+                if let Some(ep) = &endpoint {
+                    let peer = IrohSyncPeer::new(ep.clone(), peer_id, doc_manager.clone());
+                    let so = sync_orchestrator.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = so.sync_with_peer(&peer).await {
+                            tracing::debug!("neighbor sv_exchange failed: {e}");
+                        }
+                    });
                 }
             }
             Event::NeighborDown(peer_id) => {

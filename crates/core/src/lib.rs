@@ -15,6 +15,7 @@ pub mod proto;
 pub mod resource;
 pub mod signing;
 pub mod sync;
+pub mod sync_protocol;
 pub mod topics;
 pub mod transport;
 pub mod types;
@@ -63,6 +64,9 @@ pub struct OffbeatNode {
     pub gossip: Option<Gossip>,
     /// Present when the node was created via `new_with_networking`.
     pub endpoint: Option<iroh::Endpoint>,
+    /// Protocol router multiplexing inbound connections across ALPNs (gossip +
+    /// `offbeat/sync/1`). Held to keep the accept loop alive.
+    pub router: Option<iroh::protocol::Router>,
     /// BLE transport handle, if BLE hardware is available.
     pub ble_transport: Option<Arc<BleTransport>>,
     /// Connection manager for multi-path peer tracking.
@@ -103,6 +107,7 @@ impl OffbeatNode {
             gossip_manager: None,
             gossip: None,
             endpoint: None,
+            router: None,
             ble_transport: None,
             connection_manager: None,
             ws_relay: Arc::new(parking_lot::RwLock::new(None)),
@@ -136,6 +141,7 @@ impl OffbeatNode {
             gossip_manager: None,
             gossip: None,
             endpoint: None,
+            router: None,
             ble_transport: None,
             connection_manager: None,
             ws_relay: Arc::new(parking_lot::RwLock::new(None)),
@@ -182,7 +188,7 @@ impl OffbeatNode {
 
         let mut builder = iroh::Endpoint::builder(presets::N0)
             .secret_key(secret_key)
-            .alpns(vec![GOSSIP_ALPN.to_vec()]);
+            .alpns(vec![GOSSIP_ALPN.to_vec(), sync_protocol::SYNC_ALPN.to_vec()]);
 
         if let Some(ref ble) = ble_transport {
             builder = builder
@@ -203,6 +209,18 @@ impl OffbeatNode {
         // Spawn the gossip actor; it takes ownership of a clone of the endpoint.
         let gossip = Gossip::builder().spawn(endpoint.clone());
 
+        // Route inbound connections by ALPN: gossip's overlay traffic to the
+        // gossip actor, and offbeat/sync/1 catch-up to our SyncProtocol. This
+        // is also what gives gossip an accept loop at all — without a router,
+        // inbound gossip dials were never handled.
+        let router = iroh::protocol::Router::builder(endpoint.clone())
+            .accept(GOSSIP_ALPN, gossip.clone())
+            .accept(
+                sync_protocol::SYNC_ALPN,
+                sync_protocol::SyncProtocol::new(doc_manager.clone()),
+            )
+            .spawn();
+
         let gossip_manager = Arc::new(Mutex::new(GossipManager::new(gossip.clone())));
 
         // Wire gossip manager into sync orchestrator for neighbor counts
@@ -221,6 +239,7 @@ impl OffbeatNode {
             gossip_manager: Some(gossip_manager),
             gossip: Some(gossip),
             endpoint: Some(endpoint),
+            router: Some(router),
             ble_transport,
             connection_manager: Some(connection_manager),
             ws_relay: Arc::new(parking_lot::RwLock::new(None)),
