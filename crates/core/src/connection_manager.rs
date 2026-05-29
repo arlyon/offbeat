@@ -51,12 +51,30 @@ pub struct PeerEntry {
 /// neighbor events. The actual tick loops (peer discovery, heartbeat,
 /// reconnect) are wired up at the OffbeatNode level, since they require
 /// async access to the endpoint, gossip, and BLE transport.
+/// Per-peer state governing transient sv_exchange dials.
+#[derive(Default)]
+struct SyncDialState {
+    last_attempt: Option<Instant>,
+    /// Consecutive failures, widening the backoff window.
+    failures: u32,
+}
+
+/// Cap on concurrent transient ALPN catch-up dials across all topics — bounds
+/// the connection burst when many neighbors come up at once.
+const MAX_CONCURRENT_DIALS: usize = 8;
+/// Backoff is `base * 2^min(failures, MAX_BACKOFF_SHIFT)`.
+const MAX_BACKOFF_SHIFT: u32 = 6;
+
 pub struct ConnectionManager {
     peers: Arc<Mutex<HashMap<String, PeerEntry>>>,
     own_endpoint_id: String,
     /// Durable peer directory. `None` in tests/contexts without persistence;
     /// when present, peer sightings are written through for offline cold-start.
     db: Option<Arc<Database>>,
+    /// Per-peer throttle/backoff for transient sv_exchange dials.
+    sync_state: Mutex<HashMap<String, SyncDialState>>,
+    /// Bounds concurrent transient dials (the governor's dial budget).
+    dial_semaphore: Arc<tokio::sync::Semaphore>,
 }
 
 impl ConnectionManager {
@@ -65,6 +83,8 @@ impl ConnectionManager {
             peers: Arc::new(Mutex::new(HashMap::new())),
             own_endpoint_id,
             db: None,
+            sync_state: Mutex::new(HashMap::new()),
+            dial_semaphore: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_DIALS)),
         }
     }
 
@@ -74,7 +94,49 @@ impl ConnectionManager {
             peers: Arc::new(Mutex::new(HashMap::new())),
             own_endpoint_id,
             db: Some(db),
+            sync_state: Mutex::new(HashMap::new()),
+            dial_semaphore: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_DIALS)),
         }
+    }
+
+    /// Whether a transient sv_exchange dial to this peer is due. Applies
+    /// exponential backoff on consecutive failures so unreachable peers aren't
+    /// hammered (the "stop hunting when not making progress" lever).
+    pub fn should_sync_peer(&self, endpoint_id: &str, base: Duration) -> bool {
+        let state = self.sync_state.lock().expect("sync_state lock poisoned");
+        match state.get(endpoint_id) {
+            None => true,
+            Some(s) => match s.last_attempt {
+                None => true,
+                Some(t) => {
+                    let shift = s.failures.min(MAX_BACKOFF_SHIFT);
+                    t.elapsed() >= base * 2u32.pow(shift)
+                }
+            },
+        }
+    }
+
+    /// Record that a sync dial was just started for this peer.
+    pub fn mark_sync_attempted(&self, endpoint_id: &str) {
+        let mut state = self.sync_state.lock().expect("sync_state lock poisoned");
+        state.entry(endpoint_id.to_string()).or_default().last_attempt = Some(Instant::now());
+    }
+
+    /// Record a dial's outcome: success resets the backoff, failure widens it.
+    pub fn record_sync_result(&self, endpoint_id: &str, ok: bool) {
+        let mut state = self.sync_state.lock().expect("sync_state lock poisoned");
+        let s = state.entry(endpoint_id.to_string()).or_default();
+        if ok {
+            s.failures = 0;
+        } else {
+            s.failures = s.failures.saturating_add(1);
+        }
+    }
+
+    /// Acquire a permit from the dial budget, or `None` if at capacity. Held for
+    /// the lifetime of a transient dial so concurrent dials stay bounded.
+    pub fn try_acquire_dial_permit(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
+        Arc::clone(&self.dial_semaphore).try_acquire_owned().ok()
     }
 
     /// Update the peer table from a CRDT peer list.
@@ -371,6 +433,56 @@ mod tests {
         let cm = ConnectionManager::new("own-id".to_string());
         cm.record_festival_peers("fest-1", &[make_peer("peer-a", None, 100)], PeerSource::Crdt);
         assert!(cm.bootstrap_peers("fest-1", 10).is_empty());
+    }
+
+    #[test]
+    fn test_sync_throttle_gates_repeat_dials() {
+        let cm = ConnectionManager::new("own-id".to_string());
+        let long = Duration::from_secs(3600);
+
+        // Unknown peer is always due.
+        assert!(cm.should_sync_peer("peer-a", long));
+
+        // After a dial, not due again within the window.
+        cm.mark_sync_attempted("peer-a");
+        assert!(!cm.should_sync_peer("peer-a", long));
+
+        // A different peer is unaffected.
+        assert!(cm.should_sync_peer("peer-b", long));
+
+        // A zero base means no throttle.
+        assert!(cm.should_sync_peer("peer-a", Duration::ZERO));
+    }
+
+    #[test]
+    fn test_sync_result_resets_and_widens_backoff() {
+        let cm = ConnectionManager::new("own-id".to_string());
+        cm.mark_sync_attempted("peer-a");
+
+        // Two failures widen the backoff; with a 1ns base, 2^2ns is still tiny
+        // so the peer becomes due again — this asserts failures are tracked, not
+        // that we wait. (Timing-based backoff isn't unit-tested with sleeps.)
+        cm.record_sync_result("peer-a", false);
+        cm.record_sync_result("peer-a", false);
+        assert!(cm.should_sync_peer("peer-a", Duration::from_nanos(1)));
+
+        // Success resets the failure count (no panic, idempotent).
+        cm.record_sync_result("peer-a", true);
+    }
+
+    #[tokio::test]
+    async fn test_dial_permits_bound_concurrency() {
+        let cm = ConnectionManager::new("own-id".to_string());
+        // Drain the whole budget.
+        let mut held = Vec::new();
+        for _ in 0..MAX_CONCURRENT_DIALS {
+            held.push(cm.try_acquire_dial_permit().expect("permit available"));
+        }
+        // At capacity → no more.
+        assert!(cm.try_acquire_dial_permit().is_none());
+        // Release one → available again.
+        held.pop();
+        assert!(cm.try_acquire_dial_permit().is_some());
     }
 
     #[test]

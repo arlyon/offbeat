@@ -33,6 +33,10 @@ const RECONNECT_TICK_INTERVAL: Duration = Duration::from_secs(10);
 /// Minimum time between reconnect attempts for the same peer.
 const RECONNECT_MIN_INTERVAL: Duration = Duration::from_secs(10);
 
+/// Base interval between transient sv_exchange dials to the same peer. Widened
+/// by exponential backoff on repeated failures (see `ConnectionManager`).
+const SYNC_DIAL_MIN_INTERVAL: Duration = Duration::from_secs(15);
+
 /// Spawn background tasks for BLE peer auto-connection.
 ///
 /// Returns join handles for the spawned tasks so they can be aborted on shutdown.
@@ -281,17 +285,32 @@ async fn pump_single_receiver(
                     connection_manager.record_gossip_neighbor(fid, &peer_str);
                 }
                 // Reactive anti-entropy: open a transient offbeat/sync/1 channel
-                // to the new neighbor and reconcile CRDT state. Spawned so it
-                // doesn't block the event loop; failures are non-fatal (gossip
-                // still carries live updates).
-                if let Some(ep) = &endpoint {
-                    let peer = IrohSyncPeer::new(ep.clone(), peer_id, doc_manager.clone());
-                    let so = sync_orchestrator.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = so.sync_with_peer(&peer).await {
-                            tracing::debug!("neighbor sv_exchange failed: {e}");
-                        }
-                    });
+                // to the new neighbor and reconcile CRDT state. Governed by the
+                // per-peer throttle/backoff and the concurrent-dial budget so a
+                // burst of NeighborUps (or an unreachable peer) can't spin.
+                // Spawned so it doesn't block the event loop; failures non-fatal.
+                if let Some(ep) = &endpoint
+                    && connection_manager.should_sync_peer(&peer_str, SYNC_DIAL_MIN_INTERVAL)
+                {
+                    if let Some(permit) = connection_manager.try_acquire_dial_permit() {
+                        connection_manager.mark_sync_attempted(&peer_str);
+                        let peer = IrohSyncPeer::new(ep.clone(), peer_id, doc_manager.clone());
+                        let so = sync_orchestrator.clone();
+                        let cm = connection_manager.clone();
+                        tokio::spawn(async move {
+                            let _permit = permit; // held for the dial's lifetime
+                            let ok = match so.sync_with_peer(&peer).await {
+                                Ok(_) => true,
+                                Err(e) => {
+                                    tracing::debug!("neighbor sv_exchange failed: {e}");
+                                    false
+                                }
+                            };
+                            cm.record_sync_result(&peer_str, ok);
+                        });
+                    } else {
+                        tracing::trace!(peer = %peer_id.fmt_short(), "dial budget full, skipping sv_exchange");
+                    }
                 }
             }
             Event::NeighborDown(peer_id) => {
