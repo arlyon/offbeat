@@ -207,7 +207,17 @@ impl OffbeatNode {
         ));
 
         // Spawn the gossip actor; it takes ownership of a clone of the endpoint.
-        let gossip = Gossip::builder().spawn(endpoint.clone());
+        // Smaller active view than the default 5: offbeat runs on mobile over
+        // BLE/mesh where every active connection is a real battery/bandwidth
+        // cost. iroh-gossip's membership config is global (not per-transport),
+        // so this is one conservative value rather than a BLE-only shrink — a
+        // starting point to tune against on-device measurements.
+        let gossip = Gossip::builder()
+            .membership_config(iroh_gossip::proto::HyparviewConfig {
+                active_view_capacity: 4,
+                ..Default::default()
+            })
+            .spawn(endpoint.clone());
 
         // Route inbound connections by ALPN: gossip's overlay traffic to the
         // gossip actor, and offbeat/sync/1 catch-up to our SyncProtocol. This
@@ -221,6 +231,10 @@ impl OffbeatNode {
             )
             .spawn();
 
+        // Warm-mesh policy: the gossip overlay runs continuously alongside the
+        // WS relay — we never tear it down when the relay (DO) is reachable. The
+        // DO still serves catch-up + store-and-forward, but keeping the overlay
+        // warm means peer-to-peer failover is instant if the relay drops.
         let gossip_manager = Arc::new(Mutex::new(GossipManager::new(gossip.clone())));
 
         // Wire gossip manager into sync orchestrator for neighbor counts

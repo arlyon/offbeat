@@ -365,8 +365,9 @@ impl AppNode {
                 .unwrap_or_default();
             let mut gm_locked = gm.lock().await;
             for (_topic_str, topic_id) in &chat_topics {
+                // Public festival chat topics — lower dial priority than groups.
                 gm_locked
-                    .subscribe(*topic_id, &festival_id, bootstrap.clone())
+                    .subscribe(*topic_id, &festival_id, false, bootstrap.clone())
                     .await?;
             }
         }

@@ -62,6 +62,10 @@ struct SyncDialState {
 /// Cap on concurrent transient ALPN catch-up dials across all topics — bounds
 /// the connection burst when many neighbors come up at once.
 const MAX_CONCURRENT_DIALS: usize = 8;
+/// Permits reserved for high-priority (group) topics: low-priority (public)
+/// dials yield once the budget drops to this floor, so a flood of public-topic
+/// neighbors can't starve group catch-up under shared dial pressure.
+const HIGH_PRIORITY_RESERVE: usize = 3;
 /// Backoff is `base * 2^min(failures, MAX_BACKOFF_SHIFT)`.
 const MAX_BACKOFF_SHIFT: u32 = 6;
 
@@ -133,9 +137,19 @@ impl ConnectionManager {
         }
     }
 
-    /// Acquire a permit from the dial budget, or `None` if at capacity. Held for
+    /// Acquire a permit from the dial budget, or `None` if unavailable. Held for
     /// the lifetime of a transient dial so concurrent dials stay bounded.
-    pub fn try_acquire_dial_permit(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
+    ///
+    /// `high_priority` is for group topics: low-priority (public) dials are
+    /// refused once free permits fall to [`HIGH_PRIORITY_RESERVE`], reserving
+    /// headroom so group catch-up wins under contention.
+    pub fn try_acquire_dial_permit(
+        &self,
+        high_priority: bool,
+    ) -> Option<tokio::sync::OwnedSemaphorePermit> {
+        if !high_priority && self.dial_semaphore.available_permits() <= HIGH_PRIORITY_RESERVE {
+            return None;
+        }
         Arc::clone(&self.dial_semaphore).try_acquire_owned().ok()
     }
 
@@ -473,16 +487,30 @@ mod tests {
     #[tokio::test]
     async fn test_dial_permits_bound_concurrency() {
         let cm = ConnectionManager::new("own-id".to_string());
-        // Drain the whole budget.
+        // Drain the whole budget at high priority.
         let mut held = Vec::new();
         for _ in 0..MAX_CONCURRENT_DIALS {
-            held.push(cm.try_acquire_dial_permit().expect("permit available"));
+            held.push(cm.try_acquire_dial_permit(true).expect("permit available"));
         }
-        // At capacity → no more.
-        assert!(cm.try_acquire_dial_permit().is_none());
+        // At capacity → no more, even high priority.
+        assert!(cm.try_acquire_dial_permit(true).is_none());
         // Release one → available again.
         held.pop();
-        assert!(cm.try_acquire_dial_permit().is_some());
+        assert!(cm.try_acquire_dial_permit(true).is_some());
+    }
+
+    #[tokio::test]
+    async fn test_low_priority_yields_reserve_to_group_topics() {
+        let cm = ConnectionManager::new("own-id".to_string());
+        // Consume down to exactly the reserve floor.
+        let mut held = Vec::new();
+        for _ in 0..(MAX_CONCURRENT_DIALS - HIGH_PRIORITY_RESERVE) {
+            held.push(cm.try_acquire_dial_permit(false).expect("low-pri permit"));
+        }
+        // Public (low-priority) dials now refused — reserve is for group topics.
+        assert!(cm.try_acquire_dial_permit(false).is_none());
+        // Group (high-priority) dials may still use the reserved headroom.
+        assert!(cm.try_acquire_dial_permit(true).is_some());
     }
 
     #[test]

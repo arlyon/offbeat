@@ -157,11 +157,19 @@ pub struct GossipManager {
     subscriptions: HashMap<TopicId, iroh_gossip::api::GossipSender>,
     /// Active topic receivers, keyed by TopicId.
     receivers: HashMap<TopicId, GossipReceiver>,
-    /// Maps each subscribed topic to the festival it belongs to, so the event
-    /// pump can harvest `NeighborUp` peers into the festival-scoped directory.
+    /// Maps each subscribed topic to its metadata (festival + group flag), so
+    /// the event pump can scope neighbor harvest and weight dial priority.
     /// Topic IDs are one-way blake3 hashes, so this association can't be
     /// recovered from the topic alone — it's recorded at subscribe time.
-    topic_festival: HashMap<TopicId, String>,
+    topic_meta: HashMap<TopicId, TopicMeta>,
+}
+
+/// Per-topic metadata recorded at subscribe time.
+#[derive(Debug, Clone)]
+struct TopicMeta {
+    festival_id: String,
+    /// True for private group topics (higher catch-up priority than public).
+    is_group: bool,
 }
 
 impl GossipManager {
@@ -170,30 +178,45 @@ impl GossipManager {
             gossip,
             subscriptions: HashMap::new(),
             receivers: HashMap::new(),
-            topic_festival: HashMap::new(),
+            topic_meta: HashMap::new(),
         }
     }
 
     /// Join a gossip topic for `festival_id`, bootstrapping the HyParView
-    /// overlay from `bootstrap`. The receiver is stored internally and can be
-    /// claimed by the event pump via [`take_receivers`].
+    /// overlay from `bootstrap`. `is_group` marks private group topics, which
+    /// get higher catch-up dial priority than public festival topics. The
+    /// receiver is stored internally and claimed by the event pump via
+    /// [`take_receivers`].
     pub async fn subscribe(
         &mut self,
         topic_id: TopicId,
         festival_id: &str,
+        is_group: bool,
         bootstrap: Vec<EndpointId>,
     ) -> anyhow::Result<()> {
         let topic = self.gossip.subscribe(topic_id, bootstrap).await?;
         let (sender, receiver) = topic.split();
         self.subscriptions.insert(topic_id, sender);
         self.receivers.insert(topic_id, receiver);
-        self.topic_festival.insert(topic_id, festival_id.to_string());
+        self.topic_meta.insert(
+            topic_id,
+            TopicMeta {
+                festival_id: festival_id.to_string(),
+                is_group,
+            },
+        );
         Ok(())
     }
 
     /// The festival a subscribed topic belongs to, if known.
     pub fn festival_for_topic(&self, topic_id: &TopicId) -> Option<String> {
-        self.topic_festival.get(topic_id).cloned()
+        self.topic_meta.get(topic_id).map(|m| m.festival_id.clone())
+    }
+
+    /// Whether a subscribed topic is a private group topic (higher dial
+    /// priority). Defaults to `false` for unknown/public topics.
+    pub fn is_group_topic(&self, topic_id: &TopicId) -> bool {
+        self.topic_meta.get(topic_id).is_some_and(|m| m.is_group)
     }
 
     /// Call `join_peers` on every active subscription's sender.
@@ -225,7 +248,7 @@ impl GossipManager {
     pub fn unsubscribe(&mut self, topic_id: TopicId) {
         self.subscriptions.remove(&topic_id);
         self.receivers.remove(&topic_id);
-        self.topic_festival.remove(&topic_id);
+        self.topic_meta.remove(&topic_id);
     }
 
     /// Get the number of gossip neighbors for a given topic.
