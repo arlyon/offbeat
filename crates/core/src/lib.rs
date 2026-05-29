@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod ble_discovery;
 pub mod ble_sync;
+pub mod cert;
 pub mod chat;
 pub mod connection_manager;
 pub mod crypto;

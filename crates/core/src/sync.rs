@@ -153,6 +153,30 @@ impl SyncOrchestrator {
         }
     }
 
+    /// Verify a festival certificate against the pinned admin root and, only if
+    /// it chains to that root, cache the festival key it certifies. Returns
+    /// `true` if the cert was trusted and cached. This is the offline-verifiable
+    /// path: a cert relayed by a peer is accepted without contacting any server.
+    pub fn trust_festival_cert(
+        &self,
+        cert: &crate::cert::FestivalCert,
+        admin_root_pubkey: &[u8; 32],
+    ) -> bool {
+        match cert.verify(admin_root_pubkey) {
+            Some(festival_pubkey) => {
+                self.set_festival_public_key(&cert.festival_id, festival_pubkey);
+                true
+            }
+            None => {
+                tracing::warn!(
+                    festival_id = %cert.festival_id,
+                    "rejected festival cert: does not chain to pinned admin root"
+                );
+                false
+            }
+        }
+    }
+
     /// Get a festival's public key if cached.
     pub fn get_festival_public_key(&self, festival_id: &str) -> Option<[u8; 32]> {
         self.festival_public_keys.read().ok()?.get(festival_id).copied()
@@ -793,6 +817,28 @@ mod tests {
             local.read_map_value(doc_id, "stage"),
             Some("main".to_string())
         );
+    }
+
+    #[test]
+    fn test_trust_festival_cert_gates_caching_on_pinned_root() {
+        use crate::cert::issue_festival_cert;
+        use crate::signing;
+
+        let orch = create_orchestrator();
+        let admin_root = signing::generate_signing_key();
+        let admin_root_pk = admin_root.verifying_key().to_bytes();
+        let festival_pk = signing::generate_signing_key().verifying_key().to_bytes();
+
+        // A cert from the pinned root is trusted and cached.
+        let cert = issue_festival_cert(&admin_root, "fest1", &festival_pk);
+        assert!(orch.trust_festival_cert(&cert, &admin_root_pk));
+        assert_eq!(orch.get_festival_public_key("fest1"), Some(festival_pk));
+
+        // A cert from an unpinned (attacker) root is rejected and not cached.
+        let attacker = signing::generate_signing_key();
+        let bad = issue_festival_cert(&attacker, "fest2", &festival_pk);
+        assert!(!orch.trust_festival_cert(&bad, &admin_root_pk));
+        assert!(orch.get_festival_public_key("fest2").is_none());
     }
 
     #[tokio::test]
