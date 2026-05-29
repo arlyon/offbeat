@@ -81,15 +81,22 @@ impl ProtocolHandler for SyncProtocol {
 /// gossip's job; this peer only does point-in-time catch-up.
 pub struct IrohSyncPeer {
     endpoint: iroh::Endpoint,
-    peer: iroh::EndpointId,
+    peer: iroh::EndpointAddr,
     doc_manager: Arc<DocManager>,
 }
 
 impl IrohSyncPeer {
-    pub fn new(endpoint: iroh::Endpoint, peer: iroh::EndpointId, doc_manager: Arc<DocManager>) -> Self {
+    /// `peer` accepts a bare `EndpointId` (address resolved via discovery — what
+    /// gossip provides in production) or a full `EndpointAddr` with direct
+    /// addresses (used by loopback tests and BLE-seeded paths).
+    pub fn new(
+        endpoint: iroh::Endpoint,
+        peer: impl Into<iroh::EndpointAddr>,
+        doc_manager: Arc<DocManager>,
+    ) -> Self {
         Self {
             endpoint,
-            peer,
+            peer: peer.into(),
             doc_manager,
         }
     }
@@ -101,7 +108,7 @@ impl crate::sync::PeerConnection for IrohSyncPeer {
     }
 
     async fn sv_exchange(&self, doc_id: &str, sv: &[u8]) -> anyhow::Result<()> {
-        let conn = self.endpoint.connect(self.peer, SYNC_ALPN).await?;
+        let conn = self.endpoint.connect(self.peer.clone(), SYNC_ALPN).await?;
         let (mut send, mut recv) = conn.open_bi().await?;
 
         let req = proto::SvExchangeRequest {
@@ -132,5 +139,79 @@ impl crate::sync::PeerConnection for IrohSyncPeer {
 
     async fn broadcast(&self, _topic: &str, _data: &[u8]) -> anyhow::Result<()> {
         anyhow::bail!("broadcast is not supported on a transient sync peer; use gossip")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::Database;
+    use crate::sync::PeerConnection;
+    use yrs::{Doc, Map, ReadTxn, StateVector, Transact};
+
+    /// A relay-disabled, discovery-free endpoint bound on loopback. Peers reach
+    /// each other only via explicit `EndpointAddr`s — no external infra.
+    async fn local_endpoint(alpns: Vec<Vec<u8>>) -> iroh::Endpoint {
+        iroh::Endpoint::builder(iroh::endpoint::presets::N0)
+            .relay_mode(iroh::RelayMode::Disabled)
+            .alpns(alpns)
+            .bind()
+            .await
+            .expect("bind loopback endpoint")
+    }
+
+    fn populated_doc(doc_id: &str) -> Arc<DocManager> {
+        let db = Arc::new(Database::new_in_memory().unwrap());
+        let dm = Arc::new(DocManager::new(db));
+        dm.get_or_create(doc_id);
+        let update = {
+            let d = Doc::new();
+            let m = d.get_or_insert_map("root");
+            {
+                let mut txn = d.transact_mut();
+                m.insert(&mut txn, "stage", "main");
+            }
+            d.transact()
+                .encode_state_as_update_v1(&StateVector::default())
+        };
+        dm.apply_update(doc_id, &update).unwrap();
+        dm
+    }
+
+    /// End-to-end over the real wire: two iroh endpoints on loopback, the server
+    /// running the offbeat/sync/1 Router protocol, the client driving a real
+    /// IrohSyncPeer sv_exchange and converging to the server's CRDT state.
+    #[tokio::test]
+    async fn two_node_sv_exchange_over_alpn_converges() {
+        let doc_id = "festival/fest1/state";
+
+        // Server: populated doc behind the sync protocol.
+        let server_doc = populated_doc(doc_id);
+        let server_ep = local_endpoint(vec![SYNC_ALPN.to_vec()]).await;
+        let _router = iroh::protocol::Router::builder(server_ep.clone())
+            .accept(SYNC_ALPN, SyncProtocol::new(server_doc.clone()))
+            .spawn();
+        let server_addr = server_ep.addr();
+
+        // Client: empty doc, dials the server's full address (no discovery).
+        let client_db = Arc::new(Database::new_in_memory().unwrap());
+        let client_doc = Arc::new(DocManager::new(client_db));
+        let client_ep = local_endpoint(vec![]).await;
+
+        client_doc.get_or_create(doc_id);
+        assert_eq!(client_doc.read_map_value(doc_id, "stage"), None);
+
+        let sv = client_doc.get_state_vector(doc_id).unwrap();
+        let peer = IrohSyncPeer::new(client_ep.clone(), server_addr, client_doc.clone());
+        peer.sv_exchange(doc_id, &sv).await.unwrap();
+
+        // Converged over the actual ALPN round-trip.
+        assert_eq!(
+            client_doc.read_map_value(doc_id, "stage"),
+            Some("main".to_string())
+        );
+
+        client_ep.close().await;
+        server_ep.close().await;
     }
 }
