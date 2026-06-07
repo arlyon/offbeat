@@ -146,6 +146,47 @@ impl SyncOrchestrator {
         self.gossip_manager = Some(gm);
     }
 
+    /// Spawn a background task that ensures the GossipManager is subscribed
+    /// to all topics present in the ResourceRegistry.
+    pub fn spawn_subscription_manager(
+        self: Arc<Self>,
+    ) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            let mut known_topics = std::collections::HashSet::new();
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+                let resources = match self.registry.read() {
+                    Ok(r) => r.by_priority().iter().map(|res| (res.topic(), res.topic_string())).collect::<Vec<_>>(),
+                    Err(_) => continue,
+                };
+
+                let gm_arc = match &self.gossip_manager {
+                    Some(gm) => gm.clone(),
+                    None => continue,
+                };
+
+                let mut gm = gm_arc.lock().await;
+                for (topic_id, topic_str) in resources {
+                    if !known_topics.contains(&topic_id) {
+                        // For auto-subscriptions, we don't have a specific festival_id
+                        // but we can extract it from the topic string if needed.
+                        // For now, we use a placeholder or extract from "group/ID/..."
+                        let festival_id = topic_str.split('/').nth(1).unwrap_or("unknown");
+                        let is_group = topic_str.starts_with("group/");
+
+                        tracing::info!(topic = %topic_str, "auto-subscribing to gossip topic");
+                        if let Err(e) = gm.subscribe(topic_id, festival_id, is_group, vec![]).await {
+                            tracing::warn!(topic = %topic_str, error = %e, "auto-subscription failed");
+                        } else {
+                            known_topics.insert(topic_id);
+                        }
+                    }
+                }
+            }
+        })
+    }
+
     /// Cache a festival's Ed25519 public key.
     pub fn set_festival_public_key(&self, festival_id: &str, public_key: [u8; 32]) {
         if let Ok(mut map) = self.festival_public_keys.write() {

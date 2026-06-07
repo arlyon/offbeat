@@ -283,18 +283,26 @@ impl OffbeatNode {
     }
 
     pub fn spawn_ble_sync(&self) -> Vec<tokio::task::JoinHandle<()>> {
+        let mut handles = Vec::new();
+
+        // Task 1: Auto-subscription manager (wires Registry -> GossipManager)
+        handles.push(self.sync_orchestrator.clone().spawn_subscription_manager());
+
+        // Task 2: BLE Transport background tasks
         let Some(ble) = self.ble_transport.clone() else {
-            return vec![];
+            return handles;
         };
         let Some(gm) = self.gossip_manager.clone() else {
-            return vec![];
+            return handles;
         };
         let Some(cm) = self.connection_manager.clone() else {
-            return vec![];
+            return handles;
         };
         let so = self.sync_orchestrator.clone();
         let endpoint = self.endpoint.clone();
         let dm = self.doc_manager.clone();
-        ble_sync::spawn_ble_connection_tasks(ble, gm, cm, so, endpoint, dm)
+        handles.extend(ble_sync::spawn_ble_connection_tasks(ble, gm, cm, so, endpoint, dm));
+        
+        handles
     }
 }

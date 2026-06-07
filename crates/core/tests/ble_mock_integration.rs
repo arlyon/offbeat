@@ -93,22 +93,10 @@ async fn test_ble_discovery_and_sync() {
     let resource = Resource::group_state(group_key);
     node_a.resource_registry.write().unwrap().register(resource.clone());
 
-    // CRITICAL: Manually subscribe GossipManager to the topic
-    {
-        let mut gm = node_a.gossip_manager.as_ref().unwrap().lock().await;
-        gm.subscribe(resource.topic(), festival_id, true, vec![]).await.unwrap();
-    }
-
     // Bob joins the group
     node_b.group_manager.join_group(&invite_url, "bob-user", "Bob").await.unwrap();
     // Bob also interests in the document
     node_b.resource_registry.write().unwrap().register(resource.clone());
-    
-    // CRITICAL: Manually subscribe Bob too
-    {
-        let mut gm = node_b.gossip_manager.as_ref().unwrap().lock().await;
-        gm.subscribe(resource.topic(), festival_id, true, vec![]).await.unwrap();
-    }
 
     // Simulate discovery
     fabric.advertise(device_b.clone(), device_a.clone(), prefix_from_endpoint(&ep_b));
