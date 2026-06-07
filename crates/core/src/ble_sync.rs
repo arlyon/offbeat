@@ -95,22 +95,27 @@ async fn ble_discovery_tick(
         let mut nudge_targets: Vec<EndpointId> = Vec::new();
 
         for info in &snapshot {
-            // New logic: if verified_endpoint is missing, we must connect and read it.
+            // Unverified peer sighting: trigger proactive connection to read identity via GATT.
             if info.verified_endpoint.is_none() {
                 let ble = ble_transport.clone();
                 let device_id = info.device_id.clone();
                 tokio::spawn(async move {
-                    tracing::info!(device = %device_id, "attempting to verify unknown peer via GATT");
+                    tracing::debug!(device = %device_id, "triggering proactive connection for verification");
+                    ble.connect(device_id.clone());
+
+                    // Wait for connection to initiate before attempting GATT read.
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+
                     match ble.read_endpoint_id(&device_id).await {
                         Ok(Some(eid)) => {
-                            tracing::info!(device = %device_id, endpoint = %eid.fmt_short(), "verified unknown peer via GATT");
+                            tracing::info!(device = %device_id, endpoint = %eid.fmt_short(), "verified peer via GATT");
                             ble.verify_endpoint(device_id, eid);
                         }
                         Ok(None) => {
-                            tracing::info!(device = %device_id, "peer does not publish EndpointId characteristic");
+                            tracing::debug!(device = %device_id, "peer does not publish EndpointId characteristic");
                         }
                         Err(e) => {
-                            tracing::info!(device = %device_id, error = %e, "failed to read EndpointId from peer");
+                            tracing::debug!(device = %device_id, error = %e, "failed to read EndpointId (no connection yet)");
                         }
                     }
                 });
