@@ -156,6 +156,27 @@ impl OffbeatNode {
     /// standard `GOSSIP_ALPN`), and wires up a `GossipManager`.
     pub async fn new_with_networking(db_path: &Path) -> anyhow::Result<Self> {
         let db = Arc::new(Database::new(db_path)?);
+        // Load a persisted iroh secret key so the EndpointId is stable across
+        // restarts.
+        let secret_key = match db.load_iroh_secret_key()? {
+            Some(key) => key,
+            None => {
+                let key = iroh::SecretKey::generate();
+                db.save_iroh_secret_key(&key)?;
+                key
+            }
+        };
+        let own_endpoint_id = secret_key.public();
+        let ble_transport = transport::ble::try_build_ble(own_endpoint_id).await;
+
+        Self::new_with_networking_and_transport(db, ble_transport).await
+    }
+
+    /// Create a node with a full iroh networking stack and a custom BLE transport.
+    pub async fn new_with_networking_and_transport(
+        db: Arc<Database>,
+        ble_transport: Option<Arc<BleTransport>>,
+    ) -> anyhow::Result<Self> {
         let doc_manager = Arc::new(DocManager::new(db.clone()));
         let group_manager = Arc::new(GroupManager::new(db.clone(), doc_manager.clone()));
         let chat_manager = Arc::new(ChatManager::new(db.clone(), doc_manager.clone()));
@@ -185,7 +206,6 @@ impl OffbeatNode {
         };
         // Capture the public key before secret_key is moved into the builder.
         let own_endpoint_id = secret_key.public();
-        let ble_transport = transport::ble::try_build_ble(own_endpoint_id).await;
 
         let mut builder = iroh::Endpoint::builder(presets::N0)
             .secret_key(secret_key)
@@ -260,5 +280,21 @@ impl OffbeatNode {
             ws_relay: Arc::new(parking_lot::RwLock::new(None)),
             festival_public_keys: HashMap::new(),
         })
+    }
+
+    pub fn spawn_ble_sync(&self) -> Vec<tokio::task::JoinHandle<()>> {
+        let Some(ble) = self.ble_transport.clone() else {
+            return vec![];
+        };
+        let Some(gm) = self.gossip_manager.clone() else {
+            return vec![];
+        };
+        let Some(cm) = self.connection_manager.clone() else {
+            return vec![];
+        };
+        let so = self.sync_orchestrator.clone();
+        let endpoint = self.endpoint.clone();
+        let dm = self.doc_manager.clone();
+        ble_sync::spawn_ble_connection_tasks(ble, gm, cm, so, endpoint, dm)
     }
 }

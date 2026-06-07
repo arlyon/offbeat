@@ -89,9 +89,34 @@ async fn ble_discovery_tick(
         tokio::time::sleep(DISCOVERY_TICK_INTERVAL).await;
 
         let snapshot = ble_transport.snapshot_peers();
+        if !snapshot.is_empty() {
+            tracing::info!(count = snapshot.len(), "ble_discovery_tick: snapshot not empty");
+        }
         let mut nudge_targets: Vec<EndpointId> = Vec::new();
 
         for info in &snapshot {
+            // New logic: if verified_endpoint is missing, we must connect and read it.
+            if info.verified_endpoint.is_none() {
+                let ble = ble_transport.clone();
+                let device_id = info.device_id.clone();
+                tokio::spawn(async move {
+                    tracing::info!(device = %device_id, "attempting to verify unknown peer via GATT");
+                    match ble.read_endpoint_id(&device_id).await {
+                        Ok(Some(eid)) => {
+                            tracing::info!(device = %device_id, endpoint = %eid.fmt_short(), "verified unknown peer via GATT");
+                            ble.verify_endpoint(device_id, eid);
+                        }
+                        Ok(None) => {
+                            tracing::info!(device = %device_id, "peer does not publish EndpointId characteristic");
+                        }
+                        Err(e) => {
+                            tracing::info!(device = %device_id, error = %e, "failed to read EndpointId from peer");
+                        }
+                    }
+                });
+                continue;
+            }
+
             let Some(endpoint_id) = info.verified_endpoint else {
                 continue;
             };
@@ -119,6 +144,7 @@ async fn ble_discovery_tick(
             if (is_fresh_sighting || is_ble_restored)
                 && connection_manager.should_nudge_join(&endpoint_str, DISCOVERY_NUDGE_MIN_INTERVAL)
             {
+                tracing::info!(peer = %endpoint_str, "nudging gossip join for peer");
                 connection_manager.mark_join_attempted(&endpoint_str);
                 nudge_targets.push(endpoint_id);
             }
