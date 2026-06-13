@@ -251,7 +251,7 @@ async fn handle_command(node: &Arc<OffbeatNode>, festival_id: &str, line: &str) 
                 .load_group_key(&group_id)?
                 .ok_or_else(|| anyhow::anyhow!("group not found: {group_id}"))?;
             let bytes = encode_gossip_message(&GossipMessage::GroupUpdate {
-                doc_id: format!("group/{group_id}"),
+                doc_id: format!("group/{group_id}/state"),
                 encrypted,
                 group_key,
             });
@@ -259,7 +259,7 @@ async fn handle_command(node: &Arc<OffbeatNode>, festival_id: &str, line: &str) 
                 let topic = offbeat_core::topics::group_topic(&group_key, "state");
                 gm.lock().await.broadcast(topic, bytes).await?;
             }
-            node.notifier.notify_doc(&format!("group/{group_id}"));
+            node.notifier.notify_doc(&format!("group/{group_id}/state"));
             tracing::info!(%group_id, %stage, "checked in + broadcast");
         }
         "state" => {
@@ -341,7 +341,7 @@ async fn handle_command(node: &Arc<OffbeatNode>, festival_id: &str, line: &str) 
 /// Encode the full encrypted state of a group doc and broadcast it as a
 /// `GroupUpdate` on the group's state topic (best-effort).
 async fn broadcast_group_state(node: &Arc<OffbeatNode>, group_id: &str, group_key: &[u8; 32]) {
-    let doc_id = format!("group/{group_id}");
+    let doc_id = format!("group/{group_id}/state");
     node.doc_manager.get_or_create(&doc_id);
     let diff = match node.doc_manager.encode_diff(&doc_id, &[]) {
         Ok(d) => d,
