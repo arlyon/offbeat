@@ -264,7 +264,7 @@ async fn gossip_event_pump(
                 receiver,
                 festival_id,
                 is_group,
-                topic_id.to_string(),
+                topic_id,
                 connection_manager.clone(),
                 sync_orchestrator.clone(),
                 endpoint.clone(),
@@ -286,7 +286,7 @@ async fn gossip_event_pump(
                 receiver,
                 festival_id,
                 is_group,
-                topic_id.to_string(),
+                topic_id,
                 connection_manager.clone(),
                 sync_orchestrator.clone(),
                 endpoint.clone(),
@@ -304,12 +304,13 @@ async fn pump_single_receiver(
     mut receiver: GossipReceiver,
     festival_id: Option<String>,
     is_group_topic: bool,
-    topic_label: String,
+    topic_id: TopicId,
     connection_manager: Arc<ConnectionManager>,
     sync_orchestrator: Arc<SyncOrchestrator>,
     endpoint: Option<iroh::Endpoint>,
     doc_manager: Arc<DocManager>,
 ) {
+    let topic_label = topic_id.to_string();
     use iroh_gossip::api::Event;
 
     while let Some(event) = receiver.next().await {
@@ -326,6 +327,8 @@ async fn pump_single_receiver(
                 tracing::info!(peer = %peer_id.fmt_short(), "gossip NeighborUp");
                 let peer_str = peer_id.to_string();
                 connection_manager.set_gossip_status(&peer_str, GossipStatus::Active);
+                // Track per-topic membership and flush the peer count to the UI.
+                sync_orchestrator.set_topic_neighbor(topic_id, &peer_str, true);
                 // Neighbor harvest: persist into the durable directory so the
                 // mesh can re-bootstrap from this peer offline next session.
                 if let Some(fid) = &festival_id {
@@ -366,10 +369,9 @@ async fn pump_single_receiver(
             }
             Event::NeighborDown(peer_id) => {
                 tracing::info!(peer = %peer_id.fmt_short(), "gossip NeighborDown");
-                connection_manager.set_gossip_status(
-                    &peer_id.to_string(),
-                    GossipStatus::Stale,
-                );
+                let peer_str = peer_id.to_string();
+                connection_manager.set_gossip_status(&peer_str, GossipStatus::Stale);
+                sync_orchestrator.set_topic_neighbor(topic_id, &peer_str, false);
             }
             Event::Received(msg) => {
                 // Dispatch through sync orchestrator

@@ -125,6 +125,11 @@ pub struct SyncOrchestrator {
     gossip_manager: Option<Arc<tokio::sync::Mutex<GossipManager>>>,
     /// Connection manager for finding verified BLE peers.
     connection_manager: Option<Arc<ConnectionManager>>,
+    /// Live per-topic gossip neighbor sets, maintained from NeighborUp/Down so
+    /// the per-subscription peer count can be reported to the UI without taking
+    /// the (frequently-contended) gossip manager lock — and refreshed the moment
+    /// membership changes rather than only during a sync.
+    topic_neighbors: Arc<RwLock<HashMap<iroh_gossip::proto::TopicId, std::collections::HashSet<String>>>>,
 }
 
 impl SyncOrchestrator {
@@ -146,7 +151,28 @@ impl SyncOrchestrator {
             key_cache: Arc::new(GroupKeyCache::new()),
             gossip_manager: None,
             connection_manager: None,
+            topic_neighbors: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    /// Record a gossip membership change for a topic and immediately flush an
+    /// updated sync status to watchers (the UI). Called from the gossip event
+    /// pump on `NeighborUp` (`up = true`) / `NeighborDown` (`up = false`).
+    pub fn set_topic_neighbor(&self, topic: iroh_gossip::proto::TopicId, peer: &str, up: bool) {
+        {
+            let mut map = match self.topic_neighbors.write() {
+                Ok(m) => m,
+                Err(_) => return,
+            };
+            let set = map.entry(topic).or_default();
+            if up {
+                set.insert(peer.to_string());
+            } else {
+                set.remove(peer);
+            }
+        }
+        // Flush the refreshed per-topic peer counts to the UI.
+        self.notify_sync_status(false);
     }
 
     /// Set the gossip manager for querying per-topic neighbor counts.
@@ -265,15 +291,19 @@ impl SyncOrchestrator {
         let Ok(reg) = self.registry.read() else {
             return vec![];
         };
-        let gm = self.gossip_manager.as_ref().and_then(|gm| gm.try_lock().ok());
+        // Per-topic neighbor counts come from our own NeighborUp/Down-maintained
+        // map, NOT a try_lock on the gossip manager (which is usually held during
+        // sync, silently yielding 0 for every row).
+        let neighbors = self.topic_neighbors.read().ok();
         reg.by_priority()
             .iter()
             .map(|r| {
                 let id = r.id();
                 let (received, sent) = self.notifier.get_counters(&id);
-                let peer_count = gm
+                let peer_count = neighbors
                     .as_ref()
-                    .map(|gm| gm.neighbor_count(&r.topic()) as u32)
+                    .and_then(|n| n.get(&r.topic()))
+                    .map(|s| s.len() as u32)
                     .unwrap_or(0);
                 crate::notifier::ResourceSyncStatus {
                     id,
