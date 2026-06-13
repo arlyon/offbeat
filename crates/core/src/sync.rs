@@ -89,13 +89,17 @@ pub trait PeerConnection: Send + Sync {
     /// Perform state vector exchange for a CRDT doc.
     fn sv_exchange(&self, doc_id: &str, sv: &[u8]) -> impl Future<Output = anyhow::Result<()>> + Send;
 
-    /// Request chat messages since our state vector.
+    /// Request chat messages since our state vector. Returns the gossip
+    /// envelopes the peer served (newest history we were missing) so the caller
+    /// — which holds the group-key cache — can decode and persist them. A peer
+    /// whose responses arrive asynchronously (e.g. the WS relay) returns an
+    /// empty vec and applies them on its own receive loop.
     fn chat_catchup(
         &self,
         topic: &str,
         sv: &ChatStateVector,
         limit: u32,
-    ) -> impl Future<Output = anyhow::Result<()>> + Send;
+    ) -> impl Future<Output = anyhow::Result<Vec<proto::GossipEnvelope>>> + Send;
 
     /// Broadcast data on a topic.
     fn broadcast(&self, topic: &str, data: &[u8]) -> impl Future<Output = anyhow::Result<()>> + Send;
@@ -380,8 +384,22 @@ impl SyncOrchestrator {
             ResourceKind::AppendLog => {
                 let messages = self.db.get_chat_messages(topic, 1000, 0)?;
                 let csv = ChatStateVector::from_messages(&messages);
-                peer.chat_catchup(topic, &csv, 100).await?;
-                Ok((0, 1))
+                let envelopes = peer.chat_catchup(topic, &csv, 200).await?;
+                // Peers that answer synchronously (the iroh ALPN catch-up) hand
+                // back the history we were missing; decode + persist it here,
+                // where the group-key cache lives. INSERT-OR-IGNORE in the DB
+                // makes re-delivery idempotent, so this is safe to repeat.
+                let mut applied = 0u32;
+                for env in &envelopes {
+                    match self.handle_incoming_envelope(topic, env).await {
+                        Ok(()) => applied += 1,
+                        Err(e) => tracing::debug!(topic, "chat_catchup apply error: {e}"),
+                    }
+                }
+                if applied > 0 {
+                    self.notifier.notify_chat(topic);
+                }
+                Ok((0, applied))
             }
         }
     }
@@ -791,8 +809,8 @@ mod tests {
             _topic: &str,
             _sv: &ChatStateVector,
             _limit: u32,
-        ) -> anyhow::Result<()> {
-            Ok(())
+        ) -> anyhow::Result<Vec<proto::GossipEnvelope>> {
+            Ok(vec![])
         }
 
         async fn broadcast(&self, _topic: &str, _data: &[u8]) -> anyhow::Result<()> {
@@ -827,8 +845,8 @@ mod tests {
             _topic: &str,
             _sv: &ChatStateVector,
             _limit: u32,
-        ) -> anyhow::Result<()> {
-            Ok(())
+        ) -> anyhow::Result<Vec<proto::GossipEnvelope>> {
+            Ok(vec![])
         }
 
         async fn broadcast(&self, _topic: &str, _data: &[u8]) -> anyhow::Result<()> {

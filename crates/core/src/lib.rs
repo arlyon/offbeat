@@ -248,7 +248,7 @@ impl OffbeatNode {
             .accept(GOSSIP_ALPN, gossip.clone())
             .accept(
                 sync_protocol::SYNC_ALPN,
-                sync_protocol::SyncProtocol::new(doc_manager.clone()),
+                sync_protocol::SyncProtocol::new(doc_manager.clone(), db.clone()),
             )
             .spawn();
 

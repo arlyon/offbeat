@@ -264,6 +264,7 @@ async fn gossip_event_pump(
                 receiver,
                 festival_id,
                 is_group,
+                topic_id.to_string(),
                 connection_manager.clone(),
                 sync_orchestrator.clone(),
                 endpoint.clone(),
@@ -285,6 +286,7 @@ async fn gossip_event_pump(
                 receiver,
                 festival_id,
                 is_group,
+                topic_id.to_string(),
                 connection_manager.clone(),
                 sync_orchestrator.clone(),
                 endpoint.clone(),
@@ -302,6 +304,7 @@ async fn pump_single_receiver(
     mut receiver: GossipReceiver,
     festival_id: Option<String>,
     is_group_topic: bool,
+    topic_label: String,
     connection_manager: Arc<ConnectionManager>,
     sync_orchestrator: Arc<SyncOrchestrator>,
     endpoint: Option<iroh::Endpoint>,
@@ -329,15 +332,19 @@ async fn pump_single_receiver(
                     connection_manager.record_gossip_neighbor(fid, &peer_str);
                 }
                 // Reactive anti-entropy: open a transient offbeat/sync/1 channel
-                // to the new neighbor and reconcile CRDT state. Governed by the
-                // per-peer throttle/backoff and the concurrent-dial budget so a
-                // burst of NeighborUps (or an unreachable peer) can't spin.
-                // Spawned so it doesn't block the event loop; failures non-fatal.
+                // to the new neighbor and reconcile CRDT + chat state. Throttled
+                // per (peer, topic) — NOT per peer — so a peer we already synced
+                // for the festival still gets a fresh catch-up when its group
+                // topics come up moments later (otherwise a late-joined group's
+                // history would never back-fill). Governed by the concurrent-dial
+                // budget so a burst of NeighborUps can't spin. Spawned so it
+                // doesn't block the event loop; failures non-fatal.
+                let sync_key = format!("{peer_str}|{topic_label}");
                 if let Some(ep) = &endpoint
-                    && connection_manager.should_sync_peer(&peer_str, SYNC_DIAL_MIN_INTERVAL)
+                    && connection_manager.should_sync_peer(&sync_key, SYNC_DIAL_MIN_INTERVAL)
                 {
                     if let Some(permit) = connection_manager.try_acquire_dial_permit(is_group_topic) {
-                        connection_manager.mark_sync_attempted(&peer_str);
+                        connection_manager.mark_sync_attempted(&sync_key);
                         let peer = IrohSyncPeer::new(ep.clone(), peer_id, doc_manager.clone());
                         let so = sync_orchestrator.clone();
                         let cm = connection_manager.clone();
@@ -350,7 +357,7 @@ async fn pump_single_receiver(
                                     false
                                 }
                             };
-                            cm.record_sync_result(&peer_str, ok);
+                            cm.record_sync_result(&sync_key, ok);
                         });
                     } else {
                         tracing::trace!(peer = %peer_id.fmt_short(), "dial budget full, skipping sv_exchange");

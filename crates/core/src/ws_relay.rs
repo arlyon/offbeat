@@ -267,8 +267,11 @@ impl crate::sync::PeerConnection for WsRelaySink {
         topic: &str,
         sv: &crate::sync::ChatStateVector,
         limit: u32,
-    ) -> anyhow::Result<()> {
-        WsRelaySink::chat_catchup(self, topic, sv, limit).await
+    ) -> anyhow::Result<Vec<crate::proto::GossipEnvelope>> {
+        // The relay answers asynchronously with a `ChatDiff` server message that
+        // the receive loop dispatches; nothing to return inline.
+        WsRelaySink::chat_catchup(self, topic, sv, limit).await?;
+        Ok(vec![])
     }
 
     async fn broadcast(&self, topic: &str, data: &[u8]) -> anyhow::Result<()> {
