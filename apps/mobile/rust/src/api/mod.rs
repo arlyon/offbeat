@@ -1263,11 +1263,18 @@ impl AppNode {
         let so = std::sync::Arc::clone(&self.inner.sync_orchestrator);
         let endpoint = self.inner.endpoint.clone();
         let doc_manager = std::sync::Arc::clone(&self.inner.doc_manager);
-        let handles = offbeat_core::ble_sync::spawn_ble_connection_tasks(
+        // Start the auto-subscription manager FIRST so registered festival/group
+        // resources actually issue an iroh-gossip `Join` (proto-level topic
+        // membership). Without this the node only syncs state via the WS relay
+        // and silently drops incoming peer `Join`s — so the P2P/BLE gossip mesh
+        // never forms. (The headless CLI gets this via OffbeatNode::spawn_ble_sync;
+        // the bridge must wire it up explicitly.)
+        let mut handles = vec![so.clone().spawn_subscription_manager()];
+        handles.extend(offbeat_core::ble_sync::spawn_ble_connection_tasks(
             ble, gm, cm, so, endpoint, doc_manager,
-        );
+        ));
         self.ble_task_handles = handles;
-        tracing::info!("BLE auto-connection tasks started");
+        tracing::info!("subscription manager + BLE auto-connection tasks started");
     }
 
     /// Stop the BLE background tasks.
