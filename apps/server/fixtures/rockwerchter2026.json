@@ -1,0 +1,11 @@
+{
+  "id": "rockwerchter26",
+  "name": "Rock Werchter 2026",
+  "location": "Festivalpark Werchter",
+  "city": "Werchter",
+  "country": "BE",
+  "genres": ["Rock", "Pop", "Alternative", "Electronic"],
+  "clashfinderId": "rw2026",
+  "lat": 50.9667,
+  "lon": 4.6833
+}

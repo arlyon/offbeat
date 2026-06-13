@@ -8,6 +8,7 @@ import {
 	verifyAuthentication,
 	verifyRegistration,
 } from "./auth";
+import { ed25519 } from "@noble/curves/ed25519.js";
 import { generateKeypair, sign, verify } from "./signing";
 
 export class MainDO extends DurableObject {
@@ -29,6 +30,19 @@ export class MainDO extends DurableObject {
 	}
 
 	async #initKeypair() {
+		// Priority 1: Environment variable (useful for pinning the root key in the app)
+		const envSecret = (this.env as { MAIN_DO_ROOT_SECRET?: string }).MAIN_DO_ROOT_SECRET;
+		if (envSecret && /^[0-9a-f]{64}$/i.test(envSecret)) {
+			const secretKey = new Uint8Array(
+				envSecret.match(/.{1,2}/g)!.map((byte) => Number.parseInt(byte, 16)),
+			);
+			this.#secretKey = secretKey;
+			this.#publicKey = ed25519.getPublicKey(secretKey);
+			console.log("[main] root keypair initialized from environment");
+			return;
+		}
+
+		// Priority 2: Stored in DO storage
 		const stored = (await this.ctx.storage.get("ed25519_secret_key")) as Uint8Array | undefined;
 		if (stored) {
 			this.#secretKey = stored;

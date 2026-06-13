@@ -5,6 +5,7 @@ type Env = {
 		MAIN_DO: DurableObjectNamespace;
 		FESTIVAL_DO: DurableObjectNamespace;
 		ADMIN_SECRET_KEY?: string;
+		MAIN_DO_ROOT_SECRET?: string;
 	};
 };
 
