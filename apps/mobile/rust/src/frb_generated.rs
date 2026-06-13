@@ -40,7 +40,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 244991422;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1722687693;
 
 // Section: executor
 
@@ -172,6 +172,58 @@ fn wire__crate__api__AppNode_check_in_impl(
                     })()
                     .await,
                 )
+            }
+        },
+    )
+}
+fn wire__crate__api__AppNode_connect_peer_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "AppNode_connect_peer",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<AppNode>,
+            >>::sse_decode(&mut deserializer);
+            let api_device_id = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let mut api_that_guard = None;
+                    let decode_indices_ =
+                        flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
+                            flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                &api_that, 0, false,
+                            ),
+                        ]);
+                    for i in decode_indices_ {
+                        match i {
+                            0 => api_that_guard = Some(api_that.lockable_decode_sync_ref()),
+                            _ => unreachable!(),
+                        }
+                    }
+                    let api_that_guard = api_that_guard.unwrap();
+                    let output_ok = Result::<_, ()>::Ok({
+                        crate::api::AppNode::connect_peer(&*api_that_guard, api_device_id);
+                    })?;
+                    Ok(output_ok)
+                })())
             }
         },
     )
@@ -1414,6 +1466,61 @@ fn wire__crate__api__AppNode_leave_group_impl(
         },
     )
 }
+fn wire__crate__api__AppNode_nudge_gossip_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "AppNode_nudge_gossip",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<AppNode>,
+            >>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
+                    (move || async move {
+                        let mut api_that_guard = None;
+                        let decode_indices_ =
+                            flutter_rust_bridge::for_generated::lockable_compute_decode_order(
+                                vec![flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                    &api_that, 0, false,
+                                )],
+                            );
+                        for i in decode_indices_ {
+                            match i {
+                                0 => {
+                                    api_that_guard =
+                                        Some(api_that.lockable_decode_async_ref().await)
+                                }
+                                _ => unreachable!(),
+                            }
+                        }
+                        let api_that_guard = api_that_guard.unwrap();
+                        let output_ok = crate::api::AppNode::nudge_gossip(&*api_that_guard).await?;
+                        Ok(output_ok)
+                    })()
+                    .await,
+                )
+            }
+        },
+    )
+}
 fn wire__crate__api__AppNode_publish_chat_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -1468,6 +1575,62 @@ fn wire__crate__api__AppNode_publish_chat_impl(
                             api_message,
                         )
                         .await?;
+                        Ok(output_ok)
+                    })()
+                    .await,
+                )
+            }
+        },
+    )
+}
+fn wire__crate__api__AppNode_restart_ble_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "AppNode_restart_ble",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<AppNode>,
+            >>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
+                    (move || async move {
+                        let mut api_that_guard = None;
+                        let decode_indices_ =
+                            flutter_rust_bridge::for_generated::lockable_compute_decode_order(
+                                vec![flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                    &api_that, 0, true,
+                                )],
+                            );
+                        for i in decode_indices_ {
+                            match i {
+                                0 => {
+                                    api_that_guard =
+                                        Some(api_that.lockable_decode_async_ref_mut().await)
+                                }
+                                _ => unreachable!(),
+                            }
+                        }
+                        let mut api_that_guard = api_that_guard.unwrap();
+                        let output_ok =
+                            crate::api::AppNode::restart_ble(&mut *api_that_guard).await?;
                         Ok(output_ok)
                     })()
                     .await,
@@ -1870,6 +2033,57 @@ fn wire__crate__api__AppNode_start_ble_sync_impl(
                     let mut api_that_guard = api_that_guard.unwrap();
                     let output_ok = Result::<_, ()>::Ok({
                         crate::api::AppNode::start_ble_sync(&mut *api_that_guard);
+                    })?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__AppNode_stop_ble_sync_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "AppNode_stop_ble_sync",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<AppNode>,
+            >>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let mut api_that_guard = None;
+                    let decode_indices_ =
+                        flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
+                            flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                &api_that, 0, true,
+                            ),
+                        ]);
+                    for i in decode_indices_ {
+                        match i {
+                            0 => api_that_guard = Some(api_that.lockable_decode_sync_ref_mut()),
+                            _ => unreachable!(),
+                        }
+                    }
+                    let mut api_that_guard = api_that_guard.unwrap();
+                    let output_ok = Result::<_, ()>::Ok({
+                        crate::api::AppNode::stop_ble_sync(&mut *api_that_guard);
                     })?;
                     Ok(output_ok)
                 })())
@@ -3215,6 +3429,7 @@ impl SseDecode for crate::api::dto::BleStatusDto {
         let mut var_rxBytesPerSec = <u64>::sse_decode(deserializer);
         let mut var_retransmits = <u64>::sse_decode(deserializer);
         let mut var_peers = <Vec<crate::api::dto::TransportPeerDto>>::sse_decode(deserializer);
+        let mut var_advertisingBeacons = <Vec<String>>::sse_decode(deserializer);
         return crate::api::dto::BleStatusDto {
             active: var_active,
             peer_count: var_peerCount,
@@ -3222,6 +3437,7 @@ impl SseDecode for crate::api::dto::BleStatusDto {
             rx_bytes_per_sec: var_rxBytesPerSec,
             retransmits: var_retransmits,
             peers: var_peers,
+            advertising_beacons: var_advertisingBeacons,
         };
     }
 }
@@ -3756,12 +3972,14 @@ impl SseDecode for crate::api::dto::TransportPeerDto {
         let mut var_connectPath = <Option<String>>::sse_decode(deserializer);
         let mut var_verifiedEndpoint = <Option<String>>::sse_decode(deserializer);
         let mut var_consecutiveFailures = <u32>::sse_decode(deserializer);
+        let mut var_keyPrefix = <Option<String>>::sse_decode(deserializer);
         return crate::api::dto::TransportPeerDto {
             device_id: var_deviceId,
             phase: var_phase,
             connect_path: var_connectPath,
             verified_endpoint: var_verifiedEndpoint,
             consecutive_failures: var_consecutiveFailures,
+            key_prefix: var_keyPrefix,
         };
     }
 }
@@ -3840,74 +4058,78 @@ fn pde_ffi_dispatcher_primary_impl(
     match func_id {
         1 => wire__crate__api__AppNode_add_pin_impl(port, ptr, rust_vec_len, data_len),
         2 => wire__crate__api__AppNode_check_in_impl(port, ptr, rust_vec_len, data_len),
-        3 => wire__crate__api__AppNode_connect_relay_impl(port, ptr, rust_vec_len, data_len),
-        4 => wire__crate__api__AppNode_create_impl(port, ptr, rust_vec_len, data_len),
-        5 => wire__crate__api__AppNode_create_group_impl(port, ptr, rust_vec_len, data_len),
-        6 => wire__crate__api__AppNode_create_in_memory_impl(port, ptr, rust_vec_len, data_len),
-        7 => wire__crate__api__AppNode_delete_group_impl(port, ptr, rust_vec_len, data_len),
-        8 => wire__crate__api__AppNode_derive_identity_from_prf_impl(
+        3 => wire__crate__api__AppNode_connect_peer_impl(port, ptr, rust_vec_len, data_len),
+        4 => wire__crate__api__AppNode_connect_relay_impl(port, ptr, rust_vec_len, data_len),
+        5 => wire__crate__api__AppNode_create_impl(port, ptr, rust_vec_len, data_len),
+        6 => wire__crate__api__AppNode_create_group_impl(port, ptr, rust_vec_len, data_len),
+        7 => wire__crate__api__AppNode_create_in_memory_impl(port, ptr, rust_vec_len, data_len),
+        8 => wire__crate__api__AppNode_delete_group_impl(port, ptr, rust_vec_len, data_len),
+        9 => wire__crate__api__AppNode_derive_identity_from_prf_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        9 => wire__crate__api__AppNode_get_attestation_impl(port, ptr, rust_vec_len, data_len),
-        10 => wire__crate__api__AppNode_get_auth_state_impl(port, ptr, rust_vec_len, data_len),
-        11 => wire__crate__api__AppNode_get_chat_history_impl(port, ptr, rust_vec_len, data_len),
-        12 => wire__crate__api__AppNode_get_chat_messages_impl(port, ptr, rust_vec_len, data_len),
-        13 => wire__crate__api__AppNode_get_group_state_impl(port, ptr, rust_vec_len, data_len),
-        14 => wire__crate__api__AppNode_get_groups_impl(port, ptr, rust_vec_len, data_len),
-        15 => wire__crate__api__AppNode_get_identity_impl(port, ptr, rust_vec_len, data_len),
-        16 => wire__crate__api__AppNode_get_invite_payload_impl(port, ptr, rust_vec_len, data_len),
-        17 => wire__crate__api__AppNode_get_lineup_impl(port, ptr, rust_vec_len, data_len),
-        18 => wire__crate__api__AppNode_get_peer_count_impl(port, ptr, rust_vec_len, data_len),
-        19 => wire__crate__api__AppNode_get_peer_list_impl(port, ptr, rust_vec_len, data_len),
-        20 => wire__crate__api__AppNode_get_public_key_hex_impl(port, ptr, rust_vec_len, data_len),
-        21 => wire__crate__api__AppNode_get_stars_impl(port, ptr, rust_vec_len, data_len),
-        22 => {
+        10 => wire__crate__api__AppNode_get_attestation_impl(port, ptr, rust_vec_len, data_len),
+        11 => wire__crate__api__AppNode_get_auth_state_impl(port, ptr, rust_vec_len, data_len),
+        12 => wire__crate__api__AppNode_get_chat_history_impl(port, ptr, rust_vec_len, data_len),
+        13 => wire__crate__api__AppNode_get_chat_messages_impl(port, ptr, rust_vec_len, data_len),
+        14 => wire__crate__api__AppNode_get_group_state_impl(port, ptr, rust_vec_len, data_len),
+        15 => wire__crate__api__AppNode_get_groups_impl(port, ptr, rust_vec_len, data_len),
+        16 => wire__crate__api__AppNode_get_identity_impl(port, ptr, rust_vec_len, data_len),
+        17 => wire__crate__api__AppNode_get_invite_payload_impl(port, ptr, rust_vec_len, data_len),
+        18 => wire__crate__api__AppNode_get_lineup_impl(port, ptr, rust_vec_len, data_len),
+        19 => wire__crate__api__AppNode_get_peer_count_impl(port, ptr, rust_vec_len, data_len),
+        20 => wire__crate__api__AppNode_get_peer_list_impl(port, ptr, rust_vec_len, data_len),
+        21 => wire__crate__api__AppNode_get_public_key_hex_impl(port, ptr, rust_vec_len, data_len),
+        22 => wire__crate__api__AppNode_get_stars_impl(port, ptr, rust_vec_len, data_len),
+        23 => {
             wire__crate__api__AppNode_get_transport_status_impl(port, ptr, rust_vec_len, data_len)
         }
-        23 => wire__crate__api__AppNode_get_weather_impl(port, ptr, rust_vec_len, data_len),
-        24 => wire__crate__api__AppNode_join_group_impl(port, ptr, rust_vec_len, data_len),
-        25 => wire__crate__api__AppNode_leave_group_impl(port, ptr, rust_vec_len, data_len),
-        26 => wire__crate__api__AppNode_publish_chat_impl(port, ptr, rust_vec_len, data_len),
-        27 => wire__crate__api__AppNode_save_group_impl(port, ptr, rust_vec_len, data_len),
-        28 => wire__crate__api__AppNode_send_festival_chat_impl(port, ptr, rust_vec_len, data_len),
-        29 => wire__crate__api__AppNode_send_group_chat_impl(port, ptr, rust_vec_len, data_len),
-        30 => wire__crate__api__AppNode_set_display_name_impl(port, ptr, rust_vec_len, data_len),
-        31 => wire__crate__api__AppNode_set_festival_public_key_impl(
+        24 => wire__crate__api__AppNode_get_weather_impl(port, ptr, rust_vec_len, data_len),
+        25 => wire__crate__api__AppNode_join_group_impl(port, ptr, rust_vec_len, data_len),
+        26 => wire__crate__api__AppNode_leave_group_impl(port, ptr, rust_vec_len, data_len),
+        27 => wire__crate__api__AppNode_nudge_gossip_impl(port, ptr, rust_vec_len, data_len),
+        28 => wire__crate__api__AppNode_publish_chat_impl(port, ptr, rust_vec_len, data_len),
+        29 => wire__crate__api__AppNode_restart_ble_impl(port, ptr, rust_vec_len, data_len),
+        30 => wire__crate__api__AppNode_save_group_impl(port, ptr, rust_vec_len, data_len),
+        31 => wire__crate__api__AppNode_send_festival_chat_impl(port, ptr, rust_vec_len, data_len),
+        32 => wire__crate__api__AppNode_send_group_chat_impl(port, ptr, rust_vec_len, data_len),
+        33 => wire__crate__api__AppNode_set_display_name_impl(port, ptr, rust_vec_len, data_len),
+        34 => wire__crate__api__AppNode_set_festival_public_key_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        32 => wire__crate__api__AppNode_sign_message_impl(port, ptr, rust_vec_len, data_len),
-        33 => wire__crate__api__AppNode_start_ble_sync_impl(port, ptr, rust_vec_len, data_len),
-        34 => wire__crate__api__AppNode_store_attestation_impl(port, ptr, rust_vec_len, data_len),
-        35 => {
+        35 => wire__crate__api__AppNode_sign_message_impl(port, ptr, rust_vec_len, data_len),
+        36 => wire__crate__api__AppNode_start_ble_sync_impl(port, ptr, rust_vec_len, data_len),
+        37 => wire__crate__api__AppNode_stop_ble_sync_impl(port, ptr, rust_vec_len, data_len),
+        38 => wire__crate__api__AppNode_store_attestation_impl(port, ptr, rust_vec_len, data_len),
+        39 => {
             wire__crate__api__AppNode_subscribe_chat_topics_impl(port, ptr, rust_vec_len, data_len)
         }
-        36 => wire__crate__api__AppNode_subscribe_festival_impl(port, ptr, rust_vec_len, data_len),
-        37 => wire__crate__api__AppNode_subscribe_groups_impl(port, ptr, rust_vec_len, data_len),
-        38 => wire__crate__api__AppNode_toggle_star_impl(port, ptr, rust_vec_len, data_len),
-        39 => wire__crate__api__AppNode_update_shared_stars_impl(port, ptr, rust_vec_len, data_len),
-        40 => wire__crate__api__AppNode_watch_chat_impl(port, ptr, rust_vec_len, data_len),
-        41 => wire__crate__api__AppNode_watch_group_state_impl(port, ptr, rust_vec_len, data_len),
-        42 => wire__crate__api__AppNode_watch_lineup_impl(port, ptr, rust_vec_len, data_len),
-        43 => wire__crate__api__AppNode_watch_peer_list_impl(port, ptr, rust_vec_len, data_len),
-        44 => wire__crate__api__AppNode_watch_sync_status_impl(port, ptr, rust_vec_len, data_len),
-        45 => {
+        40 => wire__crate__api__AppNode_subscribe_festival_impl(port, ptr, rust_vec_len, data_len),
+        41 => wire__crate__api__AppNode_subscribe_groups_impl(port, ptr, rust_vec_len, data_len),
+        42 => wire__crate__api__AppNode_toggle_star_impl(port, ptr, rust_vec_len, data_len),
+        43 => wire__crate__api__AppNode_update_shared_stars_impl(port, ptr, rust_vec_len, data_len),
+        44 => wire__crate__api__AppNode_watch_chat_impl(port, ptr, rust_vec_len, data_len),
+        45 => wire__crate__api__AppNode_watch_group_state_impl(port, ptr, rust_vec_len, data_len),
+        46 => wire__crate__api__AppNode_watch_lineup_impl(port, ptr, rust_vec_len, data_len),
+        47 => wire__crate__api__AppNode_watch_peer_list_impl(port, ptr, rust_vec_len, data_len),
+        48 => wire__crate__api__AppNode_watch_sync_status_impl(port, ptr, rust_vec_len, data_len),
+        49 => {
             wire__crate__api__AppNode_watch_transport_status_impl(port, ptr, rust_vec_len, data_len)
         }
-        46 => wire__crate__api__AppNode_watch_weather_impl(port, ptr, rust_vec_len, data_len),
-        47 => wire__crate__api__dto__convert_sync_status_impl(port, ptr, rust_vec_len, data_len),
-        48 => wire__crate__api__dto__generate_group_key_impl(port, ptr, rust_vec_len, data_len),
-        49 => wire__crate__api__dto__group_id_from_key_impl(port, ptr, rust_vec_len, data_len),
-        50 => wire__crate__api__init_app_impl(port, ptr, rust_vec_len, data_len),
-        51 => wire__crate__api__dto__peer_entry_to_dto_impl(port, ptr, rust_vec_len, data_len),
-        52 => wire__crate__api__dto__read_lineup_from_doc_impl(port, ptr, rust_vec_len, data_len),
-        53 => wire__crate__api__dto__read_weather_from_doc_impl(port, ptr, rust_vec_len, data_len),
-        54 => wire__crate__api__dto__snapshot_transport_impl(port, ptr, rust_vec_len, data_len),
+        50 => wire__crate__api__AppNode_watch_weather_impl(port, ptr, rust_vec_len, data_len),
+        51 => wire__crate__api__dto__convert_sync_status_impl(port, ptr, rust_vec_len, data_len),
+        52 => wire__crate__api__dto__generate_group_key_impl(port, ptr, rust_vec_len, data_len),
+        53 => wire__crate__api__dto__group_id_from_key_impl(port, ptr, rust_vec_len, data_len),
+        54 => wire__crate__api__init_app_impl(port, ptr, rust_vec_len, data_len),
+        55 => wire__crate__api__dto__peer_entry_to_dto_impl(port, ptr, rust_vec_len, data_len),
+        56 => wire__crate__api__dto__read_lineup_from_doc_impl(port, ptr, rust_vec_len, data_len),
+        57 => wire__crate__api__dto__read_weather_from_doc_impl(port, ptr, rust_vec_len, data_len),
+        58 => wire__crate__api__dto__snapshot_transport_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -4006,6 +4228,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::dto::BleStatusDto {
             self.rx_bytes_per_sec.into_into_dart().into_dart(),
             self.retransmits.into_into_dart().into_dart(),
             self.peers.into_into_dart().into_dart(),
+            self.advertising_beacons.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -4401,6 +4624,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::dto::TransportPeerDto {
             self.connect_path.into_into_dart().into_dart(),
             self.verified_endpoint.into_into_dart().into_dart(),
             self.consecutive_failures.into_into_dart().into_dart(),
+            self.key_prefix.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -4644,6 +4868,7 @@ impl SseEncode for crate::api::dto::BleStatusDto {
         <u64>::sse_encode(self.rx_bytes_per_sec, serializer);
         <u64>::sse_encode(self.retransmits, serializer);
         <Vec<crate::api::dto::TransportPeerDto>>::sse_encode(self.peers, serializer);
+        <Vec<String>>::sse_encode(self.advertising_beacons, serializer);
     }
 }
 
@@ -5031,6 +5256,7 @@ impl SseEncode for crate::api::dto::TransportPeerDto {
         <Option<String>>::sse_encode(self.connect_path, serializer);
         <Option<String>>::sse_encode(self.verified_endpoint, serializer);
         <u32>::sse_encode(self.consecutive_failures, serializer);
+        <Option<String>>::sse_encode(self.key_prefix, serializer);
     }
 }
 

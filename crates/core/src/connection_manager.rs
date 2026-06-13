@@ -331,11 +331,21 @@ impl ConnectionManager {
         let table = self.peers.lock().expect("peer table lock poisoned");
         match table.get(endpoint_id) {
             None => true,
-            Some(entry) => match entry.last_join_attempt {
+            Some(e) => match e.last_join_attempt {
                 None => true,
                 Some(t) => t.elapsed() >= min_interval,
             },
         }
+    }
+
+    /// List all peers currently known to be visible via BLE.
+    pub fn list_verified_ble_peers(&self) -> Vec<String> {
+        let table = self.peers.lock().expect("peer table lock poisoned");
+        table
+            .values()
+            .filter(|e| e.source == PeerSource::Ble)
+            .map(|e| e.endpoint_id.clone())
+            .collect()
     }
 }
 

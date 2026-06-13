@@ -169,6 +169,8 @@ pub struct BleStatusDto {
     pub rx_bytes_per_sec: u64,
     pub retransmits: u64,
     pub peers: Vec<TransportPeerDto>,
+    /// The list of UUIDs we are currently advertising (Discovery Beacons).
+    pub advertising_beacons: Vec<String>,
 }
 
 pub struct TransportPeerDto {
@@ -177,6 +179,8 @@ pub struct TransportPeerDto {
     pub connect_path: Option<String>,
     pub verified_endpoint: Option<String>,
     pub consecutive_failures: u32,
+    /// The 12-byte prefix seen in the peer's advertisement.
+    pub key_prefix: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -368,6 +372,7 @@ pub fn snapshot_transport(node: &OffbeatNode) -> TransportStatusDto {
                     connect_path: p.connect_path.map(|c| format!("{c:?}")),
                     verified_endpoint: p.verified_endpoint.map(|e| e.to_string()),
                     consecutive_failures: p.consecutive_failures,
+                    key_prefix: p.prefix.map(|p| hex::encode(p)),
                 })
                 .collect();
             BleStatusDto {
@@ -377,6 +382,11 @@ pub fn snapshot_transport(node: &OffbeatNode) -> TransportStatusDto {
                 rx_bytes_per_sec: 0,
                 retransmits: ble.metrics().retransmits,
                 peers,
+                advertising_beacons: ble
+                    .advertising_beacons()
+                    .iter()
+                    .map(|u| u.to_string())
+                    .collect(),
             }
         }
         None => BleStatusDto {
@@ -386,6 +396,7 @@ pub fn snapshot_transport(node: &OffbeatNode) -> TransportStatusDto {
             rx_bytes_per_sec: 0,
             retransmits: 0,
             peers: vec![],
+            advertising_beacons: vec![],
         },
     };
     TransportStatusDto { relay, ble }

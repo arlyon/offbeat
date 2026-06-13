@@ -83,8 +83,10 @@ impl AppNode {
     /// Open (or create) the node database at `db_path` with full networking
     /// (iroh endpoint, gossip, and BLE transport if available).
     pub async fn create(db_path: String) -> anyhow::Result<AppNode> {
-        let path = std::path::Path::new(&db_path);
-        let inner = OffbeatNode::new_with_networking(path).await?;
+        let path = std::path::PathBuf::from(db_path);
+        let inner = RUNTIME
+            .spawn(async move { OffbeatNode::new_with_networking(&path).await })
+            .await??;
         Ok(AppNode {
             inner,
             ble_task_handles: Vec::new(),
@@ -93,6 +95,7 @@ impl AppNode {
 
     /// Create an in-memory node (useful for testing).
     pub fn create_in_memory() -> anyhow::Result<AppNode> {
+        let _guard = RUNTIME.enter();
         let inner = OffbeatNode::new_in_memory()?;
         Ok(AppNode {
             inner,
@@ -1236,6 +1239,7 @@ impl AppNode {
     /// transition BLE-discovered peers to gossip-connected. Call after
     /// subscribing to festival/group topics.
     pub fn start_ble_sync(&mut self) {
+        let _guard = RUNTIME.enter();
         // Only start if BLE transport + gossip + connection manager are all present
         let Some(ble) = self.inner.ble_transport.clone() else {
             tracing::debug!("start_ble_sync: no BLE transport, skipping");
@@ -1265,6 +1269,68 @@ impl AppNode {
         self.ble_task_handles = handles;
         tracing::info!("BLE auto-connection tasks started");
     }
+
+    /// Stop the BLE background tasks.
+    pub fn stop_ble_sync(&mut self) {
+        for handle in self.ble_task_handles.drain(..) {
+            handle.abort();
+        }
+        tracing::info!("BLE auto-connection tasks stopped");
+    }
+
+    /// Explicitly trigger a proactive BLE connection to a device for verification or sync.
+    pub fn connect_peer(&self, device_id: String) {
+        let _guard = RUNTIME.enter();
+        if let Some(ref ble) = self.inner.ble_transport {
+            ble.connect(iroh_ble_transport::DeviceId::from(device_id));
+        }
+    }
+
+    /// Manually trigger a gossip join nudge for all currently visible BLE peers.
+    /// Useful for breaking sync deadlocks.
+    pub async fn nudge_gossip(&self) -> anyhow::Result<()> {
+        let ble = self.inner.ble_transport.clone();
+        let gm_arc = self.inner.gossip_manager.clone();
+
+        RUNTIME
+            .spawn(async move {
+                let Some(ble) = ble.as_ref() else {
+                    return Ok(());
+                };
+                let Some(gm_arc) = gm_arc.as_ref() else {
+                    return Ok(());
+                };
+
+                let targets: Vec<iroh_base::EndpointId> = ble
+                    .snapshot_peers()
+                    .into_iter()
+                    .filter_map(|p| p.verified_endpoint)
+                    .collect();
+
+                if !targets.is_empty() {
+                    let gm = gm_arc.lock().await;
+                    gm.join_peers_all(targets).await;
+                    tracing::info!("manually nudged gossip for verified BLE peers");
+                }
+                Ok::<(), anyhow::Error>(())
+            })
+            .await?
+    }
+
+    /// Cycle the BLE transport (stop then start).
+    pub async fn restart_ble(&mut self) -> anyhow::Result<()> {
+        self.stop_ble_sync();
+        // Sleep on the runtime to ensure reactor is present
+        RUNTIME
+            .spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            })
+            .await?;
+        self.start_ble_sync();
+        tracing::info!("manually restarted BLE transport");
+        Ok(())
+    }
+
 
     /// Get a snapshot of transport status (no rate computation).
     pub fn get_transport_status(&self) -> TransportStatusDto {
@@ -1395,6 +1461,7 @@ impl AppNode {
                                 connect_path: p.connect_path.map(|c| format!("{c:?}")),
                                 verified_endpoint: p.verified_endpoint.map(|e| e.to_string()),
                                 consecutive_failures: p.consecutive_failures,
+                                key_prefix: p.prefix.map(|pr| hex::encode(pr)),
                             })
                             .collect();
                         let dto = BleStatusDto {
@@ -1404,6 +1471,11 @@ impl AppNode {
                             rx_bytes_per_sec: metrics.rx_bytes.saturating_sub(prev_ble_rx),
                             retransmits: metrics.retransmits,
                             peers,
+                            advertising_beacons: ble
+                                .advertising_beacons()
+                                .iter()
+                                .map(|u| u.to_string())
+                                .collect(),
                         };
                         prev_ble_tx = metrics.tx_bytes;
                         prev_ble_rx = metrics.rx_bytes;
@@ -1416,6 +1488,7 @@ impl AppNode {
                         rx_bytes_per_sec: 0,
                         retransmits: 0,
                         peers: vec![],
+                        advertising_beacons: vec![],
                     },
                 };
 

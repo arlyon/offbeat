@@ -23,6 +23,9 @@ abstract class AppNode implements RustOpaqueInterface {
     String? customLocation,
   });
 
+  /// Explicitly trigger a proactive BLE connection to a device for verification or sync.
+  Future<void> connectPeer({required String deviceId});
+
   /// Connect this node to the Festival Durable Object relay at `url`.
   ///
   /// `festival_id` is used to look up the cached Ed25519 public key for
@@ -92,10 +95,6 @@ abstract class AppNode implements RustOpaqueInterface {
 
   /// Read the lineup from the local Yrs doc for a festival.
   ///
-  /// The Yrs doc at `festival/{id}/state` has separate root-map keys:
-  /// `"stages"`, `"days"`, `"sets"` — each a JSON array string that
-  /// arrives via signed gossip updates and merges independently.
-  ///
   /// Returns `None` if no lineup data has synced yet.
   Future<LineupDto?> getLineup({required String festivalId});
 
@@ -129,11 +128,18 @@ abstract class AppNode implements RustOpaqueInterface {
   /// Leave a group.
   Future<void> leaveGroup({required String groupId});
 
+  /// Manually trigger a gossip join nudge for all currently visible BLE peers.
+  /// Useful for breaking sync deadlocks.
+  Future<void> nudgeGossip();
+
   /// Broadcast a chat message on the given gossip topic.
   Future<void> publishChat({
     required String topic,
     required ChatMessageDto message,
   });
+
+  /// Cycle the BLE transport (stop then start).
+  Future<void> restartBle();
 
   /// Persist a group record for a festival.
   Future<void> saveGroup({
@@ -176,6 +182,9 @@ abstract class AppNode implements RustOpaqueInterface {
   /// transition BLE-discovered peers to gossip-connected. Call after
   /// subscribing to festival/group topics.
   Future<void> startBleSync();
+
+  /// Stop the BLE background tasks.
+  Future<void> stopBleSync();
 
   /// Store an attestation received from the MainDO.
   Future<void> storeAttestation({

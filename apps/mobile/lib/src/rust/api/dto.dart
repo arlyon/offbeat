@@ -6,15 +6,20 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they have generic arguments: `parse_json_array`
-
 /// Read lineup from a doc manager (used by watch_lineup).
+///
+/// Reads from top-level named maps `"stages"`, `"days"`, `"sets"` where each
+/// entry is a nested YMap of fields (not JSON strings).
 Future<LineupDto?> readLineupFromDoc({
   required DocManager dm,
   required String docId,
 }) => RustLib.instance.api.crateApiDtoReadLineupFromDoc(dm: dm, docId: docId);
 
 /// Read weather from a doc manager (used by get_weather / watch_weather).
+///
+/// Weather metadata is stored in a `"weather"` top-level map under a `"meta"`
+/// entry. Hourly data is in a separate `"hourly"` top-level map keyed by time
+/// string, each entry containing temp/precip/code/wind fields.
 Future<WeatherForecastDto?> readWeatherFromDoc({
   required DocManager dm,
   required String docId,
@@ -106,6 +111,9 @@ class BleStatusDto {
   final BigInt retransmits;
   final List<TransportPeerDto> peers;
 
+  /// The list of UUIDs we are currently advertising (Discovery Beacons).
+  final List<String> advertisingBeacons;
+
   const BleStatusDto({
     required this.active,
     required this.peerCount,
@@ -113,6 +121,7 @@ class BleStatusDto {
     required this.rxBytesPerSec,
     required this.retransmits,
     required this.peers,
+    required this.advertisingBeacons,
   });
 
   @override
@@ -122,7 +131,8 @@ class BleStatusDto {
       txBytesPerSec.hashCode ^
       rxBytesPerSec.hashCode ^
       retransmits.hashCode ^
-      peers.hashCode;
+      peers.hashCode ^
+      advertisingBeacons.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -134,7 +144,8 @@ class BleStatusDto {
           txBytesPerSec == other.txBytesPerSec &&
           rxBytesPerSec == other.rxBytesPerSec &&
           retransmits == other.retransmits &&
-          peers == other.peers;
+          peers == other.peers &&
+          advertisingBeacons == other.advertisingBeacons;
 }
 
 class ChatMessageDto {
@@ -676,12 +687,16 @@ class TransportPeerDto {
   final String? verifiedEndpoint;
   final int consecutiveFailures;
 
+  /// The 12-byte prefix seen in the peer's advertisement.
+  final String? keyPrefix;
+
   const TransportPeerDto({
     required this.deviceId,
     required this.phase,
     this.connectPath,
     this.verifiedEndpoint,
     required this.consecutiveFailures,
+    this.keyPrefix,
   });
 
   @override
@@ -690,7 +705,8 @@ class TransportPeerDto {
       phase.hashCode ^
       connectPath.hashCode ^
       verifiedEndpoint.hashCode ^
-      consecutiveFailures.hashCode;
+      consecutiveFailures.hashCode ^
+      keyPrefix.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -701,7 +717,8 @@ class TransportPeerDto {
           phase == other.phase &&
           connectPath == other.connectPath &&
           verifiedEndpoint == other.verifiedEndpoint &&
-          consecutiveFailures == other.consecutiveFailures;
+          consecutiveFailures == other.consecutiveFailures &&
+          keyPrefix == other.keyPrefix;
 }
 
 class TransportStatusDto {

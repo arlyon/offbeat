@@ -187,13 +187,9 @@ async fn ble_reconnect_tick(
     loop {
         tokio::time::sleep(RECONNECT_TICK_INTERVAL).await;
 
+        // 1. Get peers that need a join nudge based on backoff (Original path)
         let candidates = connection_manager.peers_needing_join(RECONNECT_MIN_INTERVAL);
-        if candidates.is_empty() {
-            continue;
-        }
-
-        // Filter to only peers the BLE transport currently has visibility of
-        let targets: Vec<EndpointId> = candidates
+        let mut targets: Vec<EndpointId> = candidates
             .iter()
             .filter_map(|endpoint_str| {
                 let endpoint_id: EndpointId = endpoint_str.parse().ok()?;
@@ -205,18 +201,30 @@ async fn ble_reconnect_tick(
             })
             .collect();
 
+        // 2. Proactive Recovery: Nudge Gossip for ALL currently verified peers.
+        // Even if they are already 'Connected' in BLE, Gossip might have missed 
+        // the initial sighting if the topic wasn't subscribed yet (auto-sub race).
+        let snapshot = ble_transport.snapshot_peers();
+        for info in snapshot {
+            if let Some(eid) = info.verified_endpoint {
+                if !targets.contains(&eid) {
+                    targets.push(eid);
+                }
+            }
+        }
+
         if targets.is_empty() {
             continue;
         }
 
-        // Mark all attempted
+        // Mark backoff-candidates as attempted
         for endpoint_str in &candidates {
             connection_manager.mark_join_attempted(endpoint_str);
         }
 
-        tracing::debug!(
+        tracing::info!(
             count = targets.len(),
-            "ble_reconnect_tick: retrying join for stale peers"
+            "ble_reconnect_tick: nudging gossip for all visible peers"
         );
         let gm = gossip_manager.lock().await;
         gm.join_peers_all(targets).await;

@@ -10,6 +10,7 @@ use std::future::Future;
 use std::sync::{Arc, RwLock};
 
 use crate::chat::ChatManager;
+use crate::connection_manager::ConnectionManager;
 use crate::db::Database;
 use crate::doc_manager::DocManager;
 use crate::gossip_manager::{DispatchResult, dispatch_message, GossipManager, GossipMessage};
@@ -118,6 +119,8 @@ pub struct SyncOrchestrator {
     key_cache: Arc<GroupKeyCache>,
     /// Gossip manager for querying per-topic neighbor counts.
     gossip_manager: Option<Arc<tokio::sync::Mutex<GossipManager>>>,
+    /// Connection manager for finding verified BLE peers.
+    connection_manager: Option<Arc<ConnectionManager>>,
 }
 
 impl SyncOrchestrator {
@@ -138,12 +141,18 @@ impl SyncOrchestrator {
             festival_public_keys: Arc::new(RwLock::new(HashMap::new())),
             key_cache: Arc::new(GroupKeyCache::new()),
             gossip_manager: None,
+            connection_manager: None,
         }
     }
 
     /// Set the gossip manager for querying per-topic neighbor counts.
     pub fn set_gossip_manager(&mut self, gm: Arc<tokio::sync::Mutex<GossipManager>>) {
         self.gossip_manager = Some(gm);
+    }
+
+    /// Set the connection manager for finding verified BLE peers.
+    pub fn set_connection_manager(&mut self, cm: Arc<ConnectionManager>) {
+        self.connection_manager = Some(cm);
     }
 
     /// Spawn a background task that ensures the GossipManager is subscribed
@@ -180,6 +189,24 @@ impl SyncOrchestrator {
                             tracing::warn!(topic = %topic_str, error = %e, "auto-subscription failed");
                         } else {
                             known_topics.insert(topic_id);
+
+                            // PROACTIVE SYNC: Now that we've joined a topic, 
+                            // immediately join all currently verified BLE peers into it.
+                            if let Some(cm) = &self.connection_manager {
+                                let verified_peers = cm.list_verified_ble_peers();
+                                if !verified_peers.is_empty() {
+                                    tracing::info!(
+                                        topic = %topic_str,
+                                        count = verified_peers.len(),
+                                        "syncing new topic with existing BLE peers"
+                                    );
+                                    let peers: Vec<iroh::EndpointId> = verified_peers
+                                        .into_iter()
+                                        .filter_map(|p| p.parse().ok())
+                                        .collect();
+                                    let _ = gm.join_peers_all(peers).await;
+                                }
+                            }
                         }
                     }
                 }

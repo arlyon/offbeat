@@ -9,9 +9,12 @@ import '../src/rust/api/dto.dart';
 
 void showConnectionDrawer(
   BuildContext context, {
-  required TransportStatusDto? status,
-  SyncStatusDto? syncStatus,
+  required ValueNotifier<TransportStatusDto?> transportStatus,
+  required ValueNotifier<SyncStatusDto?> syncStatus,
   required VoidCallback onStartBle,
+  required Function(String) onConnectPeer,
+  required VoidCallback onNudgeGossip,
+  required VoidCallback onRestartBle,
 }) {
   showModalBottomSheet(
     context: context,
@@ -22,11 +25,20 @@ void showConnectionDrawer(
       minChildSize: 0.3,
       maxChildSize: 0.7,
       expand: false,
-      builder: (context, scrollController) => _ConnectionContent(
-        status: status,
-        syncStatus: syncStatus,
-        scrollController: scrollController,
-        onStartBle: onStartBle,
+      builder: (context, scrollController) => ValueListenableBuilder(
+        valueListenable: transportStatus,
+        builder: (context, transport, _) => ValueListenableBuilder(
+          valueListenable: syncStatus,
+          builder: (context, sync, _) => _ConnectionContent(
+            status: transport,
+            syncStatus: sync,
+            scrollController: scrollController,
+            onStartBle: onStartBle,
+            onConnectPeer: onConnectPeer,
+            onNudgeGossip: onNudgeGossip,
+            onRestartBle: onRestartBle,
+          ),
+        ),
       ),
     ),
   );
@@ -37,12 +49,18 @@ class _ConnectionContent extends StatefulWidget {
   final SyncStatusDto? syncStatus;
   final ScrollController scrollController;
   final VoidCallback onStartBle;
+  final Function(String) onConnectPeer;
+  final VoidCallback onNudgeGossip;
+  final VoidCallback onRestartBle;
 
   const _ConnectionContent({
     required this.status,
     this.syncStatus,
     required this.scrollController,
     required this.onStartBle,
+    required this.onConnectPeer,
+    required this.onNudgeGossip,
+    required this.onRestartBle,
   });
 
   @override
@@ -158,6 +176,12 @@ class _ConnectionContentState extends State<_ConnectionContent> {
         color: colorCoAccent,
         peers: ble?.peers ?? [],
         retransmits: ble?.retransmits.toInt() ?? 0,
+        advertisingBeacons: ble?.advertisingBeacons ?? [],
+        onConnect: (deviceId) {
+          widget.onConnectPeer(deviceId);
+        },
+        onNudge: widget.onNudgeGossip,
+        onRestart: widget.onRestartBle,
       );
     }
 
@@ -307,6 +331,10 @@ class _ChannelCard extends StatelessWidget {
   final Color color;
   final List<TransportPeerDto> peers;
   final int retransmits;
+  final List<String> advertisingBeacons;
+  final Function(String)? onConnect;
+  final VoidCallback? onNudge;
+  final VoidCallback? onRestart;
 
   const _ChannelCard({
     required this.label,
@@ -320,6 +348,10 @@ class _ChannelCard extends StatelessWidget {
     required this.color,
     this.peers = const [],
     this.retransmits = 0,
+    this.advertisingBeacons = const [],
+    this.onConnect,
+    this.onNudge,
+    this.onRestart,
   });
 
   @override
@@ -337,7 +369,7 @@ class _ChannelCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Header: label + status dot
+          // Header: label + status dot + debug actions
           Row(
             children: [
               Icon(Icons.circle, size: 7, color: connected ? color : colorFg4),
@@ -355,6 +387,14 @@ class _ChannelCard extends StatelessWidget {
                   ),
                 ),
               ),
+              if (onNudge != null) ...[
+                _ActionLink(label: 'NUDGE', onTap: onNudge!),
+                const SizedBox(width: 10),
+              ],
+              if (onRestart != null) ...[
+                _ActionLink(label: 'RESTART', onTap: onRestart!),
+                const SizedBox(width: 10),
+              ],
               Text(
                 effectiveStatusLabel,
                 style: TextStyle(
@@ -395,103 +435,221 @@ class _ChannelCard extends StatelessWidget {
               ],
             ],
           ),
+          // Advertising beacons info
+          if (advertisingBeacons.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            const Text(
+              'ADVERTISING',
+              style: TextStyle(
+                fontFamily: 'JetBrainsMono',
+                fontSize: 8,
+                letterSpacing: trMeta * 8,
+                color: colorFg4,
+                height: 1,
+              ),
+            ),
+            const SizedBox(height: 4),
+            ...advertisingBeacons.map((b) {
+              // Extract short parts of UUIDs for display
+              final short = b.length > 8 ? '${b.substring(0, 8)}..' : b;
+              return Text(
+                short,
+                style: const TextStyle(
+                  fontFamily: 'JetBrainsMono',
+                  fontSize: 9,
+                  color: colorFg3,
+                  height: 1.2,
+                ),
+              );
+            }),
+          ],
           // BLE peer list
           if (peers.isNotEmpty) ...[
             const SizedBox(height: 12),
             Container(height: 1, color: colorHairline),
             const SizedBox(height: 10),
-            ...peers.map((p) => Padding(
-                  padding: const EdgeInsets.only(bottom: 6),
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.circle,
-                        size: 5,
-                        color: p.phase == 'Connected'
-                            ? colorOk
-                            : p.phase == 'Discovered'
-                                ? colorFg4
-                                : colorWarn,
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              p.deviceId.length > 16
-                                  ? '${p.deviceId.substring(0, 16)}...'
-                                  : p.deviceId,
-                              style: const TextStyle(
-                                fontFamily: 'JetBrainsMono',
-                                fontSize: 10,
-                                color: colorFg2,
-                                height: 1,
-                              ),
-                            ),
-                            if (p.verifiedEndpoint != null) ...[
-                              const SizedBox(height: 3),
-                              Text(
-                                'EP: ${p.verifiedEndpoint!.length > 16 ? '${p.verifiedEndpoint!.substring(0, 16)}...' : p.verifiedEndpoint!}',
-                                style: const TextStyle(
-                                  fontFamily: 'JetBrainsMono',
-                                  fontSize: 9,
-                                  color: colorOk,
-                                  height: 1,
-                                ),
-                              ),
-                            ],
-                            if (p.connectPath != null) ...[
-                              const SizedBox(height: 3),
-                              Text(
-                                p.connectPath!,
-                                style: const TextStyle(
-                                  fontFamily: 'JetBrainsMono',
-                                  fontSize: 9,
-                                  color: colorFg4,
-                                  height: 1,
-                                ),
-                              ),
-                            ],
-                          ],
-                        ),
-                      ),
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.end,
+            ...peers.map((p) {
+              // Determine display phase and colors
+              String displayPhase = p.phase.toUpperCase();
+              Color dotColor = colorFg4;
+              Color phaseColor = colorFg4;
+
+              if (p.phase == 'Connected') {
+                displayPhase = 'SYNCING';
+                dotColor = colorOk;
+                phaseColor = colorOk;
+              } else if (p.phase == 'Connecting' || p.phase == 'Handshaking') {
+                displayPhase = 'VERIFYING';
+                dotColor = colorWarn;
+                phaseColor = colorWarn;
+              } else if (p.phase == 'Reconnecting' || p.phase == 'Restoring') {
+                displayPhase = 'RECOVERING';
+                dotColor = colorWarn;
+                phaseColor = colorWarn;
+              } else if (p.phase == 'Discovered') {
+                displayPhase = 'SEEN';
+                dotColor = colorFg3;
+                phaseColor = colorFg3;
+              } else if (p.phase == 'Dead') {
+                dotColor = colorErr;
+                phaseColor = colorErr;
+              }
+
+              // If it's a known peer (verified) but not currently syncing
+              if (p.verifiedEndpoint != null && p.phase != 'Connected') {
+                displayPhase = 'VERIFIED';
+                dotColor = colorCoAccent;
+                phaseColor = colorCoAccent;
+              }
+
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.circle,
+                      size: 5,
+                      color: dotColor,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            p.phase.toUpperCase(),
-                            style: TextStyle(
+                            p.deviceId.length > 16
+                                ? '${p.deviceId.substring(0, 16)}...'
+                                : p.deviceId,
+                            style: const TextStyle(
                               fontFamily: 'JetBrainsMono',
-                              fontSize: 9,
-                              letterSpacing: trMeta * 9,
-                              color: p.phase == 'Connected'
-                                  ? colorOk
-                                  : p.phase == 'Discovered'
-                                      ? colorFg3
-                                      : colorWarn,
+                              fontSize: 10,
+                              color: colorFg2,
                               height: 1,
                             ),
                           ),
-                          if (p.consecutiveFailures > 0) ...[
+                          if (p.keyPrefix != null) ...[
+                            const SizedBox(height: 2),
+                            Text(
+                              'BEACON: ${p.keyPrefix}',
+                              style: const TextStyle(
+                                fontFamily: 'JetBrainsMono',
+                                fontSize: 8,
+                                color: colorFg4,
+                                height: 1,
+                              ),
+                            ),
+                          ],
+                          if (p.verifiedEndpoint != null) ...[
                             const SizedBox(height: 3),
                             Text(
-                              '${p.consecutiveFailures} FAIL',
+                              'ID: ${p.verifiedEndpoint!.length > 16 ? '${p.verifiedEndpoint!.substring(0, 16)}...' : p.verifiedEndpoint!}',
                               style: const TextStyle(
                                 fontFamily: 'JetBrainsMono',
                                 fontSize: 9,
-                                color: colorErr,
+                                color: colorOk,
+                                height: 1,
+                              ),
+                            ),
+                          ],
+                          if (p.connectPath != null && p.phase == 'Connected') ...[
+                            const SizedBox(height: 3),
+                            Text(
+                              p.connectPath!.toUpperCase(),
+                              style: const TextStyle(
+                                fontFamily: 'JetBrainsMono',
+                                fontSize: 9,
+                                color: colorFg4,
                                 height: 1,
                               ),
                             ),
                           ],
                         ],
                       ),
-                    ],
-                  ),
-                )),
+                    ),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        if (p.phase == 'Discovered' && onConnect != null)
+                          GestureDetector(
+                            onTap: () => onConnect!(p.deviceId),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                border: Border.all(
+                                    color: colorCoAccent, width: 1),
+                                borderRadius: BorderRadius.circular(2),
+                              ),
+                              child: const Text(
+                                'VERIFY',
+                                style: TextStyle(
+                                  fontFamily: 'JetBrainsMono',
+                                  fontSize: 8,
+                                  fontWeight: FontWeight.w700,
+                                  letterSpacing: trMeta * 8,
+                                  color: colorCoAccent,
+                                  height: 1,
+                                ),
+                              ),
+                            ),
+                          )
+                        else
+                          Text(
+                            displayPhase,
+                            style: TextStyle(
+                              fontFamily: 'JetBrainsMono',
+                              fontSize: 9,
+                              letterSpacing: trMeta * 9,
+                              color: phaseColor,
+                              height: 1,
+                            ),
+                          ),
+                        if (p.consecutiveFailures > 0) ...[
+                          const SizedBox(height: 3),
+                          Text(
+                            '${p.consecutiveFailures} FAIL',
+                            style: const TextStyle(
+                              fontFamily: 'JetBrainsMono',
+                              fontSize: 9,
+                              color: colorErr,
+                              height: 1,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ],
+                ),
+              );
+            }),
           ],
         ],
+      ),
+    );
+  }
+}
+
+class _ActionLink extends StatelessWidget {
+  final String label;
+  final VoidCallback onTap;
+
+  const _ActionLink({required this.label, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Text(
+        label,
+        style: const TextStyle(
+          fontFamily: 'JetBrainsMono',
+          fontSize: 8,
+          fontWeight: FontWeight.w700,
+          letterSpacing: trMeta * 8,
+          color: colorCoAccent,
+          decoration: TextDecoration.underline,
+          height: 1,
+        ),
       ),
     );
   }

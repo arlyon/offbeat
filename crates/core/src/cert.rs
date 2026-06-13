@@ -15,6 +15,13 @@ use ed25519_dalek::SigningKey;
 
 use crate::signing;
 
+/// The pinned public key of the admin root (MainDO).
+/// This is the trust anchor for all festival certificates.
+pub const ADMIN_ROOT_PUBKEY: [u8; 32] = [
+    0x32, 0xf1, 0xd7, 0xcd, 0xd7, 0xc9, 0x30, 0xee, 0x90, 0x74, 0x1e, 0xf6, 0xb1, 0x3c, 0x9a, 0xca,
+    0x85, 0xba, 0xe5, 0x2f, 0xd3, 0xae, 0x59, 0xa8, 0x1c, 0x55, 0x74, 0x08, 0xde, 0x49, 0xeb, 0x28,
+];
+
 /// Domain-separation tag so a festival cert signature can never be confused
 /// with any other Ed25519 signature the admin root produces.
 const CERT_DOMAIN: &[u8] = b"offbeat-festival-cert/v1";
@@ -43,6 +50,12 @@ pub struct FestivalCert {
 }
 
 impl FestivalCert {
+    /// Verify this cert against the pinned admin root public key.
+    #[must_use]
+    pub fn verify_default(&self) -> Option<[u8; 32]> {
+        self.verify(&ADMIN_ROOT_PUBKEY)
+    }
+
     /// Verify this cert against the pinned admin root public key. Returns the
     /// trusted festival pubkey on success, or `None` if the signature doesn't
     /// chain to the pinned root.

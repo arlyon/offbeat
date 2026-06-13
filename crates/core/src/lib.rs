@@ -259,9 +259,9 @@ impl OffbeatNode {
         let gossip_manager = Arc::new(Mutex::new(GossipManager::new(gossip.clone())));
 
         // Wire gossip manager into sync orchestrator for neighbor counts
-        Arc::get_mut(&mut sync_orchestrator)
-            .expect("sync_orchestrator not yet shared")
-            .set_gossip_manager(gossip_manager.clone());
+        let so_mut = Arc::get_mut(&mut sync_orchestrator).expect("sync_orchestrator not yet shared");
+        so_mut.set_gossip_manager(gossip_manager.clone());
+        so_mut.set_connection_manager(connection_manager.clone());
 
         Ok(Self {
             doc_manager,

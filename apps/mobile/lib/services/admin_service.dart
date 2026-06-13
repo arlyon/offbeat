@@ -36,7 +36,7 @@ class AdminService {
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({
         'publicKey': publicKeyHex,
-        if (displayName != null) 'displayName': displayName,
+        'displayName': ?displayName,
       }),
     );
     if (resp.statusCode != 200) {

@@ -78,6 +78,9 @@ class _OffbeatShellState extends State<_OffbeatShell>
 
   // Rust bridge node
   AppNode? _node;
+  final ValueNotifier<TransportStatusDto?> _transportStatusNotifier = ValueNotifier(null);
+  final ValueNotifier<SyncStatusDto?> _syncStatusNotifier = ValueNotifier(null);
+
   bool _nodeReady = false;
 
   // Auth state
@@ -213,7 +216,11 @@ class _OffbeatShellState extends State<_OffbeatShell>
     final dbPath = '${dir.path}/offbeat.db';
     final node = await AppNode.create(dbPath: dbPath);
 
+    // CRITICAL: Start the BLE background discovery and sync tasks
+    await node.startBleSync();
+
     // Load existing auth state
+
     final authState = await node.getAuthState();
     final identity = await node.getIdentity();
     String pubKeyHex = '';
@@ -228,9 +235,9 @@ class _OffbeatShellState extends State<_OffbeatShell>
       try {
         admins = await _adminService.listAdmins();
         isAdmin = admins.contains(pubKeyHex);
-        print('Loaded ${admins.length} admins, isAdmin=$isAdmin');
+        debugPrint('Loaded ${admins.length} admins, isAdmin=$isAdmin');
       } catch (e) {
-        print('Failed to load admins: $e');
+        debugPrint('Failed to load admins: $e');
       }
     }
 
@@ -256,6 +263,7 @@ class _OffbeatShellState extends State<_OffbeatShell>
         setState(() {
           _isSyncing = status.syncing;
           _syncStatus = status;
+          _syncStatusNotifier.value = status;
         });
       }
     });
@@ -266,6 +274,7 @@ class _OffbeatShellState extends State<_OffbeatShell>
       if (mounted) {
         setState(() {
           _transportStatus = status;
+          _transportStatusNotifier.value = status;
           _relayConnected = status.relay.connected;
           _blePeerCount = status.ble.active ? status.ble.peerCount : -1;
         });
@@ -502,7 +511,7 @@ class _OffbeatShellState extends State<_OffbeatShell>
       // Subscribe to all group topics for this festival
       await node.subscribeGroups(festivalId: festivalId);
     } catch (e, st) {
-      print('relay error: $e\n$st');
+      debugPrint('relay error: $e\n$st');
     }
   }
 
@@ -598,7 +607,7 @@ class _OffbeatShellState extends State<_OffbeatShell>
         if (_isAdmin) _adminRequestStatus = 'already_admin';
       });
     } catch (e) {
-      print('Failed to refresh admins: $e');
+      debugPrint('Failed to refresh admins: $e');
     }
   }
 
@@ -714,9 +723,12 @@ class _OffbeatShellState extends State<_OffbeatShell>
               blePeerCount: _blePeerCount,
               onConnectionTap: () => showConnectionDrawer(
                 context,
-                status: _transportStatus,
-                syncStatus: _syncStatus,
+                transportStatus: _transportStatusNotifier,
+                syncStatus: _syncStatusNotifier,
                 onStartBle: _restartNode,
+                onConnectPeer: (deviceId) => _node?.connectPeer(deviceId: deviceId),
+                onNudgeGossip: () => _node?.nudgeGossip(),
+                onRestartBle: () => _node?.restartBle(),
               ),
               rightWidgets: [
                 // Crossfade between settings (lobby) and search+admin (festival)
