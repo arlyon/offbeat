@@ -74,7 +74,7 @@ impl GroupManager {
 
         self.db.save_group(&group_id, festival_id, name, &key)?;
 
-        let doc_id = format!("group/{group_id}");
+        let doc_id = format!("group/{group_id}/state");
 
         // Set scalar fields + add member in a single mutation
         let name = name.to_string();
@@ -160,7 +160,7 @@ impl GroupManager {
         self.db
             .save_group(&derived_id, &festival_id, "", &group_key)?;
 
-        let doc_id = format!("group/{derived_id}");
+        let doc_id = format!("group/{derived_id}/state");
 
         let user_id_s = user_id.to_string();
         let display_name_s = display_name.to_string();
@@ -194,7 +194,7 @@ impl GroupManager {
         group_id: &str,
         user_id: &str,
     ) -> anyhow::Result<Option<Vec<u8>>> {
-        let doc_id = format!("group/{group_id}");
+        let doc_id = format!("group/{group_id}/state");
         let user_id_s = user_id.to_string();
         let update = self.doc_manager.mutate(&doc_id, &["members"], |maps, txn| {
             maps[0].remove(txn, &user_id_s);
@@ -223,7 +223,7 @@ impl GroupManager {
             .load_group_key(group_id)?
             .ok_or_else(|| anyhow::anyhow!("group not found: {group_id}"))?;
 
-        let doc_id = format!("group/{group_id}");
+        let doc_id = format!("group/{group_id}/state");
         let user_id_s = user_id.to_string();
         let stage_id_s = stage_id.map(String::from);
         let custom_loc_s = custom_location.map(String::from);
@@ -261,7 +261,7 @@ impl GroupManager {
             .load_group_key(group_id)?
             .ok_or_else(|| anyhow::anyhow!("group not found: {group_id}"))?;
 
-        let doc_id = format!("group/{group_id}");
+        let doc_id = format!("group/{group_id}/state");
         let user_id_s = user_id.to_string();
         let diff = self.doc_manager.mutate(&doc_id, &["stars"], |maps, txn| {
             let user_stars = doc_manager::get_or_init_map(&maps[0], txn, &user_id_s);
@@ -295,7 +295,7 @@ impl GroupManager {
             .load_group_key(group_id)?
             .ok_or_else(|| anyhow::anyhow!("group not found: {group_id}"))?;
 
-        let doc_id = format!("group/{group_id}");
+        let doc_id = format!("group/{group_id}/state");
         let pin_id_s = pin_id.to_string();
         let label_s = label.to_string();
         let location_s = location.to_string();
@@ -319,7 +319,7 @@ impl GroupManager {
     // -----------------------------------------------------------------------
 
     pub async fn get_group_state(&self, group_id: &str) -> anyhow::Result<GroupState> {
-        let doc_id = format!("group/{group_id}");
+        let doc_id = format!("group/{group_id}/state");
         let name = self
             .doc_manager
             .read_map_value(&doc_id, "name")
@@ -372,7 +372,7 @@ impl GroupManager {
             .load_group_key(group_id)?
             .ok_or_else(|| anyhow::anyhow!("group not found: {group_id}"))?;
 
-        let doc_id = format!("group/{group_id}");
+        let doc_id = format!("group/{group_id}/state");
         self.doc_manager.get_or_create(&doc_id);
         let sv_bytes = self.doc_manager.get_state_vector(&doc_id)?;
 
@@ -395,7 +395,7 @@ impl GroupManager {
 
         let remote_sv = crypto::decrypt(&group_key, remote_sv_encrypted)?;
 
-        let doc_id = format!("group/{group_id}");
+        let doc_id = format!("group/{group_id}/state");
         let diff = self.doc_manager.encode_diff(&doc_id, &remote_sv)?;
 
         let encrypted_diff = crypto::encrypt(&group_key, &diff)?;
@@ -409,7 +409,7 @@ impl GroupManager {
     /// Read the starred set IDs for a user from the group doc.
     pub fn read_user_stars(&self, group_id: &str, user_id: &str) -> Vec<String> {
         use yrs::{any::Any, Out};
-        let doc_id = format!("group/{group_id}");
+        let doc_id = format!("group/{group_id}/state");
         self.doc_manager.read(&doc_id, &["stars"], |maps, txn| {
             match maps[0].get(txn, user_id) {
                 Some(Out::YMap(user_stars)) => user_stars
@@ -474,7 +474,7 @@ mod tests {
         assert_eq!(groups[0].0, result.group_id);
 
         // Yrs doc has name
-        let doc_id = format!("group/{}", result.group_id);
+        let doc_id = format!("group/{}/state", result.group_id);
         let name = gm.doc_manager.read_map_value(&doc_id, "name").unwrap();
         assert_eq!(name, "Crew A");
 
@@ -509,7 +509,7 @@ mod tests {
         assert_eq!(join.group_id, create.group_id);
 
         // Both members in the doc
-        let doc_id = format!("group/{}", create.group_id);
+        let doc_id = format!("group/{}/state", create.group_id);
         let m1 = gm
             .doc_manager
             .read_nested_map_entry(&doc_id, "members", "user1");
@@ -545,7 +545,7 @@ mod tests {
             .unwrap();
 
         // user1 is in the doc
-        let doc_id = format!("group/{}", create.group_id);
+        let doc_id = format!("group/{}/state", create.group_id);
         let val = gm
             .doc_manager
             .read_nested_map_entry(&doc_id, "members", "user1");
@@ -629,7 +629,7 @@ mod tests {
         let plaintext = crypto::decrypt(&group_key, &encrypted).unwrap();
         assert!(!plaintext.is_empty());
 
-        let doc_id = format!("group/{}", create.group_id);
+        let doc_id = format!("group/{}/state", create.group_id);
         let pin = gm
             .doc_manager
             .read_nested_map_entry(&doc_id, "pins", "pin-1")
@@ -827,7 +827,7 @@ mod tests {
         let group_key = db_b.load_group_key(group_id).unwrap().unwrap();
         let diff = crate::crypto::decrypt(&group_key, &encrypted_diff).unwrap();
         doc_b
-            .apply_update(&format!("group/{group_id}"), &diff)
+            .apply_update(&format!("group/{group_id}/state"), &diff)
             .unwrap();
 
         // --- B receives A's chat message (simulates gossip delivery) ---
@@ -922,7 +922,7 @@ mod tests {
         let diff = crate::crypto::decrypt(&group_key, &encrypted_diff).unwrap();
         gm_d2
             .doc_manager
-            .apply_update(&format!("group/{group_id}"), &diff)
+            .apply_update(&format!("group/{group_id}/state"), &diff)
             .unwrap();
 
         // D2 should now see D1's pin and location.
@@ -947,7 +947,7 @@ mod tests {
             crate::crypto::decrypt(&group_key, &encrypted_diff_d2_to_d1).unwrap();
         gm_d1
             .doc_manager
-            .apply_update(&format!("group/{group_id}"), &diff_join)
+            .apply_update(&format!("group/{group_id}/state"), &diff_join)
             .unwrap();
 
         // D2 makes a change and sends the diff to D1.
@@ -960,7 +960,7 @@ mod tests {
         let diff_d2 = crate::crypto::decrypt(&group_key, &encrypted_update_d2).unwrap();
         gm_d1
             .doc_manager
-            .apply_update(&format!("group/{group_id}"), &diff_d2)
+            .apply_update(&format!("group/{group_id}/state"), &diff_d2)
             .unwrap();
 
         let state_d1 = gm_d1.get_group_state(group_id).await.unwrap();

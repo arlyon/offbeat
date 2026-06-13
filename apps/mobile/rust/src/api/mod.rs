@@ -683,12 +683,12 @@ impl AppNode {
         }
 
         // Notify local watchers so the UI picks up the new group state
-        let doc_id = format!("group/{}", result.group_id);
+        let doc_id = format!("group/{}/state", result.group_id);
         self.inner.notifier.notify_doc(&doc_id);
 
         // Broadcast initial state as GroupUpdate
         {
-            let doc_id = format!("group/{}", result.group_id);
+            let doc_id = format!("group/{}/state", result.group_id);
             // Ensure doc is created so encode_diff works
             self.inner.doc_manager.get_or_create(&doc_id);
             // Encode full state as diff from empty SV
@@ -763,7 +763,7 @@ impl AppNode {
         // Notify local watchers so the UI updates immediately
         self.inner
             .notifier
-            .notify_doc(&format!("group/{}", result.group_id));
+            .notify_doc(&format!("group/{}/state", result.group_id));
 
         Ok(GroupJoinResultDto {
             group_id: result.group_id,
@@ -782,7 +782,7 @@ impl AppNode {
             .leave_group(&group_id, &user_id)
             .await?;
         // Notify local watchers so the UI updates immediately
-        self.inner.notifier.notify_doc(&format!("group/{group_id}"));
+        self.inner.notifier.notify_doc(&format!("group/{group_id}/state"));
         Ok(())
     }
 
@@ -809,13 +809,13 @@ impl AppNode {
             .await?;
 
         // Notify local watchers so the UI updates immediately
-        self.inner.notifier.notify_doc(&format!("group/{group_id}"));
+        self.inner.notifier.notify_doc(&format!("group/{group_id}/state"));
 
         if let Some(group_key) = self.inner.db.load_group_key(&group_id)? {
             use offbeat_core::gossip_manager::{GossipMessage, encode_gossip_message};
             use offbeat_core::proto::GossipEnvelope;
             let gossip_msg = GossipMessage::GroupUpdate {
-                doc_id: format!("group/{group_id}"),
+                doc_id: format!("group/{group_id}/state"),
                 encrypted: encrypted.clone(),
                 group_key,
             };
@@ -853,13 +853,13 @@ impl AppNode {
             .await?;
 
         // Notify local watchers so the UI updates immediately
-        self.inner.notifier.notify_doc(&format!("group/{group_id}"));
+        self.inner.notifier.notify_doc(&format!("group/{group_id}/state"));
 
         if let Some(group_key) = self.inner.db.load_group_key(&group_id)? {
             use offbeat_core::gossip_manager::{GossipMessage, encode_gossip_message};
             use offbeat_core::proto::GossipEnvelope;
             let gossip_msg = GossipMessage::GroupUpdate {
-                doc_id: format!("group/{group_id}"),
+                doc_id: format!("group/{group_id}/state"),
                 encrypted: encrypted.clone(),
                 group_key,
             };
@@ -899,13 +899,13 @@ impl AppNode {
             .await?;
 
         // Notify local watchers so the UI updates immediately
-        self.inner.notifier.notify_doc(&format!("group/{group_id}"));
+        self.inner.notifier.notify_doc(&format!("group/{group_id}/state"));
 
         if let Some(group_key) = self.inner.db.load_group_key(&group_id)? {
             use offbeat_core::gossip_manager::{GossipMessage, encode_gossip_message};
             use offbeat_core::proto::GossipEnvelope;
             let gossip_msg = GossipMessage::GroupUpdate {
-                doc_id: format!("group/{group_id}"),
+                doc_id: format!("group/{group_id}/state"),
                 encrypted: encrypted.clone(),
                 group_key,
             };
@@ -1081,7 +1081,7 @@ impl AppNode {
         use std::sync::Arc;
         use tokio::sync::Mutex;
 
-        let doc_id = format!("group/{group_id}");
+        let doc_id = format!("group/{group_id}/state");
         let group_manager = Arc::clone(&self.inner.group_manager);
         let notifier = Arc::clone(&self.inner.notifier);
 

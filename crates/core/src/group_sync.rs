@@ -79,7 +79,7 @@ pub fn build_sync_offers(
     let mut offers = Vec::with_capacity(shared.len());
 
     for (group_id, key) in shared {
-        let doc_id = format!("group/{group_id}");
+        let doc_id = format!("group/{group_id}/state");
         doc_manager.get_or_create(&doc_id);
         let sv = doc_manager.get_state_vector(&doc_id)?;
         let encrypted_sv = crypto::encrypt(key, &sv)?;
@@ -114,7 +114,7 @@ pub fn apply_sync_offers(
             .ok_or_else(|| anyhow::anyhow!("no key for group {}", offer.group_id))?;
 
         let remote_sv = crypto::decrypt(key, &offer.encrypted_sv)?;
-        let doc_id = format!("group/{}", offer.group_id);
+        let doc_id = format!("group/{}/state", offer.group_id);
         doc_manager.get_or_create(&doc_id);
         let diff = doc_manager.encode_diff(&doc_id, &remote_sv)?;
         let encrypted_diff = crypto::encrypt(key, &diff)?;
@@ -223,7 +223,7 @@ mod tests {
         let group_id = crypto::group_id_from_key(&key);
 
         // Create a doc with some data
-        let doc_id = format!("group/{group_id}");
+        let doc_id = format!("group/{group_id}/state");
         dm.set_map_value(&doc_id, "name", "Test").unwrap();
 
         let shared = vec![(group_id.clone(), key)];
@@ -248,7 +248,7 @@ mod tests {
 
         let key = test_key();
         let group_id = crypto::group_id_from_key(&key);
-        let doc_id = format!("group/{group_id}");
+        let doc_id = format!("group/{group_id}/state");
 
         // Peer A has data
         dm_a.set_map_value(&doc_id, "name", "Test Group").unwrap();
@@ -321,7 +321,7 @@ mod tests {
         let diffs_a_to_b = apply_sync_offers(&offers, &a_groups, &dm_a).unwrap();
 
         // B applies A's diffs
-        let doc_id = format!("group/{group_id}");
+        let doc_id = format!("group/{group_id}/state");
         for (_, encrypted_diff) in &diffs_a_to_b {
             let diff = crypto::decrypt(&key_b, encrypted_diff).unwrap();
             dm_b.apply_update(&doc_id, &diff).unwrap();
