@@ -33,7 +33,13 @@
       "Bash(cargo build:*)",
       "Bash(find .:*)",
       "Bash(grep:*)",
-      "Bash(cargo doc:*)"
+      "Bash(cargo doc:*)",
+      "Read(//home/arlyon/.ssh/**)",
+      "Bash(gpg --list-secret-keys --keyid-format=long)",
+      "Bash(git config *)",
+      "Bash(gh auth *)",
+      "Read(//home/arlyon/.config/**)",
+      "Bash(echo \"exit:$?\")"
     ]
   },
   "enableAllProjectMcpServers": true,
