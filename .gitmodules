@@ -1,4 +1,4 @@
 [submodule "vendor/iroh-ble-transport"]
 	path = vendor/iroh-ble-transport
-	url = https://github.com/mcginty/iroh-ble-transport
+	url = https://github.com/arlyon/iroh-ble-transport
 	branch = main
