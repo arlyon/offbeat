@@ -39,7 +39,15 @@
       "Bash(git config *)",
       "Bash(gh auth *)",
       "Read(//home/arlyon/.config/**)",
-      "Bash(echo \"exit:$?\")"
+      "Bash(echo \"exit:$?\")",
+      "Bash(git add *)",
+      "Bash(git push *)",
+      "Bash(rfkill list *)",
+      "Bash(bluetoothctl show *)",
+      "Bash(bluetoothctl devices *)",
+      "Bash(timeout 12 bluetoothctl --timeout 10 scan on)",
+      "Read(//var/lib/bluetooth/**)",
+      "Bash(sudo -n ls -la /var/lib/bluetooth/D8:B3:2F:BD:BB:72/)"
     ]
   },
   "enableAllProjectMcpServers": true,
