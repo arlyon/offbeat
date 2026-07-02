@@ -2684,6 +2684,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
 
 [[package]]
+name = "meshtastic_protobufs"
+version = "2.7.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8320b33ad3b2f6c7d1f0d31aaf8e2f3c83471e120eea2a1d198e6713a86f16d3"
+dependencies = [
+ "prost",
+ "prost-types",
+]
+
+[[package]]
 name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3236,6 +3246,7 @@ dependencies = [
  "iroh-ble-transport",
  "iroh-gossip",
  "libc",
+ "meshtastic_protobufs",
  "parking_lot",
  "prost",
  "prost-build",

@@ -206,11 +206,10 @@ async fn ble_reconnect_tick(
         // the initial sighting if the topic wasn't subscribed yet (auto-sub race).
         let snapshot = ble_transport.snapshot_peers();
         for info in snapshot {
-            if let Some(eid) = info.verified_endpoint {
-                if !targets.contains(&eid) {
+            if let Some(eid) = info.verified_endpoint
+                && !targets.contains(&eid) {
                     targets.push(eid);
                 }
-            }
         }
 
         if targets.is_empty() {

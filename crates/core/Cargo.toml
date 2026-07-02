@@ -23,6 +23,7 @@ iroh = { version = "1.0.0-rc.0", default-features = false, features = ["unstable
 iroh-base = "1.0.0-rc.0"
 iroh-ble-transport = { path = "../../vendor/iroh-ble-transport/crates/iroh-ble-transport" }
 iroh-gossip = "0.99.0"
+meshtastic_protobufs = "2.7.8"
 parking_lot = "0.12"
 prost = "0.13"
 rand = "0.10.1"

@@ -5,18 +5,23 @@
 //! paired Meshtastic device over Bluetooth, and that device carries Offbeat
 //! packets in Meshtastic `PRIVATE_APP` payloads over LoRa.
 //!
-//! This module defines the Offbeat `PRIVATE_APP` payload. It intentionally does
-//! not depend on the GPL `meshtastic` crate; production Bluetooth integration
-//! should map `MeshtasticPacket::encode()` bytes into Meshtastic protobufs using
-//! `PortNum::PRIVATE_APP`.
+//! This module defines the Offbeat `PRIVATE_APP` payload and wraps it in the
+//! official Meshtastic protobuf envelope via the non-GPL `meshtastic_protobufs`
+//! crate. It intentionally does not link the GPL `meshtastic` crate; platform
+//! Bluetooth bridges should write the encoded `ToRadio` bytes to the official
+//! Meshtastic GATT characteristics.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+
+use meshtastic_protobufs::meshtastic::{self, from_radio, mesh_packet, to_radio};
+use prost::Message;
 
 use super::profile::{SyncEncoding, SyncPayloadKind, SyncPriority, TransportProfile};
 
 pub const MESHTASTIC_PROFILE: TransportProfile = TransportProfile::Constrained;
 /// Meshtastic protobuf `PortNum::PRIVATE_APP`.
-pub const MESHTASTIC_PRIVATE_APP_PORTNUM: u32 = 256;
+pub const MESHTASTIC_PRIVATE_APP_PORTNUM: u32 = meshtastic::PortNum::PrivateApp as u32;
+pub const MESHTASTIC_BROADCAST_NODE: u32 = 0xffff_ffff;
 /// Conservative safe app payload budget used by Meshtastic docs/firmware.
 pub const SAFE_PRIVATE_APP_PAYLOAD_BYTES: usize = 228;
 pub const FRAME_VERSION: u8 = 1;
@@ -132,6 +137,87 @@ pub struct MeshtasticPacket {
     pub fragment_index: u8,
     pub fragment_total: u8,
     pub fragment: Vec<u8>,
+}
+
+pub fn encode_to_radio_private_app(
+    private_app_payload: Vec<u8>,
+    priority: SyncPriority,
+    hop_limit: u8,
+    want_ack: bool,
+) -> anyhow::Result<Vec<u8>> {
+    let data = meshtastic::Data {
+        portnum: meshtastic::PortNum::PrivateApp as i32,
+        payload: private_app_payload,
+        want_response: false,
+        ..Default::default()
+    };
+    let packet = meshtastic::MeshPacket {
+        to: MESHTASTIC_BROADCAST_NODE,
+        hop_limit: hop_limit as u32,
+        want_ack,
+        priority: mesh_priority(priority) as i32,
+        payload_variant: Some(mesh_packet::PayloadVariant::Decoded(data)),
+        ..Default::default()
+    };
+    Ok(meshtastic::ToRadio {
+        payload_variant: Some(to_radio::PayloadVariant::Packet(packet)),
+    }
+    .encode_to_vec())
+}
+
+pub fn decode_to_radio_private_app(raw: &[u8]) -> anyhow::Result<Option<Vec<u8>>> {
+    let to_radio = meshtastic::ToRadio::decode(raw)?;
+    let Some(to_radio::PayloadVariant::Packet(packet)) = to_radio.payload_variant else {
+        return Ok(None);
+    };
+    private_app_payload_from_mesh_packet(packet)
+}
+
+pub fn decode_from_radio_private_app(raw: &[u8]) -> anyhow::Result<Option<Vec<u8>>> {
+    let from_radio = meshtastic::FromRadio::decode(raw)?;
+    let Some(from_radio::PayloadVariant::Packet(packet)) = from_radio.payload_variant else {
+        return Ok(None);
+    };
+    private_app_payload_from_mesh_packet(packet)
+}
+
+#[cfg(test)]
+fn encode_from_radio_private_app(private_app_payload: Vec<u8>) -> Vec<u8> {
+    let data = meshtastic::Data {
+        portnum: meshtastic::PortNum::PrivateApp as i32,
+        payload: private_app_payload,
+        ..Default::default()
+    };
+    let packet = meshtastic::MeshPacket {
+        payload_variant: Some(mesh_packet::PayloadVariant::Decoded(data)),
+        ..Default::default()
+    };
+    meshtastic::FromRadio {
+        id: 1,
+        payload_variant: Some(from_radio::PayloadVariant::Packet(packet)),
+    }
+    .encode_to_vec()
+}
+
+fn private_app_payload_from_mesh_packet(
+    packet: meshtastic::MeshPacket,
+) -> anyhow::Result<Option<Vec<u8>>> {
+    let Some(mesh_packet::PayloadVariant::Decoded(data)) = packet.payload_variant else {
+        return Ok(None);
+    };
+    if data.portnum != meshtastic::PortNum::PrivateApp as i32 {
+        return Ok(None);
+    }
+    Ok(Some(data.payload))
+}
+
+fn mesh_priority(priority: SyncPriority) -> mesh_packet::Priority {
+    match priority {
+        SyncPriority::P0Critical => mesh_packet::Priority::Alert,
+        SyncPriority::P1High => mesh_packet::Priority::High,
+        SyncPriority::P2Normal => mesh_packet::Priority::Reliable,
+        SyncPriority::P3Idle => mesh_packet::Priority::Background,
+    }
 }
 
 impl MeshtasticPacket {
@@ -253,7 +339,9 @@ impl MeshtasticReassembly {
             return Ok(None);
         }
 
-        let entry = self.partial.remove(&key).expect("entry exists");
+        let Some(entry) = self.partial.remove(&key) else {
+            anyhow::bail!("complete Meshtastic fragment entry disappeared");
+        };
         let mut body = Vec::new();
         for fragment in entry.fragments.into_iter().flatten() {
             body.extend_from_slice(&fragment);
@@ -347,14 +435,11 @@ pub trait MeshtasticAdapter {
 
     fn is_connected(&self) -> bool;
 
-    /// Send a raw Offbeat `PRIVATE_APP` payload. The Bluetooth/protobuf layer is
-    /// responsible for putting these bytes into a Meshtastic `ToRadio` protobuf
-    /// with port 256.
-    fn send_private_app(&mut self, payload: &[u8]) -> anyhow::Result<()>;
+    /// Send a Meshtastic `ToRadio` protobuf to the sidecar's ToRadio characteristic.
+    fn send_to_radio(&mut self, to_radio_protobuf: &[u8]) -> anyhow::Result<()>;
 
-    /// Receive a raw Offbeat `PRIVATE_APP` payload extracted from Meshtastic
-    /// `FromRadio` notifications.
-    fn try_recv_private_app(&mut self) -> anyhow::Result<Option<Vec<u8>>>;
+    /// Receive a Meshtastic `FromRadio` protobuf from the sidecar's FromRadio notifications.
+    fn try_recv_from_radio(&mut self) -> anyhow::Result<Option<Vec<u8>>>;
 }
 
 #[derive(Default)]
@@ -412,15 +497,15 @@ impl MeshtasticAdapter for InMemoryMeshtasticAdapter {
         self.connected.is_some()
     }
 
-    fn send_private_app(&mut self, payload: &[u8]) -> anyhow::Result<()> {
+    fn send_to_radio(&mut self, to_radio_protobuf: &[u8]) -> anyhow::Result<()> {
         if !self.is_connected() {
             anyhow::bail!("Meshtastic sidecar is not connected");
         }
-        self.outbound.push(payload.to_vec());
+        self.outbound.push(to_radio_protobuf.to_vec());
         Ok(())
     }
 
-    fn try_recv_private_app(&mut self) -> anyhow::Result<Option<Vec<u8>>> {
+    fn try_recv_from_radio(&mut self) -> anyhow::Result<Option<Vec<u8>>> {
         if !self.is_connected() {
             return Ok(None);
         }
@@ -572,7 +657,9 @@ impl<A: MeshtasticAdapter> MeshtasticSidecar<A> {
         }
         while let Some(frame) = self.tx_queue.pop_front() {
             for payload in frame.encode_private_app_payloads()? {
-                self.adapter.send_private_app(&payload)?;
+                let to_radio =
+                    encode_to_radio_private_app(payload, frame.kind.priority(), frame.ttl, false)?;
+                self.adapter.send_to_radio(&to_radio)?;
                 self.tx_packets += 1;
             }
         }
@@ -581,8 +668,11 @@ impl<A: MeshtasticAdapter> MeshtasticSidecar<A> {
 
     pub fn poll_rx(&mut self) -> anyhow::Result<Vec<OffbeatSyncFrame>> {
         let mut frames = Vec::new();
-        while let Some(payload) = self.adapter.try_recv_private_app()? {
+        while let Some(from_radio) = self.adapter.try_recv_from_radio()? {
             self.rx_packets += 1;
+            let Some(payload) = decode_from_radio_private_app(&from_radio)? else {
+                continue;
+            };
             let packet = MeshtasticPacket::decode(&payload)?;
             if let Some(frame) = self.reassembly.push(packet)? {
                 if self.dedupe.remember(frame.topic_tag, frame.message_id) {
@@ -752,9 +842,17 @@ mod tests {
         assert!(received.is_empty());
         assert_eq!(sidecar.adapter().outbound().len(), 1);
         assert_eq!(sidecar.status().tx_packets, 1);
+        assert_eq!(
+            decode_to_radio_private_app(&sidecar.adapter().outbound()[0])
+                .unwrap()
+                .unwrap(),
+            frame.encode_private_app_payloads().unwrap().remove(0)
+        );
 
         let payload = frame.encode_private_app_payloads().unwrap().remove(0);
-        sidecar.adapter_mut().push_inbound(payload);
+        sidecar
+            .adapter_mut()
+            .push_inbound(encode_from_radio_private_app(payload));
         let received = sidecar.tick().unwrap();
         assert_eq!(received, vec![frame]);
         assert_eq!(sidecar.status().rx_packets, 1);
@@ -777,11 +875,38 @@ mod tests {
         .encode_private_app_payloads()
         .unwrap()
         .remove(0);
-        sidecar.adapter_mut().push_inbound(payload.clone());
-        sidecar.adapter_mut().push_inbound(payload);
+        sidecar
+            .adapter_mut()
+            .push_inbound(encode_from_radio_private_app(payload.clone()));
+        sidecar
+            .adapter_mut()
+            .push_inbound(encode_from_radio_private_app(payload));
         let received = sidecar.tick().unwrap();
         assert_eq!(received.len(), 1);
         assert_eq!(sidecar.status().dropped_duplicates, 1);
+    }
+
+    #[test]
+    fn from_radio_ignores_non_private_app_packets() {
+        let data = meshtastic::Data {
+            portnum: meshtastic::PortNum::TextMessageApp as i32,
+            payload: b"not offbeat".to_vec(),
+            ..Default::default()
+        };
+        let packet = meshtastic::MeshPacket {
+            payload_variant: Some(mesh_packet::PayloadVariant::Decoded(data)),
+            ..Default::default()
+        };
+        let from_radio = meshtastic::FromRadio {
+            id: 1,
+            payload_variant: Some(from_radio::PayloadVariant::Packet(packet)),
+        }
+        .encode_to_vec();
+        assert!(
+            decode_from_radio_private_app(&from_radio)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
