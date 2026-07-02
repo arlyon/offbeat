@@ -32,6 +32,8 @@ Wi-Fi Aware/NAN is the primary no-access-point `Full` route. Android supports it
 
 Meshtastic is therefore not a separate product/event protocol. It is the `Constrained` physical route for the shared Offbeat sync scheduler. The phone talks to a paired Meshtastic device over Bluetooth; that device carries Offbeat compact frames over LoRa `PRIVATE_APP` packets.
 
+Offbeat's Meshtastic `PRIVATE_APP` payload has an explicit packet protocol: magic/version, logical payload kind, scheduler priority, 8-byte topic tag, 8-byte message id, TTL, fragment index/total, and compact body bytes. The topic tag is keyed/hashed so raw group ids never appear on LoRa. Reassembly and dedupe happen on `(topic_tag, message_id)`. Bulk CRDT sync and chat-history payloads are rejected before packetization.
+
 ---
 
 ## Problem Statement

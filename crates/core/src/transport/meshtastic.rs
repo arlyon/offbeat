@@ -1,28 +1,39 @@
-//! Meshtastic route adapter.
+//! Meshtastic route adapter and packet protocol.
 //!
 //! Meshtastic is modeled as a constrained physical path for the shared Offbeat
-//! sync protocol, not as a separate semantic event lane. The bytes carried over
-//! `PRIVATE_APP` are compact encodings of normal Offbeat resource payloads
-//! selected by `TransportProfile::Constrained`.
+//! sync protocol, not as a separate semantic event lane. The phone talks to a
+//! paired Meshtastic device over Bluetooth, and that device carries Offbeat
+//! packets in Meshtastic `PRIVATE_APP` payloads over LoRa.
 //!
-//! Hardware integration is expected to sit behind `MeshtasticAdapter`:
-//! phone ⇄ Bluetooth ⇄ Meshtastic card ⇄ LoRa mesh ⇄ Meshtastic card ⇄ Bluetooth ⇄ phone.
+//! This module defines the Offbeat `PRIVATE_APP` payload. It intentionally does
+//! not depend on the GPL `meshtastic` crate; production Bluetooth integration
+//! should map `MeshtasticPacket::encode()` bytes into Meshtastic protobufs using
+//! `PortNum::PRIVATE_APP`.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
-use super::profile::{SyncEncoding, SyncPayloadKind, TransportProfile};
+use super::profile::{SyncEncoding, SyncPayloadKind, SyncPriority, TransportProfile};
 
 pub const MESHTASTIC_PROFILE: TransportProfile = TransportProfile::Constrained;
+/// Meshtastic protobuf `PortNum::PRIVATE_APP`.
+pub const MESHTASTIC_PRIVATE_APP_PORTNUM: u32 = 256;
+/// Conservative safe app payload budget used by Meshtastic docs/firmware.
+pub const SAFE_PRIVATE_APP_PAYLOAD_BYTES: usize = 228;
 pub const FRAME_VERSION: u8 = 1;
 pub const DEFAULT_TTL: u8 = 3;
+pub const TOPIC_TAG_BYTES: usize = 8;
 pub const MESSAGE_ID_BYTES: usize = 8;
-pub const HEADER_BYTES: usize = 14;
+pub const PACKET_HEADER_BYTES: usize = 27;
+pub const MAX_FRAGMENTS: u8 = 4;
+const MAGIC: [u8; 2] = *b"OB";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OffbeatSyncFrame {
     pub version: u8,
     pub profile: TransportProfile,
     pub kind: SyncPayloadKind,
+    /// Short keyed/hash tag for the Offbeat topic/resource. Never put raw group ids on LoRa.
+    pub topic_tag: [u8; TOPIC_TAG_BYTES],
     pub message_id: [u8; MESSAGE_ID_BYTES],
     pub ttl: u8,
     /// Compact body for `kind`; already signed/encrypted by higher layers where required.
@@ -32,6 +43,7 @@ pub struct OffbeatSyncFrame {
 impl OffbeatSyncFrame {
     pub fn new(
         kind: SyncPayloadKind,
+        topic_tag: [u8; TOPIC_TAG_BYTES],
         message_id: [u8; MESSAGE_ID_BYTES],
         ttl: u8,
         body: Vec<u8>,
@@ -41,6 +53,7 @@ impl OffbeatSyncFrame {
                 version: FRAME_VERSION,
                 profile: MESHTASTIC_PROFILE,
                 kind,
+                topic_tag,
                 message_id,
                 ttl,
                 body,
@@ -54,67 +67,225 @@ impl OffbeatSyncFrame {
         }
     }
 
-    pub fn encode(&self) -> anyhow::Result<Vec<u8>> {
-        if self.version != FRAME_VERSION {
-            anyhow::bail!("unsupported frame version {}", self.version);
+    /// Encode this logical frame into one or more Meshtastic `PRIVATE_APP` payloads.
+    pub fn encode_private_app_payloads(&self) -> anyhow::Result<Vec<Vec<u8>>> {
+        self.encode_private_app_payloads_with_mtu(SAFE_PRIVATE_APP_PAYLOAD_BYTES)
+    }
+
+    fn encode_private_app_payloads_with_mtu(&self, mtu: usize) -> anyhow::Result<Vec<Vec<u8>>> {
+        if mtu <= PACKET_HEADER_BYTES {
+            anyhow::bail!("Meshtastic MTU {mtu} leaves no body room");
         }
-        let max_bytes = match self.profile.decide(self.kind).encoding {
-            SyncEncoding::CompactFrame { max_bytes } => max_bytes,
-            _ => anyhow::bail!(
-                "frame kind {:?} is not compact for {:?}",
-                self.kind,
-                self.profile
-            ),
-        };
-        if self.body.len() > max_bytes {
-            anyhow::bail!(
-                "compact Meshtastic body is {} bytes; max is {max_bytes}",
-                self.body.len()
-            );
-        }
-        if self.body.len() > u16::MAX as usize {
-            anyhow::bail!("body too large for frame length");
+        let chunk_bytes = mtu - PACKET_HEADER_BYTES;
+        let total = self.body.len().div_ceil(chunk_bytes).max(1);
+        if total > MAX_FRAGMENTS as usize {
+            anyhow::bail!("Meshtastic frame needs {total} fragments; max is {MAX_FRAGMENTS}");
         }
 
-        let mut out = Vec::with_capacity(HEADER_BYTES + self.body.len());
+        let mut packets = Vec::with_capacity(total);
+        for index in 0..total {
+            let start = index * chunk_bytes;
+            let end = usize::min(start + chunk_bytes, self.body.len());
+            let packet = MeshtasticPacket {
+                version: self.version,
+                kind: self.kind,
+                priority: self.kind.priority(),
+                topic_tag: self.topic_tag,
+                message_id: self.message_id,
+                ttl: self.ttl,
+                fragment_index: index as u8,
+                fragment_total: total as u8,
+                fragment: self.body[start..end].to_vec(),
+            };
+            packets.push(packet.encode()?);
+        }
+        Ok(packets)
+    }
+}
+
+/// Offbeat's Meshtastic `PRIVATE_APP` payload packet.
+///
+/// Binary layout, all multibyte integers big-endian:
+///
+/// ```text
+/// magic[2] = "OB"
+/// version: u8
+/// flags: u8             // reserved, currently 0
+/// kind: u8              // SyncPayloadKind
+/// priority: u8          // SyncPriority, for radio queues
+/// topic_tag[8]
+/// message_id[8]
+/// ttl: u8
+/// fragment_index: u8
+/// fragment_total: u8
+/// fragment_len: u16
+/// fragment bytes...
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MeshtasticPacket {
+    pub version: u8,
+    pub kind: SyncPayloadKind,
+    pub priority: SyncPriority,
+    pub topic_tag: [u8; TOPIC_TAG_BYTES],
+    pub message_id: [u8; MESSAGE_ID_BYTES],
+    pub ttl: u8,
+    pub fragment_index: u8,
+    pub fragment_total: u8,
+    pub fragment: Vec<u8>,
+}
+
+impl MeshtasticPacket {
+    pub fn encode(&self) -> anyhow::Result<Vec<u8>> {
+        if self.version != FRAME_VERSION {
+            anyhow::bail!("unsupported packet version {}", self.version);
+        }
+        if self.fragment_total == 0 || self.fragment_total > MAX_FRAGMENTS {
+            anyhow::bail!("invalid fragment_total {}", self.fragment_total);
+        }
+        if self.fragment_index >= self.fragment_total {
+            anyhow::bail!(
+                "fragment_index {} out of {}",
+                self.fragment_index,
+                self.fragment_total
+            );
+        }
+        if self.fragment.len() > u16::MAX as usize {
+            anyhow::bail!("fragment too large");
+        }
+        if PACKET_HEADER_BYTES + self.fragment.len() > SAFE_PRIVATE_APP_PAYLOAD_BYTES {
+            anyhow::bail!(
+                "PRIVATE_APP packet is {} bytes; safe max is {SAFE_PRIVATE_APP_PAYLOAD_BYTES}",
+                PACKET_HEADER_BYTES + self.fragment.len()
+            );
+        }
+
+        let mut out = Vec::with_capacity(PACKET_HEADER_BYTES + self.fragment.len());
+        out.extend_from_slice(&MAGIC);
         out.push(self.version);
-        out.push(profile_to_u8(self.profile));
+        out.push(0); // flags, reserved
         out.push(kind_to_u8(self.kind));
-        out.push(self.ttl);
+        out.push(priority_to_u8(self.priority));
+        out.extend_from_slice(&self.topic_tag);
         out.extend_from_slice(&self.message_id);
-        out.extend_from_slice(&(self.body.len() as u16).to_be_bytes());
-        out.extend_from_slice(&self.body);
+        out.push(self.ttl);
+        out.push(self.fragment_index);
+        out.push(self.fragment_total);
+        out.extend_from_slice(&(self.fragment.len() as u16).to_be_bytes());
+        out.extend_from_slice(&self.fragment);
         Ok(out)
     }
 
     pub fn decode(raw: &[u8]) -> anyhow::Result<Self> {
-        if raw.len() < HEADER_BYTES {
-            anyhow::bail!("frame too short");
+        if raw.len() < PACKET_HEADER_BYTES {
+            anyhow::bail!("PRIVATE_APP payload too short");
         }
-        let version = raw[0];
+        if raw[0..2] != MAGIC {
+            anyhow::bail!("not an Offbeat Meshtastic packet");
+        }
+        let version = raw[2];
         if version != FRAME_VERSION {
-            anyhow::bail!("unsupported frame version {version}");
+            anyhow::bail!("unsupported packet version {version}");
         }
-        let profile = profile_from_u8(raw[1])?;
-        if profile != MESHTASTIC_PROFILE {
-            anyhow::bail!("Meshtastic adapter received {profile:?} frame");
+        let flags = raw[3];
+        if flags != 0 {
+            anyhow::bail!("unsupported packet flags {flags}");
         }
-        let kind = kind_from_u8(raw[2])?;
-        let ttl = raw[3];
+        let kind = kind_from_u8(raw[4])?;
+        let priority = priority_from_u8(raw[5])?;
+        let mut topic_tag = [0u8; TOPIC_TAG_BYTES];
+        topic_tag.copy_from_slice(&raw[6..14]);
         let mut message_id = [0u8; MESSAGE_ID_BYTES];
-        message_id.copy_from_slice(&raw[4..12]);
-        let body_len = u16::from_be_bytes([raw[12], raw[13]]) as usize;
-        if raw.len() != HEADER_BYTES + body_len {
-            anyhow::bail!("frame body length mismatch");
+        message_id.copy_from_slice(&raw[14..22]);
+        let ttl = raw[22];
+        let fragment_index = raw[23];
+        let fragment_total = raw[24];
+        if fragment_total == 0 || fragment_total > MAX_FRAGMENTS {
+            anyhow::bail!("invalid fragment_total {fragment_total}");
         }
-        Self::new(kind, message_id, ttl, raw[HEADER_BYTES..].to_vec())
+        if fragment_index >= fragment_total {
+            anyhow::bail!("fragment_index {fragment_index} out of {fragment_total}");
+        }
+        let fragment_len = u16::from_be_bytes([raw[25], raw[26]]) as usize;
+        if raw.len() != PACKET_HEADER_BYTES + fragment_len {
+            anyhow::bail!("fragment length mismatch");
+        }
+
+        Ok(Self {
+            version,
+            kind,
+            priority,
+            topic_tag,
+            message_id,
+            ttl,
+            fragment_index,
+            fragment_total,
+            fragment: raw[PACKET_HEADER_BYTES..].to_vec(),
+        })
     }
+}
+
+/// Reassembles fragment packets into logical constrained sync frames.
+#[derive(Default)]
+pub struct MeshtasticReassembly {
+    partial: HashMap<PacketKey, PartialFrame>,
+}
+
+impl MeshtasticReassembly {
+    pub fn push(&mut self, packet: MeshtasticPacket) -> anyhow::Result<Option<OffbeatSyncFrame>> {
+        if packet.priority != packet.kind.priority() {
+            anyhow::bail!("packet priority does not match payload kind");
+        }
+        let key = PacketKey {
+            topic_tag: packet.topic_tag,
+            message_id: packet.message_id,
+        };
+        let entry = self.partial.entry(key).or_insert_with(|| PartialFrame {
+            kind: packet.kind,
+            ttl: packet.ttl,
+            fragments: vec![None; packet.fragment_total as usize],
+        });
+        if entry.kind != packet.kind || entry.fragments.len() != packet.fragment_total as usize {
+            anyhow::bail!("inconsistent Meshtastic fragments for message");
+        }
+
+        entry.fragments[packet.fragment_index as usize] = Some(packet.fragment);
+        if entry.fragments.iter().any(Option::is_none) {
+            return Ok(None);
+        }
+
+        let entry = self.partial.remove(&key).expect("entry exists");
+        let mut body = Vec::new();
+        for fragment in entry.fragments.into_iter().flatten() {
+            body.extend_from_slice(&fragment);
+        }
+        Ok(Some(OffbeatSyncFrame::new(
+            entry.kind,
+            key.topic_tag,
+            key.message_id,
+            entry.ttl,
+            body,
+        )?))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct PacketKey {
+    topic_tag: [u8; TOPIC_TAG_BYTES],
+    message_id: [u8; MESSAGE_ID_BYTES],
+}
+
+struct PartialFrame {
+    kind: SyncPayloadKind,
+    ttl: u8,
+    fragments: Vec<Option<Vec<u8>>>,
 }
 
 /// Hardware-facing adapter. Production implementations talk to a paired
 /// Meshtastic device over Bluetooth; tests can use `InMemoryMeshtasticAdapter`.
 pub trait MeshtasticAdapter {
-    fn send_private_app(&mut self, frame: &[u8]) -> anyhow::Result<()>;
+    /// Send a raw Offbeat `PRIVATE_APP` payload. The Bluetooth/protobuf layer is
+    /// responsible for putting these bytes into Meshtastic port 256.
+    fn send_private_app(&mut self, payload: &[u8]) -> anyhow::Result<()>;
     fn try_recv_private_app(&mut self) -> anyhow::Result<Option<Vec<u8>>>;
 }
 
@@ -125,8 +296,8 @@ pub struct InMemoryMeshtasticAdapter {
 }
 
 impl InMemoryMeshtasticAdapter {
-    pub fn push_inbound(&mut self, frame: Vec<u8>) {
-        self.inbound.push_back(frame);
+    pub fn push_inbound(&mut self, payload: Vec<u8>) {
+        self.inbound.push_back(payload);
     }
 
     pub fn outbound(&self) -> &[Vec<u8>] {
@@ -135,8 +306,8 @@ impl InMemoryMeshtasticAdapter {
 }
 
 impl MeshtasticAdapter for InMemoryMeshtasticAdapter {
-    fn send_private_app(&mut self, frame: &[u8]) -> anyhow::Result<()> {
-        self.outbound.push(frame.to_vec());
+    fn send_private_app(&mut self, payload: &[u8]) -> anyhow::Result<()> {
+        self.outbound.push(payload.to_vec());
         Ok(())
     }
 
@@ -147,30 +318,20 @@ impl MeshtasticAdapter for InMemoryMeshtasticAdapter {
 
 #[derive(Default)]
 pub struct MeshDedupe {
-    seen: HashSet<[u8; MESSAGE_ID_BYTES]>,
+    seen: HashSet<PacketKey>,
 }
 
 impl MeshDedupe {
-    /// Returns true when this message id has not been seen before.
-    pub fn remember(&mut self, message_id: [u8; MESSAGE_ID_BYTES]) -> bool {
-        self.seen.insert(message_id)
-    }
-}
-
-fn profile_to_u8(profile: TransportProfile) -> u8 {
-    match profile {
-        TransportProfile::Constrained => 0,
-        TransportProfile::LowBandwidth => 1,
-        TransportProfile::Full => 2,
-    }
-}
-
-fn profile_from_u8(value: u8) -> anyhow::Result<TransportProfile> {
-    match value {
-        0 => Ok(TransportProfile::Constrained),
-        1 => Ok(TransportProfile::LowBandwidth),
-        2 => Ok(TransportProfile::Full),
-        _ => anyhow::bail!("unknown transport profile {value}"),
+    /// Returns true when this topic/message pair has not been seen before.
+    pub fn remember(
+        &mut self,
+        topic_tag: [u8; TOPIC_TAG_BYTES],
+        message_id: [u8; MESSAGE_ID_BYTES],
+    ) -> bool {
+        self.seen.insert(PacketKey {
+            topic_tag,
+            message_id,
+        })
     }
 }
 
@@ -197,29 +358,87 @@ fn kind_from_u8(value: u8) -> anyhow::Result<SyncPayloadKind> {
     }
 }
 
+fn priority_to_u8(priority: SyncPriority) -> u8 {
+    match priority {
+        SyncPriority::P0Critical => 0,
+        SyncPriority::P1High => 1,
+        SyncPriority::P2Normal => 2,
+        SyncPriority::P3Idle => 3,
+    }
+}
+
+fn priority_from_u8(value: u8) -> anyhow::Result<SyncPriority> {
+    match value {
+        0 => Ok(SyncPriority::P0Critical),
+        1 => Ok(SyncPriority::P1High),
+        2 => Ok(SyncPriority::P2Normal),
+        3 => Ok(SyncPriority::P3Idle),
+        _ => anyhow::bail!("unknown sync priority {value}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    const TOPIC: [u8; TOPIC_TAG_BYTES] = *b"topic123";
+    const MSG: [u8; MESSAGE_ID_BYTES] = *b"msgid123";
+
     #[test]
-    fn frame_round_trips_as_constrained_sync_payload() {
+    fn private_app_packet_round_trips_as_constrained_sync_payload() {
         let frame = OffbeatSyncFrame::new(
             SyncPayloadKind::GroupUpdate,
-            *b"12345678",
+            TOPIC,
+            MSG,
             DEFAULT_TTL,
             b"compact group op".to_vec(),
         )
         .unwrap();
-        let decoded = OffbeatSyncFrame::decode(&frame.encode().unwrap()).unwrap();
+        let payloads = frame.encode_private_app_payloads().unwrap();
+        assert_eq!(payloads.len(), 1);
+        assert!(payloads[0].len() <= SAFE_PRIVATE_APP_PAYLOAD_BYTES);
+
+        let packet = MeshtasticPacket::decode(&payloads[0]).unwrap();
+        assert_eq!(packet.topic_tag, TOPIC);
+        assert_eq!(packet.message_id, MSG);
+        assert_eq!(packet.priority, SyncPriority::P1High);
+
+        let mut reassembly = MeshtasticReassembly::default();
+        let decoded = reassembly.push(packet).unwrap().unwrap();
         assert_eq!(decoded, frame);
         assert_eq!(decoded.profile, TransportProfile::Constrained);
+    }
+
+    #[test]
+    fn packet_protocol_fragments_and_reassembles() {
+        let frame = OffbeatSyncFrame::new(
+            SyncPayloadKind::GroupChat,
+            TOPIC,
+            MSG,
+            DEFAULT_TTL,
+            vec![42u8; 120],
+        )
+        .unwrap();
+        let payloads = frame.encode_private_app_payloads_with_mtu(70).unwrap();
+        assert!(payloads.len() > 1);
+        assert!(payloads.iter().all(|payload| payload.len() <= 70));
+
+        let mut reassembly = MeshtasticReassembly::default();
+        let mut decoded = None;
+        for payload in payloads {
+            decoded = reassembly
+                .push(MeshtasticPacket::decode(&payload).unwrap())
+                .unwrap();
+        }
+        assert_eq!(decoded.unwrap(), frame);
     }
 
     #[test]
     fn meshtastic_rejects_bulk_sync_payloads() {
         let err = OffbeatSyncFrame::new(
             SyncPayloadKind::BulkCrdtSync,
-            *b"12345678",
+            TOPIC,
+            MSG,
             DEFAULT_TTL,
             b"yrs diff".to_vec(),
         )
@@ -231,7 +450,8 @@ mod tests {
     fn meshtastic_rejects_oversize_compact_payloads() {
         let err = OffbeatSyncFrame::new(
             SyncPayloadKind::GroupChat,
-            *b"12345678",
+            TOPIC,
+            MSG,
             DEFAULT_TTL,
             vec![0u8; MESHTASTIC_PROFILE.max_payload_bytes() + 1],
         )
@@ -240,9 +460,27 @@ mod tests {
     }
 
     #[test]
-    fn dedupe_accepts_first_delivery_only() {
+    fn dedupe_is_topic_scoped() {
         let mut dedupe = MeshDedupe::default();
-        assert!(dedupe.remember(*b"12345678"));
-        assert!(!dedupe.remember(*b"12345678"));
+        assert!(dedupe.remember(TOPIC, MSG));
+        assert!(!dedupe.remember(TOPIC, MSG));
+        assert!(dedupe.remember(*b"topic124", MSG));
+    }
+
+    #[test]
+    fn malformed_packets_are_rejected_before_reassembly() {
+        let mut raw = OffbeatSyncFrame::new(
+            SyncPayloadKind::FestivalUpdate,
+            TOPIC,
+            MSG,
+            DEFAULT_TTL,
+            b"alert".to_vec(),
+        )
+        .unwrap()
+        .encode_private_app_payloads()
+        .unwrap()
+        .remove(0);
+        raw[0] = b'X';
+        assert!(MeshtasticPacket::decode(&raw).is_err());
     }
 }
