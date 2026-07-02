@@ -47,6 +47,16 @@
 			</array>
 		</dict>
 	</dict>
+	<key>WiFiAwareServices</key>
+	<dict>
+		<key>_offbeat-sync._udp</key>
+		<dict>
+			<key>Publishable</key>
+			<dict/>
+			<key>Subscribable</key>
+			<dict/>
+		</dict>
+	</dict>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>Offbeat uses Bluetooth to sync with nearby festival-goers</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>

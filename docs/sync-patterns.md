@@ -28,6 +28,8 @@ Offbeat schedules the same logical resources across multiple physical paths and 
 - **LowBandwidth**: Bounded envelopes — group/festival state and recent group chat, with strict size limits.
 - **Constrained**: Compact encodings of the same logical resources — P0 festival updates, P1 group updates, P2 group chat, P3 festival chat only when idle. No bulk Yrs sync and no chat-history catch-up.
 
+Wi-Fi Aware/NAN is the primary no-access-point `Full` route. Android supports it via `WifiAwareManager`/NDP on API 26+ when hardware and firmware expose `FEATURE_WIFI_AWARE`. iOS supports device-to-device/app-to-app Wi-Fi Aware from iOS 26 on supported hardware, using WiFiAware + Network.framework after DeviceDiscoveryUI/AccessorySetupKit pairing. When the platform data path yields native IP/UDP route hints, Offbeat feeds those into iroh; if a platform only exposes connection objects, the route sits behind an iroh custom transport adapter.
+
 Meshtastic is therefore not a separate product/event protocol. It is the `Constrained` physical route for the shared Offbeat sync scheduler. The phone talks to a paired Meshtastic device over Bluetooth; that device carries Offbeat compact frames over LoRa `PRIVATE_APP` packets.
 
 ---
