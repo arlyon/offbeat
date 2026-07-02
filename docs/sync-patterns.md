@@ -4,32 +4,31 @@
 
 ## Transport Hierarchy
 
-iroh automatically selects the best available transport:
+Offbeat schedules the same logical resources across multiple physical paths and selects a wire encoding based on each path's transport profile:
 
 | Transport | Range | Throughput | MTU | Fragmentation | Use Case |
 |-----------|-------|------------|-----|---------------|----------|
 | Internet | ∞ | Varies | 1500B | No | Full connectivity |
-| WiFi Direct | ~200m | ~250 Mbps | 1500B | No | Local high-speed sync |
+| Wi-Fi Aware / WiFi Direct | ~200m | high | 1500B | No | No-AP local high-speed sync |
 | BLE | ~10m | ~1 Mbps | 247B | Yes | Proximity, low power |
-| Meshtastic | ~3km | ~1 kbps | 228B | Yes | Long-range mesh |
+| Meshtastic card over Bluetooth | ~3km | ~1 kbps | ~228B | Avoid | Long-range constrained sync profile |
 
 ```
-┌─────────────────────────────────────────────────┐
-│ iroh selects best available path automatically  │
-├─────────────────────────────────────────────────┤
-│ 1. Internet (relay/direct)  ← full connectivity │
-│ 2. WiFi Direct              ← local high-speed  │
-│ 3. BLE                      ← proximity sync    │
-│ 4. Meshtastic               ← long-range mesh   │
-└─────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────┐
+│ Sync scheduler chooses a profile for each available path   │
+├────────────────────────────────────────────────────────────┤
+│ Full:        Internet, LAN, Wi-Fi Aware, WiFi Direct       │
+│ LowBandwidth: BLE                                          │
+│ Constrained: Meshtastic card over Bluetooth → LoRa mesh    │
+└────────────────────────────────────────────────────────────┘
 ```
 
-**Sync capabilities by transport:**
-- **Internet / WiFi Direct**: Full sync — all data types, no restrictions
-- **BLE**: Group state + recent group chat. Festival chat too large.
-- **Meshtastic**: Group state, check-ins, chat. All writes carry 68B
-  Ed25519 signature overhead except check-ins (GCM auth only).
-  See [`auth-protocol.md`](auth-protocol.md) for signing details.
+**Sync capabilities by transport profile:**
+- **Full**: Full sync — all data types, Yrs state-vector exchange, append-log catch-up, and chat history.
+- **LowBandwidth**: Bounded envelopes — group/festival state and recent group chat, with strict size limits.
+- **Constrained**: Compact encodings of the same logical resources — P0 festival updates, P1 group updates, P2 group chat, P3 festival chat only when idle. No bulk Yrs sync and no chat-history catch-up.
+
+Meshtastic is therefore not a separate product/event protocol. It is the `Constrained` physical route for the shared Offbeat sync scheduler. The phone talks to a paired Meshtastic device over Bluetooth; that device carries Offbeat compact frames over LoRa `PRIVATE_APP` packets.
 
 ---
 
@@ -515,61 +514,48 @@ Different transports have different bandwidth constraints. The sync coordinator 
 
 ```rust
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum TransportTier {
-    HighBandwidth,  // Internet, WiFi Direct (~250 Mbps)
-    LowBandwidth,   // BLE (~1 Mbps)
-    Constrained,    // Meshtastic (~1 kbps)
+enum TransportProfile {
+    Full,          // WebSocket, LAN, Wi-Fi Aware, WiFi Direct
+    LowBandwidth,  // BLE
+    Constrained,   // Meshtastic/LoRa
 }
 
-impl SyncCoordinator {
-    fn tier_for_peer(&self, peer: &NodeId) -> TransportTier {
-        match self.endpoint.best_transport_to(peer) {
-            Some(t) if t.is_internet() || t.is_wifi_direct() => TransportTier::HighBandwidth,
-            Some(t) if t.is_ble() => TransportTier::LowBandwidth,
-            Some(t) if t.is_meshtastic() => TransportTier::Constrained,
-            None => TransportTier::Constrained,  // Assume worst case
+enum SyncEncoding {
+    FullEnvelope,
+    BoundedEnvelope { max_bytes: usize },
+    CompactFrame { max_bytes: usize },
+    Suppressed,
+}
+
+impl TransportProfile {
+    fn decide(self, payload: SyncPayloadKind) -> SyncEncoding {
+        match (self, payload) {
+            (Self::Full, _) => SyncEncoding::FullEnvelope,
+            (Self::LowBandwidth, _) => SyncEncoding::BoundedEnvelope { max_bytes: 1200 },
+            (Self::Constrained, FestivalUpdate | GroupUpdate | GroupChat | FestivalChat) => {
+                SyncEncoding::CompactFrame { max_bytes: 200 }
+            }
+            (Self::Constrained, BulkCrdtSync | ChatHistory) => SyncEncoding::Suppressed,
         }
-    }
-
-    async fn sync_with_peer(&self, peer: &NodeId) -> Result<()> {
-        let tier = self.tier_for_peer(peer);
-
-        // Always sync Yrs state (small, critical)
-        self.sync_yrs_docs(peer).await?;
-
-        match tier {
-            TransportTier::HighBandwidth => {
-                // Full sync: all chat, full history available
-                self.sync_all_chat(peer).await?;
-            }
-            TransportTier::LowBandwidth => {
-                // Partial: group chat only, limited history
-                self.sync_group_chat(peer, limit: 50).await?;
-            }
-            TransportTier::Constrained => {
-                // Minimal: state only, no chat over mesh
-                // Yrs docs already synced above
-            }
-        }
-
-        Ok(())
     }
 }
 ```
 
-**Priority by transport:**
+**Encoding by transport profile:**
 
-| Data | Internet | WiFi Direct | BLE | Meshtastic |
-|------|----------|-------------|-----|------------|
-| Festival Yrs | ✓ | ✓ | ✓ | ✓ |
-| Group Yrs | ✓ | ✓ | ✓ | ✓ |
-| Group chat | Full | Full | Last 50 | — |
-| Stage chat | Full | Full | — | — |
+| Data | Full | LowBandwidth/BLE | Constrained/Meshtastic |
+|------|------|------------------|------------------------|
+| Festival update | Full envelope / catch-up | Bounded envelope | Compact signed update |
+| Group update | Encrypted Yrs diff | Bounded encrypted diff | Compact encrypted op |
+| Group chat | Full append log | Recent bounded batch | Short encrypted message |
+| Festival chat | Full append log | Usually suppressed | Idle-only compact message |
+| Bulk Yrs/chat history | ✓ | Bounded | Suppressed |
 
 This ensures:
-- Critical state syncs over any transport
-- Chat syncs when bandwidth allows
-- Mesh links aren't saturated with chat history
+- Resources keep the same logical semantics on every path
+- The wire encoding adapts to the available path
+- Meshtastic is a constrained transport profile, not a separate event protocol
+- Mesh links aren't saturated with bulk catch-up/history
 
 ---
 

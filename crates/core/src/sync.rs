@@ -18,6 +18,7 @@ use crate::key_cache::GroupKeyCache;
 use crate::notifier::ResourceNotifier;
 use crate::proto;
 use crate::resource::{Priority, ResourceKind, ResourceRegistry};
+use crate::transport::profile::TransportProfile;
 use crate::types::{ChatMessage, SignedUpdate};
 
 // ---------------------------------------------------------------------------
@@ -83,6 +84,12 @@ pub struct SyncReport {
 
 /// Abstract peer connection — works for both WS relay and iroh-gossip.
 pub trait PeerConnection: Send + Sync {
+    /// Bandwidth/cost profile for this path. Implementations override this for
+    /// BLE or Meshtastic; full paths keep the default.
+    fn transport_profile(&self) -> TransportProfile {
+        TransportProfile::Full
+    }
+
     /// Subscribe to a set of topic strings.
     fn subscribe(&self, topics: Vec<String>) -> impl Future<Output = anyhow::Result<()>> + Send;
 
@@ -412,9 +419,19 @@ impl SyncOrchestrator {
                 Ok((1, 0))
             }
             ResourceKind::AppendLog => {
+                let profile = peer.transport_profile();
+                if !profile.allows_chat_catchup() {
+                    tracing::debug!(
+                        topic,
+                        ?profile,
+                        "skipping append-log catch-up on constrained transport profile"
+                    );
+                    return Ok((0, 0));
+                }
+
                 let messages = self.db.get_chat_messages(topic, 1000, 0)?;
                 let csv = ChatStateVector::from_messages(&messages);
-                let envelopes = peer.chat_catchup(topic, &csv, 200).await?;
+                let envelopes = peer.chat_catchup(topic, &csv, profile.chat_catchup_limit()).await?;
                 // Peers that answer synchronously (the iroh ALPN catch-up) hand
                 // back the history we were missing; decode + persist it here,
                 // where the group-key cache lives. INSERT-OR-IGNORE in the DB
@@ -857,6 +874,35 @@ mod tests {
         local: Arc<crate::doc_manager::DocManager>,
     }
 
+    struct ConstrainedPeer;
+
+    impl PeerConnection for ConstrainedPeer {
+        fn transport_profile(&self) -> TransportProfile {
+            TransportProfile::Constrained
+        }
+
+        async fn subscribe(&self, _topics: Vec<String>) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn sv_exchange(&self, _doc_id: &str, _sv: &[u8]) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn chat_catchup(
+            &self,
+            _topic: &str,
+            _sv: &ChatStateVector,
+            _limit: u32,
+        ) -> anyhow::Result<Vec<proto::GossipEnvelope>> {
+            panic!("constrained transports must not perform append-log catch-up")
+        }
+
+        async fn broadcast(&self, _topic: &str, _data: &[u8]) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
     impl PeerConnection for InMemoryPeer {
         async fn subscribe(&self, _topics: Vec<String>) -> anyhow::Result<()> {
             Ok(())
@@ -882,6 +928,21 @@ mod tests {
         async fn broadcast(&self, _topic: &str, _data: &[u8]) -> anyhow::Result<()> {
             Ok(())
         }
+    }
+
+    #[tokio::test]
+    async fn test_constrained_profile_skips_append_log_catchup() {
+        let orchestrator = create_orchestrator();
+        let report = orchestrator
+            .sync_resource_impl(
+                "group/test/chat",
+                ResourceKind::AppendLog,
+                "group/test/chat",
+                &ConstrainedPeer,
+            )
+            .await
+            .unwrap();
+        assert_eq!(report, (0, 0));
     }
 
     #[tokio::test]
