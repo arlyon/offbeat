@@ -34,6 +34,8 @@ Meshtastic is therefore not a separate product/event protocol. It is the `Constr
 
 Offbeat's Meshtastic `PRIVATE_APP` payload has an explicit packet protocol: magic/version, logical payload kind, scheduler priority, 8-byte topic tag, 8-byte message id, TTL, fragment index/total, and compact body bytes. The topic tag is keyed/hashed so raw group ids never appear on LoRa. Reassembly and dedupe happen on `(topic_tag, message_id)`. Bulk CRDT sync and chat-history payloads are rejected before packetization.
 
+The Meshtastic lifecycle is managed explicitly: scan for the Meshtastic BLE service, connect to the selected/bonded sidecar, discover GATT services, subscribe to `FromRadio`, write `ToRadio` protobufs containing Offbeat `PRIVATE_APP` payloads, queue outbound frames, reconnect with backoff on disconnect, and expose counters for queued frames, TX/RX packets, RX frames, and duplicate drops.
+
 ---
 
 ## Problem Statement

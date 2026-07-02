@@ -280,22 +280,106 @@ struct PartialFrame {
     fragments: Vec<Option<Vec<u8>>>,
 }
 
+pub const MESHTASTIC_BLE_SERVICE_UUID: &str = "6ba1b218-15a8-461f-9fa8-5dcae273eafd";
+pub const MESHTASTIC_TO_RADIO_CHAR_UUID: &str = "f75c76d2-129e-4dad-a1dd-7866124401e7";
+pub const MESHTASTIC_FROM_RADIO_CHAR_UUID: &str = "2c55e69e-4993-11ed-b878-0242ac120002";
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct MeshtasticDeviceId(pub String);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MeshtasticDevice {
+    pub id: MeshtasticDeviceId,
+    pub name: Option<String>,
+    pub rssi: Option<i16>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MeshtasticConnectionState {
+    Stopped,
+    Scanning,
+    Connecting { device_id: MeshtasticDeviceId },
+    Connected { device_id: MeshtasticDeviceId },
+    Backoff { attempt: u32 },
+    Failed { error: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MeshtasticStatus {
+    pub state: MeshtasticConnectionState,
+    pub queued_frames: usize,
+    pub tx_packets: u64,
+    pub rx_packets: u64,
+    pub rx_frames: u64,
+    pub dropped_duplicates: u64,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MeshtasticSidecarConfig {
+    /// Preferred bonded/paired Meshtastic device. If absent, `start` scans and
+    /// connects to the first discovered Meshtastic BLE service.
+    pub preferred_device: Option<MeshtasticDeviceId>,
+    pub max_tx_queue: usize,
+}
+
+impl Default for MeshtasticSidecarConfig {
+    fn default() -> Self {
+        Self {
+            preferred_device: None,
+            max_tx_queue: 32,
+        }
+    }
+}
+
 /// Hardware-facing adapter. Production implementations talk to a paired
 /// Meshtastic device over Bluetooth; tests can use `InMemoryMeshtasticAdapter`.
 pub trait MeshtasticAdapter {
+    /// Start scanning for Meshtastic BLE devices exposing
+    /// `MESHTASTIC_BLE_SERVICE_UUID`.
+    fn start_scan(&mut self) -> anyhow::Result<Vec<MeshtasticDevice>>;
+
+    /// Connect to a sidecar and subscribe to `FROM_RADIO` notifications.
+    fn connect(&mut self, device_id: &MeshtasticDeviceId) -> anyhow::Result<()>;
+
+    /// Tear down GATT/notification state.
+    fn disconnect(&mut self) -> anyhow::Result<()>;
+
+    fn is_connected(&self) -> bool;
+
     /// Send a raw Offbeat `PRIVATE_APP` payload. The Bluetooth/protobuf layer is
-    /// responsible for putting these bytes into Meshtastic port 256.
+    /// responsible for putting these bytes into a Meshtastic `ToRadio` protobuf
+    /// with port 256.
     fn send_private_app(&mut self, payload: &[u8]) -> anyhow::Result<()>;
+
+    /// Receive a raw Offbeat `PRIVATE_APP` payload extracted from Meshtastic
+    /// `FromRadio` notifications.
     fn try_recv_private_app(&mut self) -> anyhow::Result<Option<Vec<u8>>>;
 }
 
 #[derive(Default)]
 pub struct InMemoryMeshtasticAdapter {
+    discovered: Vec<MeshtasticDevice>,
+    connected: Option<MeshtasticDeviceId>,
     outbound: Vec<Vec<u8>>,
     inbound: VecDeque<Vec<u8>>,
 }
 
 impl InMemoryMeshtasticAdapter {
+    pub fn with_device(id: impl Into<String>) -> Self {
+        let id = MeshtasticDeviceId(id.into());
+        Self {
+            discovered: vec![MeshtasticDevice {
+                id,
+                name: Some("mock-meshtastic".to_string()),
+                rssi: Some(-42),
+            }],
+            connected: None,
+            outbound: Vec::new(),
+            inbound: VecDeque::new(),
+        }
+    }
+
     pub fn push_inbound(&mut self, payload: Vec<u8>) {
         self.inbound.push_back(payload);
     }
@@ -306,12 +390,40 @@ impl InMemoryMeshtasticAdapter {
 }
 
 impl MeshtasticAdapter for InMemoryMeshtasticAdapter {
+    fn start_scan(&mut self) -> anyhow::Result<Vec<MeshtasticDevice>> {
+        Ok(self.discovered.clone())
+    }
+
+    fn connect(&mut self, device_id: &MeshtasticDeviceId) -> anyhow::Result<()> {
+        if self.discovered.iter().any(|device| &device.id == device_id) {
+            self.connected = Some(device_id.clone());
+            Ok(())
+        } else {
+            anyhow::bail!("Meshtastic sidecar not discovered: {}", device_id.0)
+        }
+    }
+
+    fn disconnect(&mut self) -> anyhow::Result<()> {
+        self.connected = None;
+        Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        self.connected.is_some()
+    }
+
     fn send_private_app(&mut self, payload: &[u8]) -> anyhow::Result<()> {
+        if !self.is_connected() {
+            anyhow::bail!("Meshtastic sidecar is not connected");
+        }
         self.outbound.push(payload.to_vec());
         Ok(())
     }
 
     fn try_recv_private_app(&mut self) -> anyhow::Result<Option<Vec<u8>>> {
+        if !self.is_connected() {
+            return Ok(None);
+        }
         Ok(self.inbound.pop_front())
     }
 }
@@ -332,6 +444,156 @@ impl MeshDedupe {
             topic_tag,
             message_id,
         })
+    }
+}
+
+pub struct MeshtasticSidecar<A> {
+    adapter: A,
+    config: MeshtasticSidecarConfig,
+    state: MeshtasticConnectionState,
+    tx_queue: VecDeque<OffbeatSyncFrame>,
+    reassembly: MeshtasticReassembly,
+    dedupe: MeshDedupe,
+    tx_packets: u64,
+    rx_packets: u64,
+    rx_frames: u64,
+    dropped_duplicates: u64,
+    last_error: Option<String>,
+}
+
+impl<A: MeshtasticAdapter> MeshtasticSidecar<A> {
+    pub fn new(adapter: A, config: MeshtasticSidecarConfig) -> Self {
+        Self {
+            adapter,
+            config,
+            state: MeshtasticConnectionState::Stopped,
+            tx_queue: VecDeque::new(),
+            reassembly: MeshtasticReassembly::default(),
+            dedupe: MeshDedupe::default(),
+            tx_packets: 0,
+            rx_packets: 0,
+            rx_frames: 0,
+            dropped_duplicates: 0,
+            last_error: None,
+        }
+    }
+
+    pub fn adapter(&self) -> &A {
+        &self.adapter
+    }
+
+    pub fn adapter_mut(&mut self) -> &mut A {
+        &mut self.adapter
+    }
+
+    pub fn status(&self) -> MeshtasticStatus {
+        MeshtasticStatus {
+            state: self.state.clone(),
+            queued_frames: self.tx_queue.len(),
+            tx_packets: self.tx_packets,
+            rx_packets: self.rx_packets,
+            rx_frames: self.rx_frames,
+            dropped_duplicates: self.dropped_duplicates,
+            last_error: self.last_error.clone(),
+        }
+    }
+
+    /// Start lifecycle management: scan and connect immediately to the
+    /// preferred sidecar or the first discovered Meshtastic BLE device.
+    pub fn start(&mut self) -> anyhow::Result<()> {
+        self.state = MeshtasticConnectionState::Scanning;
+        let devices = self.adapter.start_scan()?;
+        let target = match &self.config.preferred_device {
+            Some(preferred) => devices
+                .iter()
+                .find(|device| &device.id == preferred)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("preferred Meshtastic sidecar not found"))?,
+            None => devices
+                .into_iter()
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("no Meshtastic sidecar discovered"))?,
+        };
+        self.connect(target.id)
+    }
+
+    pub fn connect(&mut self, device_id: MeshtasticDeviceId) -> anyhow::Result<()> {
+        self.state = MeshtasticConnectionState::Connecting {
+            device_id: device_id.clone(),
+        };
+        match self.adapter.connect(&device_id) {
+            Ok(()) => {
+                self.state = MeshtasticConnectionState::Connected { device_id };
+                self.last_error = None;
+                Ok(())
+            }
+            Err(e) => {
+                let error = e.to_string();
+                self.state = MeshtasticConnectionState::Failed {
+                    error: error.clone(),
+                };
+                self.last_error = Some(error);
+                Err(e)
+            }
+        }
+    }
+
+    pub fn stop(&mut self) -> anyhow::Result<()> {
+        self.adapter.disconnect()?;
+        self.state = MeshtasticConnectionState::Stopped;
+        self.tx_queue.clear();
+        Ok(())
+    }
+
+    /// Queue a logical constrained sync frame. Call `tick` to packetize and send.
+    pub fn queue_frame(&mut self, frame: OffbeatSyncFrame) -> anyhow::Result<()> {
+        if self.tx_queue.len() >= self.config.max_tx_queue {
+            anyhow::bail!("Meshtastic TX queue full");
+        }
+        self.tx_queue.push_back(frame);
+        Ok(())
+    }
+
+    /// Drive one lifecycle iteration: reconnect if needed, flush TX, and poll RX.
+    pub fn tick(&mut self) -> anyhow::Result<Vec<OffbeatSyncFrame>> {
+        if !self.adapter.is_connected() {
+            self.state = MeshtasticConnectionState::Backoff { attempt: 1 };
+            if self.config.preferred_device.is_some() {
+                self.start()?;
+            }
+        }
+        self.flush_tx()?;
+        self.poll_rx()
+    }
+
+    fn flush_tx(&mut self) -> anyhow::Result<()> {
+        if !self.adapter.is_connected() {
+            return Ok(());
+        }
+        while let Some(frame) = self.tx_queue.pop_front() {
+            for payload in frame.encode_private_app_payloads()? {
+                self.adapter.send_private_app(&payload)?;
+                self.tx_packets += 1;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn poll_rx(&mut self) -> anyhow::Result<Vec<OffbeatSyncFrame>> {
+        let mut frames = Vec::new();
+        while let Some(payload) = self.adapter.try_recv_private_app()? {
+            self.rx_packets += 1;
+            let packet = MeshtasticPacket::decode(&payload)?;
+            if let Some(frame) = self.reassembly.push(packet)? {
+                if self.dedupe.remember(frame.topic_tag, frame.message_id) {
+                    self.rx_frames += 1;
+                    frames.push(frame);
+                } else {
+                    self.dropped_duplicates += 1;
+                }
+            }
+        }
+        Ok(frames)
     }
 }
 
@@ -465,6 +727,61 @@ mod tests {
         assert!(dedupe.remember(TOPIC, MSG));
         assert!(!dedupe.remember(TOPIC, MSG));
         assert!(dedupe.remember(*b"topic124", MSG));
+    }
+
+    #[test]
+    fn sidecar_lifecycle_connects_flushes_and_receives() {
+        let adapter = InMemoryMeshtasticAdapter::with_device("radio-a");
+        let mut sidecar = MeshtasticSidecar::new(adapter, MeshtasticSidecarConfig::default());
+        sidecar.start().unwrap();
+        assert!(matches!(
+            sidecar.status().state,
+            MeshtasticConnectionState::Connected { .. }
+        ));
+
+        let frame = OffbeatSyncFrame::new(
+            SyncPayloadKind::FestivalUpdate,
+            TOPIC,
+            MSG,
+            DEFAULT_TTL,
+            b"alert".to_vec(),
+        )
+        .unwrap();
+        sidecar.queue_frame(frame.clone()).unwrap();
+        let received = sidecar.tick().unwrap();
+        assert!(received.is_empty());
+        assert_eq!(sidecar.adapter().outbound().len(), 1);
+        assert_eq!(sidecar.status().tx_packets, 1);
+
+        let payload = frame.encode_private_app_payloads().unwrap().remove(0);
+        sidecar.adapter_mut().push_inbound(payload);
+        let received = sidecar.tick().unwrap();
+        assert_eq!(received, vec![frame]);
+        assert_eq!(sidecar.status().rx_packets, 1);
+        assert_eq!(sidecar.status().rx_frames, 1);
+    }
+
+    #[test]
+    fn sidecar_dedupes_duplicate_inbound_frames() {
+        let adapter = InMemoryMeshtasticAdapter::with_device("radio-a");
+        let mut sidecar = MeshtasticSidecar::new(adapter, MeshtasticSidecarConfig::default());
+        sidecar.start().unwrap();
+        let payload = OffbeatSyncFrame::new(
+            SyncPayloadKind::GroupUpdate,
+            TOPIC,
+            MSG,
+            DEFAULT_TTL,
+            b"presence".to_vec(),
+        )
+        .unwrap()
+        .encode_private_app_payloads()
+        .unwrap()
+        .remove(0);
+        sidecar.adapter_mut().push_inbound(payload.clone());
+        sidecar.adapter_mut().push_inbound(payload);
+        let received = sidecar.tick().unwrap();
+        assert_eq!(received.len(), 1);
+        assert_eq!(sidecar.status().dropped_duplicates, 1);
     }
 
     #[test]
