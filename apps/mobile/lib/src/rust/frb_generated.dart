@@ -67,7 +67,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => 1722687693;
+  int get rustContentHash => -324134713;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -329,6 +329,17 @@ abstract class RustLibApi extends BaseApi {
   Future<String> crateApiDtoGroupIdFromKey({required List<int> key});
 
   Future<void> crateApiInitApp();
+
+  Future<MeshtasticDebugReportDto> crateApiMeshtasticDebugProbe({
+    required String deviceId,
+    required List<int> body,
+    required int listenMs,
+    required bool send,
+  });
+
+  Future<List<MeshtasticDebugDeviceDto>> crateApiMeshtasticDebugScan({
+    required int scanMs,
+  });
 
   Future<PeerStatusInfo> crateApiDtoPeerEntryToDto({required PeerEntry entry});
 
@@ -2406,6 +2417,78 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "init_app", argNames: []);
 
   @override
+  Future<MeshtasticDebugReportDto> crateApiMeshtasticDebugProbe({
+    required String deviceId,
+    required List<int> body,
+    required int listenMs,
+    required bool send,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(deviceId, serializer);
+          sse_encode_list_prim_u_8_loose(body, serializer);
+          sse_encode_u_32(listenMs, serializer);
+          sse_encode_bool(send, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 55,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_meshtastic_debug_report_dto,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiMeshtasticDebugProbeConstMeta,
+        argValues: [deviceId, body, listenMs, send],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMeshtasticDebugProbeConstMeta =>
+      const TaskConstMeta(
+        debugName: "meshtastic_debug_probe",
+        argNames: ["deviceId", "body", "listenMs", "send"],
+      );
+
+  @override
+  Future<List<MeshtasticDebugDeviceDto>> crateApiMeshtasticDebugScan({
+    required int scanMs,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_u_32(scanMs, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 56,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_meshtastic_debug_device_dto,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiMeshtasticDebugScanConstMeta,
+        argValues: [scanMs],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMeshtasticDebugScanConstMeta =>
+      const TaskConstMeta(
+        debugName: "meshtastic_debug_scan",
+        argNames: ["scanMs"],
+      );
+
+  @override
   Future<PeerStatusInfo> crateApiDtoPeerEntryToDto({required PeerEntry entry}) {
     return handler.executeNormal(
       NormalTask(
@@ -2418,7 +2501,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 55,
+            funcId: 57,
             port: port_,
           );
         },
@@ -2453,7 +2536,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 56,
+            funcId: 58,
             port: port_,
           );
         },
@@ -2491,7 +2574,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 57,
+            funcId: 59,
             port: port_,
           );
         },
@@ -2527,7 +2610,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 58,
+            funcId: 60,
             port: port_,
           );
         },
@@ -2817,6 +2900,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  int dco_decode_box_autoadd_i_16(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as int;
+  }
+
+  @protected
   LineupDto dco_decode_box_autoadd_lineup_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_lineup_dto(raw);
@@ -2943,6 +3032,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       weatherCode: dco_decode_list_prim_u_32_strict(arr[3]),
       windSpeed10M: dco_decode_list_prim_f_64_strict(arr[4]),
     );
+  }
+
+  @protected
+  int dco_decode_i_16(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as int;
   }
 
   @protected
@@ -3073,6 +3168,26 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<MeshtasticDebugDeviceDto> dco_decode_list_meshtastic_debug_device_dto(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>)
+        .map(dco_decode_meshtastic_debug_device_dto)
+        .toList();
+  }
+
+  @protected
+  List<MeshtasticDebugFrameDto> dco_decode_list_meshtastic_debug_frame_dto(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>)
+        .map(dco_decode_meshtastic_debug_frame_dto)
+        .toList();
+  }
+
+  @protected
   List<PeerStatusInfo> dco_decode_list_peer_status_info(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return (raw as List<dynamic>).map(dco_decode_peer_status_info).toList();
@@ -3119,6 +3234,54 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  MeshtasticDebugDeviceDto dco_decode_meshtastic_debug_device_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 4)
+      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    return MeshtasticDebugDeviceDto(
+      deviceId: dco_decode_String(arr[0]),
+      name: dco_decode_opt_String(arr[1]),
+      rssi: dco_decode_opt_box_autoadd_i_16(arr[2]),
+      services: dco_decode_list_String(arr[3]),
+    );
+  }
+
+  @protected
+  MeshtasticDebugFrameDto dco_decode_meshtastic_debug_frame_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 5)
+      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
+    return MeshtasticDebugFrameDto(
+      kind: dco_decode_String(arr[0]),
+      topicTagHex: dco_decode_String(arr[1]),
+      messageIdHex: dco_decode_String(arr[2]),
+      bodyHex: dco_decode_String(arr[3]),
+      bodyText: dco_decode_opt_String(arr[4]),
+    );
+  }
+
+  @protected
+  MeshtasticDebugReportDto dco_decode_meshtastic_debug_report_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 9)
+      throw Exception('unexpected arr length: expect 9 but see ${arr.length}');
+    return MeshtasticDebugReportDto(
+      deviceId: dco_decode_String(arr[0]),
+      connected: dco_decode_bool(arr[1]),
+      mtu: dco_decode_u_16(arr[2]),
+      services: dco_decode_list_String(arr[3]),
+      sentFragments: dco_decode_u_32(arr[4]),
+      rawFromRadioCount: dco_decode_u_32(arr[5]),
+      privateAppCount: dco_decode_u_32(arr[6]),
+      receivedFrames: dco_decode_list_meshtastic_debug_frame_dto(arr[7]),
+      events: dco_decode_list_String(arr[8]),
+    );
+  }
+
+  @protected
   String? dco_decode_opt_String(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_String(raw);
@@ -3128,6 +3291,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   AttestationDto? dco_decode_opt_box_autoadd_attestation_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_box_autoadd_attestation_dto(raw);
+  }
+
+  @protected
+  int? dco_decode_opt_box_autoadd_i_16(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null ? null : dco_decode_box_autoadd_i_16(raw);
   }
 
   @protected
@@ -3231,6 +3400,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       relay: dco_decode_relay_status_dto(arr[0]),
       ble: dco_decode_ble_status_dto(arr[1]),
     );
+  }
+
+  @protected
+  int dco_decode_u_16(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as int;
   }
 
   @protected
@@ -3560,6 +3735,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  int sse_decode_box_autoadd_i_16(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_i_16(deserializer));
+  }
+
+  @protected
   LineupDto sse_decode_box_autoadd_lineup_dto(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_lineup_dto(deserializer));
@@ -3691,6 +3872,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       weatherCode: var_weatherCode,
       windSpeed10M: var_windSpeed10M,
     );
+  }
+
+  @protected
+  int sse_decode_i_16(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return deserializer.buffer.getInt16();
   }
 
   @protected
@@ -3882,6 +4069,34 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<MeshtasticDebugDeviceDto> sse_decode_list_meshtastic_debug_device_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <MeshtasticDebugDeviceDto>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_meshtastic_debug_device_dto(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
+  List<MeshtasticDebugFrameDto> sse_decode_list_meshtastic_debug_frame_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <MeshtasticDebugFrameDto>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_meshtastic_debug_frame_dto(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
   List<PeerStatusInfo> sse_decode_list_peer_status_info(
     SseDeserializer deserializer,
   ) {
@@ -3952,6 +4167,71 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  MeshtasticDebugDeviceDto sse_decode_meshtastic_debug_device_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_deviceId = sse_decode_String(deserializer);
+    var var_name = sse_decode_opt_String(deserializer);
+    var var_rssi = sse_decode_opt_box_autoadd_i_16(deserializer);
+    var var_services = sse_decode_list_String(deserializer);
+    return MeshtasticDebugDeviceDto(
+      deviceId: var_deviceId,
+      name: var_name,
+      rssi: var_rssi,
+      services: var_services,
+    );
+  }
+
+  @protected
+  MeshtasticDebugFrameDto sse_decode_meshtastic_debug_frame_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_kind = sse_decode_String(deserializer);
+    var var_topicTagHex = sse_decode_String(deserializer);
+    var var_messageIdHex = sse_decode_String(deserializer);
+    var var_bodyHex = sse_decode_String(deserializer);
+    var var_bodyText = sse_decode_opt_String(deserializer);
+    return MeshtasticDebugFrameDto(
+      kind: var_kind,
+      topicTagHex: var_topicTagHex,
+      messageIdHex: var_messageIdHex,
+      bodyHex: var_bodyHex,
+      bodyText: var_bodyText,
+    );
+  }
+
+  @protected
+  MeshtasticDebugReportDto sse_decode_meshtastic_debug_report_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_deviceId = sse_decode_String(deserializer);
+    var var_connected = sse_decode_bool(deserializer);
+    var var_mtu = sse_decode_u_16(deserializer);
+    var var_services = sse_decode_list_String(deserializer);
+    var var_sentFragments = sse_decode_u_32(deserializer);
+    var var_rawFromRadioCount = sse_decode_u_32(deserializer);
+    var var_privateAppCount = sse_decode_u_32(deserializer);
+    var var_receivedFrames = sse_decode_list_meshtastic_debug_frame_dto(
+      deserializer,
+    );
+    var var_events = sse_decode_list_String(deserializer);
+    return MeshtasticDebugReportDto(
+      deviceId: var_deviceId,
+      connected: var_connected,
+      mtu: var_mtu,
+      services: var_services,
+      sentFragments: var_sentFragments,
+      rawFromRadioCount: var_rawFromRadioCount,
+      privateAppCount: var_privateAppCount,
+      receivedFrames: var_receivedFrames,
+      events: var_events,
+    );
+  }
+
+  @protected
   String? sse_decode_opt_String(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
@@ -3970,6 +4250,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
     if (sse_decode_bool(deserializer)) {
       return (sse_decode_box_autoadd_attestation_dto(deserializer));
+    } else {
+      return null;
+    }
+  }
+
+  @protected
+  int? sse_decode_opt_box_autoadd_i_16(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_box_autoadd_i_16(deserializer));
     } else {
       return null;
     }
@@ -4096,6 +4387,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_relay = sse_decode_relay_status_dto(deserializer);
     var var_ble = sse_decode_ble_status_dto(deserializer);
     return TransportStatusDto(relay: var_relay, ble: var_ble);
+  }
+
+  @protected
+  int sse_decode_u_16(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return deserializer.buffer.getUint16();
   }
 
   @protected
@@ -4491,6 +4788,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_box_autoadd_i_16(int self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_16(self, serializer);
+  }
+
+  @protected
   void sse_encode_box_autoadd_lineup_dto(
     LineupDto self,
     SseSerializer serializer,
@@ -4601,6 +4904,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_list_prim_f_64_strict(self.precipitationProbability, serializer);
     sse_encode_list_prim_u_32_strict(self.weatherCode, serializer);
     sse_encode_list_prim_f_64_strict(self.windSpeed10M, serializer);
+  }
+
+  @protected
+  void sse_encode_i_16(int self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    serializer.buffer.putInt16(self);
   }
 
   @protected
@@ -4754,6 +5063,30 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_list_meshtastic_debug_device_dto(
+    List<MeshtasticDebugDeviceDto> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_meshtastic_debug_device_dto(item, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_list_meshtastic_debug_frame_dto(
+    List<MeshtasticDebugFrameDto> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_meshtastic_debug_frame_dto(item, serializer);
+    }
+  }
+
+  @protected
   void sse_encode_list_peer_status_info(
     List<PeerStatusInfo> self,
     SseSerializer serializer,
@@ -4832,6 +5165,48 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_meshtastic_debug_device_dto(
+    MeshtasticDebugDeviceDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.deviceId, serializer);
+    sse_encode_opt_String(self.name, serializer);
+    sse_encode_opt_box_autoadd_i_16(self.rssi, serializer);
+    sse_encode_list_String(self.services, serializer);
+  }
+
+  @protected
+  void sse_encode_meshtastic_debug_frame_dto(
+    MeshtasticDebugFrameDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.kind, serializer);
+    sse_encode_String(self.topicTagHex, serializer);
+    sse_encode_String(self.messageIdHex, serializer);
+    sse_encode_String(self.bodyHex, serializer);
+    sse_encode_opt_String(self.bodyText, serializer);
+  }
+
+  @protected
+  void sse_encode_meshtastic_debug_report_dto(
+    MeshtasticDebugReportDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.deviceId, serializer);
+    sse_encode_bool(self.connected, serializer);
+    sse_encode_u_16(self.mtu, serializer);
+    sse_encode_list_String(self.services, serializer);
+    sse_encode_u_32(self.sentFragments, serializer);
+    sse_encode_u_32(self.rawFromRadioCount, serializer);
+    sse_encode_u_32(self.privateAppCount, serializer);
+    sse_encode_list_meshtastic_debug_frame_dto(self.receivedFrames, serializer);
+    sse_encode_list_String(self.events, serializer);
+  }
+
+  @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
@@ -4851,6 +5226,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_bool(self != null, serializer);
     if (self != null) {
       sse_encode_box_autoadd_attestation_dto(self, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_opt_box_autoadd_i_16(int? self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_box_autoadd_i_16(self, serializer);
     }
   }
 
@@ -4953,6 +5338,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_relay_status_dto(self.relay, serializer);
     sse_encode_ble_status_dto(self.ble, serializer);
+  }
+
+  @protected
+  void sse_encode_u_16(int self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    serializer.buffer.putUint16(self);
   }
 
   @protected

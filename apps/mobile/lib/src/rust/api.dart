@@ -7,6 +7,22 @@ import 'api/dto.dart';
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
+Future<List<MeshtasticDebugDeviceDto>> meshtasticDebugScan({
+  required int scanMs,
+}) => RustLib.instance.api.crateApiMeshtasticDebugScan(scanMs: scanMs);
+
+Future<MeshtasticDebugReportDto> meshtasticDebugProbe({
+  required String deviceId,
+  required List<int> body,
+  required int listenMs,
+  required bool send,
+}) => RustLib.instance.api.crateApiMeshtasticDebugProbe(
+  deviceId: deviceId,
+  body: body,
+  listenMs: listenMs,
+  send: send,
+);
+
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<AppNode>>
 abstract class AppNode implements RustOpaqueInterface {
   /// Add a map pin to a group and optionally publish via gossip.

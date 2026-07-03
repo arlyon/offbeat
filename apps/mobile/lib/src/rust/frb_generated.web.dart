@@ -168,6 +168,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ChatMessageDto dco_decode_box_autoadd_chat_message_dto(dynamic raw);
 
   @protected
+  int dco_decode_box_autoadd_i_16(dynamic raw);
+
+  @protected
   LineupDto dco_decode_box_autoadd_lineup_dto(dynamic raw);
 
   @protected
@@ -199,6 +202,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   HourlyWeatherDto dco_decode_hourly_weather_dto(dynamic raw);
+
+  @protected
+  int dco_decode_i_16(dynamic raw);
 
   @protected
   int dco_decode_i_32(dynamic raw);
@@ -243,6 +249,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<LineupStageDto> dco_decode_list_lineup_stage_dto(dynamic raw);
 
   @protected
+  List<MeshtasticDebugDeviceDto> dco_decode_list_meshtastic_debug_device_dto(
+    dynamic raw,
+  );
+
+  @protected
+  List<MeshtasticDebugFrameDto> dco_decode_list_meshtastic_debug_frame_dto(
+    dynamic raw,
+  );
+
+  @protected
   List<PeerStatusInfo> dco_decode_list_peer_status_info(dynamic raw);
 
   @protected
@@ -266,10 +282,22 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<TransportPeerDto> dco_decode_list_transport_peer_dto(dynamic raw);
 
   @protected
+  MeshtasticDebugDeviceDto dco_decode_meshtastic_debug_device_dto(dynamic raw);
+
+  @protected
+  MeshtasticDebugFrameDto dco_decode_meshtastic_debug_frame_dto(dynamic raw);
+
+  @protected
+  MeshtasticDebugReportDto dco_decode_meshtastic_debug_report_dto(dynamic raw);
+
+  @protected
   String? dco_decode_opt_String(dynamic raw);
 
   @protected
   AttestationDto? dco_decode_opt_box_autoadd_attestation_dto(dynamic raw);
+
+  @protected
+  int? dco_decode_opt_box_autoadd_i_16(dynamic raw);
 
   @protected
   LineupDto? dco_decode_opt_box_autoadd_lineup_dto(dynamic raw);
@@ -296,6 +324,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   TransportStatusDto dco_decode_transport_status_dto(dynamic raw);
+
+  @protected
+  int dco_decode_u_16(dynamic raw);
 
   @protected
   int dco_decode_u_32(dynamic raw);
@@ -450,6 +481,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  int sse_decode_box_autoadd_i_16(SseDeserializer deserializer);
+
+  @protected
   LineupDto sse_decode_box_autoadd_lineup_dto(SseDeserializer deserializer);
 
   @protected
@@ -487,6 +521,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   HourlyWeatherDto sse_decode_hourly_weather_dto(SseDeserializer deserializer);
+
+  @protected
+  int sse_decode_i_16(SseDeserializer deserializer);
 
   @protected
   int sse_decode_i_32(SseDeserializer deserializer);
@@ -541,6 +578,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  List<MeshtasticDebugDeviceDto> sse_decode_list_meshtastic_debug_device_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<MeshtasticDebugFrameDto> sse_decode_list_meshtastic_debug_frame_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   List<PeerStatusInfo> sse_decode_list_peer_status_info(
     SseDeserializer deserializer,
   );
@@ -568,12 +615,30 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  MeshtasticDebugDeviceDto sse_decode_meshtastic_debug_device_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  MeshtasticDebugFrameDto sse_decode_meshtastic_debug_frame_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  MeshtasticDebugReportDto sse_decode_meshtastic_debug_report_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   String? sse_decode_opt_String(SseDeserializer deserializer);
 
   @protected
   AttestationDto? sse_decode_opt_box_autoadd_attestation_dto(
     SseDeserializer deserializer,
   );
+
+  @protected
+  int? sse_decode_opt_box_autoadd_i_16(SseDeserializer deserializer);
 
   @protected
   LineupDto? sse_decode_opt_box_autoadd_lineup_dto(
@@ -606,6 +671,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   TransportStatusDto sse_decode_transport_status_dto(
     SseDeserializer deserializer,
   );
+
+  @protected
+  int sse_decode_u_16(SseDeserializer deserializer);
 
   @protected
   int sse_decode_u_32(SseDeserializer deserializer);
@@ -790,6 +858,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_box_autoadd_i_16(int self, SseSerializer serializer);
+
+  @protected
   void sse_encode_box_autoadd_lineup_dto(
     LineupDto self,
     SseSerializer serializer,
@@ -842,6 +913,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
     HourlyWeatherDto self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_i_16(int self, SseSerializer serializer);
 
   @protected
   void sse_encode_i_32(int self, SseSerializer serializer);
@@ -910,6 +984,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_meshtastic_debug_device_dto(
+    List<MeshtasticDebugDeviceDto> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_meshtastic_debug_frame_dto(
+    List<MeshtasticDebugFrameDto> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_peer_status_info(
     List<PeerStatusInfo> self,
     SseSerializer serializer,
@@ -949,6 +1035,24 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_meshtastic_debug_device_dto(
+    MeshtasticDebugDeviceDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_meshtastic_debug_frame_dto(
+    MeshtasticDebugFrameDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_meshtastic_debug_report_dto(
+    MeshtasticDebugReportDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer);
 
   @protected
@@ -956,6 +1060,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
     AttestationDto? self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_opt_box_autoadd_i_16(int? self, SseSerializer serializer);
 
   @protected
   void sse_encode_opt_box_autoadd_lineup_dto(
@@ -1001,6 +1108,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
     TransportStatusDto self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_u_16(int self, SseSerializer serializer);
 
   @protected
   void sse_encode_u_32(int self, SseSerializer serializer);

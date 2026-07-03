@@ -67,6 +67,252 @@ pub fn init_app() {
     let _ = &*RUNTIME;
 }
 
+/// Scan for Meshtastic radios advertising the official BLE service UUID.
+#[cfg(target_os = "android")]
+pub async fn meshtastic_debug_scan(scan_ms: u32) -> anyhow::Result<Vec<MeshtasticDebugDeviceDto>> {
+    use blew::central::{Central, ScanFilter, ScanMode};
+    use tokio::time::{Duration, sleep};
+    use uuid::Uuid;
+
+    let central: Central = Central::new().await?;
+    let service_uuid = Uuid::parse_str(MESHTASTIC_SERVICE_UUID)?;
+    central
+        .start_scan(ScanFilter {
+            services: vec![service_uuid],
+            mode: ScanMode::LowLatency,
+        })
+        .await?;
+    sleep(Duration::from_millis(scan_ms.max(500) as u64)).await;
+    let devices = central.discovered_devices().await?;
+    let _ = central.stop_scan().await;
+    Ok(devices
+        .into_iter()
+        .filter(|device| device.services.contains(&service_uuid))
+        .map(|device| MeshtasticDebugDeviceDto {
+            device_id: device.id.to_string(),
+            name: device.name,
+            rssi: device.rssi,
+            services: device.services.into_iter().map(|uuid| uuid.to_string()).collect(),
+        })
+        .collect())
+}
+
+#[cfg(not(target_os = "android"))]
+#[allow(clippy::unused_async)]
+pub async fn meshtastic_debug_scan(_scan_ms: u32) -> anyhow::Result<Vec<MeshtasticDebugDeviceDto>> {
+    anyhow::bail!("Meshtastic debug scan is currently wired for Android builds only")
+}
+
+/// Connect to a Meshtastic radio, optionally send a synthetic Offbeat frame,
+/// then listen for `FromNum` notifications and drain `FromRadio` protobufs.
+#[cfg(target_os = "android")]
+pub async fn meshtastic_debug_probe(
+    device_id: String,
+    body: Vec<u8>,
+    listen_ms: u32,
+    send: bool,
+) -> anyhow::Result<MeshtasticDebugReportDto> {
+    use blew::central::{Central, CentralEvent, WriteType};
+    use blew::types::DeviceId;
+    use offbeat_core::transport::meshtastic::{
+        encode_to_radio_private_app, MeshtasticReassembly, OffbeatSyncFrame, DEFAULT_TTL,
+    };
+    use offbeat_core::transport::profile::SyncPayloadKind;
+    use tokio::time::{Duration, Instant, timeout};
+    use tokio_stream::StreamExt;
+    use uuid::Uuid;
+
+    let central: Central = Central::new().await?;
+    let device = DeviceId::from(device_id.clone());
+    let service_uuid = Uuid::parse_str(MESHTASTIC_SERVICE_UUID)?;
+    let from_num_uuid = Uuid::parse_str(MESHTASTIC_FROM_NUM_CHAR_UUID)?;
+    let from_radio_uuid = Uuid::parse_str(MESHTASTIC_FROM_RADIO_CHAR_UUID)?;
+    let to_radio_uuid = Uuid::parse_str(MESHTASTIC_TO_RADIO_CHAR_UUID)?;
+
+    let mut events_log = Vec::new();
+    let mut sent_fragments = 0u32;
+    let mut raw_from_radio_count = 0u32;
+    let mut private_app_count = 0u32;
+    let mut reassembly = MeshtasticReassembly::default();
+    let mut received_frames = Vec::new();
+    let mut events = central.events();
+
+    central
+        .start_scan(blew::central::ScanFilter {
+            services: vec![service_uuid],
+            mode: blew::central::ScanMode::LowLatency,
+        })
+        .await?;
+    tokio::time::sleep(Duration::from_millis(750)).await;
+    let _ = central.stop_scan().await;
+
+    central.connect(&device).await?;
+    events_log.push(format!("connected:{device_id}"));
+
+    let services = central.discover_services(&device).await?;
+    let service_summaries = services
+        .iter()
+        .map(|service| {
+            let chars = service
+                .characteristics
+                .iter()
+                .map(|char_| char_.uuid.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("{}[{chars}]", service.uuid)
+        })
+        .collect::<Vec<_>>();
+
+    central
+        .subscribe_characteristic(&device, from_num_uuid)
+        .await?;
+    events_log.push("subscribed:from_num".to_string());
+
+    let mtu = central.mtu(&device).await;
+
+    if send {
+        let topic_tag = *b"OBDEBUG!";
+        let message_id = first_eight_uuid_bytes(uuid::Uuid::new_v4());
+        let body = if body.is_empty() {
+            b"offbeat meshtastic debug probe".to_vec()
+        } else {
+            body
+        };
+        let frame = OffbeatSyncFrame::new(
+            SyncPayloadKind::GroupUpdate,
+            topic_tag,
+            message_id,
+            DEFAULT_TTL,
+            body,
+        )?;
+        for private_payload in frame.encode_private_app_payloads()? {
+            let to_radio = encode_to_radio_private_app(
+                private_payload,
+                SyncPayloadKind::GroupUpdate.priority(),
+                DEFAULT_TTL,
+                false,
+            )?;
+            central
+                .write_characteristic(&device, to_radio_uuid, to_radio, WriteType::WithResponse)
+                .await?;
+            sent_fragments += 1;
+        }
+        events_log.push(format!("sent_fragments:{sent_fragments}"));
+    }
+
+    let deadline = Instant::now() + Duration::from_millis(listen_ms.max(1000) as u64);
+    while Instant::now() < deadline {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let Some(event) = timeout(remaining, events.next()).await? else {
+            break;
+        };
+        match event {
+            CentralEvent::CharacteristicNotification {
+                device_id: event_device,
+                char_uuid,
+                ..
+            } if event_device == device && char_uuid == from_num_uuid => {
+                events_log.push("notify:from_num".to_string());
+                drain_from_radio(
+                    &central,
+                    &device,
+                    from_radio_uuid,
+                    &mut reassembly,
+                    &mut raw_from_radio_count,
+                    &mut private_app_count,
+                    &mut received_frames,
+                )
+                .await?;
+            }
+            CentralEvent::DeviceDisconnected { device_id, cause } if device_id == device => {
+                events_log.push(format!("disconnected:{cause:?}"));
+                break;
+            }
+            CentralEvent::DeviceConnected { device_id } if device_id == device => {
+                events_log.push("event:connected".to_string());
+            }
+            _ => {}
+        }
+    }
+
+    let _ = central.disconnect(&device).await;
+
+    Ok(MeshtasticDebugReportDto {
+        device_id,
+        connected: true,
+        mtu,
+        services: service_summaries,
+        sent_fragments,
+        raw_from_radio_count,
+        private_app_count,
+        received_frames,
+        events: events_log,
+    })
+}
+
+#[cfg(not(target_os = "android"))]
+#[allow(clippy::unused_async)]
+pub async fn meshtastic_debug_probe(
+    device_id: String,
+    _body: Vec<u8>,
+    _listen_ms: u32,
+    _send: bool,
+) -> anyhow::Result<MeshtasticDebugReportDto> {
+    anyhow::bail!("Meshtastic debug probe is currently wired for Android builds only: {device_id}")
+}
+
+#[cfg(target_os = "android")]
+async fn drain_from_radio(
+    central: &blew::central::Central,
+    device: &blew::types::DeviceId,
+    from_radio_uuid: uuid::Uuid,
+    reassembly: &mut offbeat_core::transport::meshtastic::MeshtasticReassembly,
+    raw_count: &mut u32,
+    private_app_count: &mut u32,
+    frames: &mut Vec<MeshtasticDebugFrameDto>,
+) -> anyhow::Result<()> {
+    use offbeat_core::transport::meshtastic::{decode_from_radio_private_app, MeshtasticPacket};
+
+    loop {
+        let raw = central.read_characteristic(device, from_radio_uuid).await?;
+        if raw.is_empty() {
+            break;
+        }
+        *raw_count += 1;
+        let Some(private_payload) = decode_from_radio_private_app(&raw)? else {
+            continue;
+        };
+        *private_app_count += 1;
+        let packet = MeshtasticPacket::decode(&private_payload)?;
+        if let Some(frame) = reassembly.push(packet)? {
+            frames.push(MeshtasticDebugFrameDto {
+                kind: format!("{:?}", frame.kind),
+                topic_tag_hex: hex::encode(frame.topic_tag),
+                message_id_hex: hex::encode(frame.message_id),
+                body_text: String::from_utf8(frame.body.clone()).ok(),
+                body_hex: hex::encode(frame.body),
+            });
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "android")]
+fn first_eight_uuid_bytes(uuid: uuid::Uuid) -> [u8; 8] {
+    let mut out = [0u8; 8];
+    out.copy_from_slice(&uuid.as_bytes()[..8]);
+    out
+}
+
+#[cfg(target_os = "android")]
+const MESHTASTIC_SERVICE_UUID: &str = "6ba1b218-15a8-461f-9fa8-5dcae273eafd";
+#[cfg(target_os = "android")]
+const MESHTASTIC_TO_RADIO_CHAR_UUID: &str = "f75c76d2-129e-4dad-a1dd-7866124401e7";
+#[cfg(target_os = "android")]
+const MESHTASTIC_FROM_NUM_CHAR_UUID: &str = "ed9da18c-a800-4f66-a670-aa7547e34453";
+#[cfg(target_os = "android")]
+const MESHTASTIC_FROM_RADIO_CHAR_UUID: &str = "2c55e69e-4993-11ed-b878-0242ac120002";
+
 // ---------------------------------------------------------------------------
 // Opaque node handle
 // ---------------------------------------------------------------------------

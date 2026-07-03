@@ -149,6 +149,26 @@ Offbeat resource update
 
 ### Hardware tests
 
+Use the in-app **You → Meshtastic Test Rig** harness before claiming full app E2E.
+
+Single-radio smoke test:
+
+1. Pair/configure the phone with a Meshtastic radio.
+2. Open **Meshtastic Test Rig**.
+3. Tap **Scan radios** and select the radio.
+4. Tap **Send + listen**.
+5. Pass if the report shows `connected`, discovered services, `sent_fragments > 0`, and no BLE/protobuf error.
+
+Two-radio Offbeat `PRIVATE_APP` test:
+
+1. Pair/configure phone A with radio A and phone B with radio B.
+2. Open **Meshtastic Test Rig** on phone B, scan/select radio B, tap **Listen 30s**.
+3. Within that window, use phone A to scan/select radio A and tap **Send + listen**.
+4. Pass if phone B reports `private_app > 0` and at least one decoded frame whose body matches the debug payload.
+5. Repeat with duplicate sends; decoded message IDs should make dedupe expectations visible before domain-level application is wired.
+
+Full app E2E, after domain integration:
+
 1. Pair phone with Meshtastic radio.
 2. Verify service and `ToRadio`/`FromNum`/`FromRadio` characteristics are discovered.
 3. Verify `FromNum` notifications trigger `FromRadio` drain reads until empty.

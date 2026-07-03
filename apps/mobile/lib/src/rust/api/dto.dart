@@ -533,6 +533,120 @@ class LineupStageDto {
           order == other.order;
 }
 
+class MeshtasticDebugDeviceDto {
+  final String deviceId;
+  final String? name;
+  final int? rssi;
+  final List<String> services;
+
+  const MeshtasticDebugDeviceDto({
+    required this.deviceId,
+    this.name,
+    this.rssi,
+    required this.services,
+  });
+
+  @override
+  int get hashCode =>
+      deviceId.hashCode ^ name.hashCode ^ rssi.hashCode ^ services.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is MeshtasticDebugDeviceDto &&
+          runtimeType == other.runtimeType &&
+          deviceId == other.deviceId &&
+          name == other.name &&
+          rssi == other.rssi &&
+          services == other.services;
+}
+
+class MeshtasticDebugFrameDto {
+  final String kind;
+  final String topicTagHex;
+  final String messageIdHex;
+  final String bodyHex;
+  final String? bodyText;
+
+  const MeshtasticDebugFrameDto({
+    required this.kind,
+    required this.topicTagHex,
+    required this.messageIdHex,
+    required this.bodyHex,
+    this.bodyText,
+  });
+
+  @override
+  int get hashCode =>
+      kind.hashCode ^
+      topicTagHex.hashCode ^
+      messageIdHex.hashCode ^
+      bodyHex.hashCode ^
+      bodyText.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is MeshtasticDebugFrameDto &&
+          runtimeType == other.runtimeType &&
+          kind == other.kind &&
+          topicTagHex == other.topicTagHex &&
+          messageIdHex == other.messageIdHex &&
+          bodyHex == other.bodyHex &&
+          bodyText == other.bodyText;
+}
+
+class MeshtasticDebugReportDto {
+  final String deviceId;
+  final bool connected;
+  final int mtu;
+  final List<String> services;
+  final int sentFragments;
+  final int rawFromRadioCount;
+  final int privateAppCount;
+  final List<MeshtasticDebugFrameDto> receivedFrames;
+  final List<String> events;
+
+  const MeshtasticDebugReportDto({
+    required this.deviceId,
+    required this.connected,
+    required this.mtu,
+    required this.services,
+    required this.sentFragments,
+    required this.rawFromRadioCount,
+    required this.privateAppCount,
+    required this.receivedFrames,
+    required this.events,
+  });
+
+  @override
+  int get hashCode =>
+      deviceId.hashCode ^
+      connected.hashCode ^
+      mtu.hashCode ^
+      services.hashCode ^
+      sentFragments.hashCode ^
+      rawFromRadioCount.hashCode ^
+      privateAppCount.hashCode ^
+      receivedFrames.hashCode ^
+      events.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is MeshtasticDebugReportDto &&
+          runtimeType == other.runtimeType &&
+          deviceId == other.deviceId &&
+          connected == other.connected &&
+          mtu == other.mtu &&
+          services == other.services &&
+          sentFragments == other.sentFragments &&
+          rawFromRadioCount == other.rawFromRadioCount &&
+          privateAppCount == other.privateAppCount &&
+          receivedFrames == other.receivedFrames &&
+          events == other.events;
+}
+
 /// A simplified view of a tracked peer for the Flutter UI.
 class PeerStatusInfo {
   final String endpointId;

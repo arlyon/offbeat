@@ -184,6 +184,37 @@ pub struct TransportPeerDto {
 }
 
 // ---------------------------------------------------------------------------
+// Meshtastic debug harness DTOs
+// ---------------------------------------------------------------------------
+
+pub struct MeshtasticDebugDeviceDto {
+    pub device_id: String,
+    pub name: Option<String>,
+    pub rssi: Option<i16>,
+    pub services: Vec<String>,
+}
+
+pub struct MeshtasticDebugFrameDto {
+    pub kind: String,
+    pub topic_tag_hex: String,
+    pub message_id_hex: String,
+    pub body_hex: String,
+    pub body_text: Option<String>,
+}
+
+pub struct MeshtasticDebugReportDto {
+    pub device_id: String,
+    pub connected: bool,
+    pub mtu: u16,
+    pub services: Vec<String>,
+    pub sent_fragments: u32,
+    pub raw_from_radio_count: u32,
+    pub private_app_count: u32,
+    pub received_frames: Vec<MeshtasticDebugFrameDto>,
+    pub events: Vec<String>,
+}
+
+// ---------------------------------------------------------------------------
 // Peer / Connection Manager DTOs
 // ---------------------------------------------------------------------------
 
@@ -372,7 +403,7 @@ pub fn snapshot_transport(node: &OffbeatNode) -> TransportStatusDto {
                     connect_path: p.connect_path.map(|c| format!("{c:?}")),
                     verified_endpoint: p.verified_endpoint.map(|e| e.to_string()),
                     consecutive_failures: p.consecutive_failures,
-                    key_prefix: p.prefix.map(|p| hex::encode(p)),
+                    key_prefix: p.prefix.map(hex::encode),
                 })
                 .collect();
             BleStatusDto {

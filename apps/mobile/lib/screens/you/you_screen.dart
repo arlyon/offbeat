@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/dotted_border.dart';
+import 'meshtastic_debug_sheet.dart';
 
 /// Profile screen shown when the user is registered.
 /// Displays identity info and auth status.
@@ -242,6 +243,33 @@ class YouScreen extends StatelessWidget {
                     ),
                   ),
                 ],
+                const SizedBox(height: 32),
+                SizedBox(
+                  width: double.infinity,
+                  height: 44,
+                  child: DottedBorder(
+                    color: colorAccent,
+                    child: Material(
+                      color: colorSurface2,
+                      child: InkWell(
+                        onTap: () => _showMeshtasticDebug(context),
+                        child: const Center(
+                          child: Text(
+                            'MESHTASTIC TEST RIG',
+                            style: TextStyle(
+                              fontFamily: 'JetBrainsMono',
+                              fontSize: 9,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 0.08 * 9,
+                              color: colorFg,
+                              height: 1,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
                 // Logout button
                 if (onLogout != null) ...[
                   const SizedBox(height: 48),
@@ -284,6 +312,15 @@ class YouScreen extends StatelessWidget {
         userId: userId,
         publicKeyHex: publicKeyHex,
       ),
+    );
+  }
+
+  void _showMeshtasticDebug(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: colorBg,
+      isScrollControlled: true,
+      builder: (_) => const MeshtasticDebugSheet(),
     );
   }
 

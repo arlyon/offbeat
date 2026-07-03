@@ -40,7 +40,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1722687693;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -324134713;
 
 // Section: executor
 
@@ -3017,6 +3017,87 @@ fn wire__crate__api__init_app_impl(
         },
     )
 }
+fn wire__crate__api__meshtastic_debug_probe_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "meshtastic_debug_probe",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_device_id = <String>::sse_decode(&mut deserializer);
+            let api__body = <Vec<u8>>::sse_decode(&mut deserializer);
+            let api__listen_ms = <u32>::sse_decode(&mut deserializer);
+            let api__send = <bool>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
+                    (move || async move {
+                        let output_ok = crate::api::meshtastic_debug_probe(
+                            api_device_id,
+                            api__body,
+                            api__listen_ms,
+                            api__send,
+                        )
+                        .await?;
+                        Ok(output_ok)
+                    })()
+                    .await,
+                )
+            }
+        },
+    )
+}
+fn wire__crate__api__meshtastic_debug_scan_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "meshtastic_debug_scan",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api__scan_ms = <u32>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
+                    (move || async move {
+                        let output_ok = crate::api::meshtastic_debug_scan(api__scan_ms).await?;
+                        Ok(output_ok)
+                    })()
+                    .await,
+                )
+            }
+        },
+    )
+}
 fn wire__crate__api__dto__peer_entry_to_dto_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -3582,6 +3663,13 @@ impl SseDecode for crate::api::dto::HourlyWeatherDto {
     }
 }
 
+impl SseDecode for i16 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        deserializer.cursor.read_i16::<NativeEndian>().unwrap()
+    }
+}
+
 impl SseDecode for i32 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -3771,6 +3859,34 @@ impl SseDecode for Vec<crate::api::dto::LineupStageDto> {
     }
 }
 
+impl SseDecode for Vec<crate::api::dto::MeshtasticDebugDeviceDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(<crate::api::dto::MeshtasticDebugDeviceDto>::sse_decode(
+                deserializer,
+            ));
+        }
+        return ans_;
+    }
+}
+
+impl SseDecode for Vec<crate::api::dto::MeshtasticDebugFrameDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(<crate::api::dto::MeshtasticDebugFrameDto>::sse_decode(
+                deserializer,
+            ));
+        }
+        return ans_;
+    }
+}
+
 impl SseDecode for Vec<crate::api::dto::PeerStatusInfo> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -3847,6 +3963,67 @@ impl SseDecode for Vec<crate::api::dto::TransportPeerDto> {
     }
 }
 
+impl SseDecode for crate::api::dto::MeshtasticDebugDeviceDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_deviceId = <String>::sse_decode(deserializer);
+        let mut var_name = <Option<String>>::sse_decode(deserializer);
+        let mut var_rssi = <Option<i16>>::sse_decode(deserializer);
+        let mut var_services = <Vec<String>>::sse_decode(deserializer);
+        return crate::api::dto::MeshtasticDebugDeviceDto {
+            device_id: var_deviceId,
+            name: var_name,
+            rssi: var_rssi,
+            services: var_services,
+        };
+    }
+}
+
+impl SseDecode for crate::api::dto::MeshtasticDebugFrameDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_kind = <String>::sse_decode(deserializer);
+        let mut var_topicTagHex = <String>::sse_decode(deserializer);
+        let mut var_messageIdHex = <String>::sse_decode(deserializer);
+        let mut var_bodyHex = <String>::sse_decode(deserializer);
+        let mut var_bodyText = <Option<String>>::sse_decode(deserializer);
+        return crate::api::dto::MeshtasticDebugFrameDto {
+            kind: var_kind,
+            topic_tag_hex: var_topicTagHex,
+            message_id_hex: var_messageIdHex,
+            body_hex: var_bodyHex,
+            body_text: var_bodyText,
+        };
+    }
+}
+
+impl SseDecode for crate::api::dto::MeshtasticDebugReportDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_deviceId = <String>::sse_decode(deserializer);
+        let mut var_connected = <bool>::sse_decode(deserializer);
+        let mut var_mtu = <u16>::sse_decode(deserializer);
+        let mut var_services = <Vec<String>>::sse_decode(deserializer);
+        let mut var_sentFragments = <u32>::sse_decode(deserializer);
+        let mut var_rawFromRadioCount = <u32>::sse_decode(deserializer);
+        let mut var_privateAppCount = <u32>::sse_decode(deserializer);
+        let mut var_receivedFrames =
+            <Vec<crate::api::dto::MeshtasticDebugFrameDto>>::sse_decode(deserializer);
+        let mut var_events = <Vec<String>>::sse_decode(deserializer);
+        return crate::api::dto::MeshtasticDebugReportDto {
+            device_id: var_deviceId,
+            connected: var_connected,
+            mtu: var_mtu,
+            services: var_services,
+            sent_fragments: var_sentFragments,
+            raw_from_radio_count: var_rawFromRadioCount,
+            private_app_count: var_privateAppCount,
+            received_frames: var_receivedFrames,
+            events: var_events,
+        };
+    }
+}
+
 impl SseDecode for Option<String> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -3863,6 +4040,17 @@ impl SseDecode for Option<crate::api::dto::AttestationDto> {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         if (<bool>::sse_decode(deserializer)) {
             return Some(<crate::api::dto::AttestationDto>::sse_decode(deserializer));
+        } else {
+            return None;
+        }
+    }
+}
+
+impl SseDecode for Option<i16> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<i16>::sse_decode(deserializer));
         } else {
             return None;
         }
@@ -3996,6 +4184,13 @@ impl SseDecode for crate::api::dto::TransportStatusDto {
     }
 }
 
+impl SseDecode for u16 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        deserializer.cursor.read_u16::<NativeEndian>().unwrap()
+    }
+}
+
 impl SseDecode for u32 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -4126,10 +4321,12 @@ fn pde_ffi_dispatcher_primary_impl(
         52 => wire__crate__api__dto__generate_group_key_impl(port, ptr, rust_vec_len, data_len),
         53 => wire__crate__api__dto__group_id_from_key_impl(port, ptr, rust_vec_len, data_len),
         54 => wire__crate__api__init_app_impl(port, ptr, rust_vec_len, data_len),
-        55 => wire__crate__api__dto__peer_entry_to_dto_impl(port, ptr, rust_vec_len, data_len),
-        56 => wire__crate__api__dto__read_lineup_from_doc_impl(port, ptr, rust_vec_len, data_len),
-        57 => wire__crate__api__dto__read_weather_from_doc_impl(port, ptr, rust_vec_len, data_len),
-        58 => wire__crate__api__dto__snapshot_transport_impl(port, ptr, rust_vec_len, data_len),
+        55 => wire__crate__api__meshtastic_debug_probe_impl(port, ptr, rust_vec_len, data_len),
+        56 => wire__crate__api__meshtastic_debug_scan_impl(port, ptr, rust_vec_len, data_len),
+        57 => wire__crate__api__dto__peer_entry_to_dto_impl(port, ptr, rust_vec_len, data_len),
+        58 => wire__crate__api__dto__read_lineup_from_doc_impl(port, ptr, rust_vec_len, data_len),
+        59 => wire__crate__api__dto__read_weather_from_doc_impl(port, ptr, rust_vec_len, data_len),
+        60 => wire__crate__api__dto__snapshot_transport_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -4517,6 +4714,81 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::dto::LineupStageDto>
     for crate::api::dto::LineupStageDto
 {
     fn into_into_dart(self) -> crate::api::dto::LineupStageDto {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::dto::MeshtasticDebugDeviceDto {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.device_id.into_into_dart().into_dart(),
+            self.name.into_into_dart().into_dart(),
+            self.rssi.into_into_dart().into_dart(),
+            self.services.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::dto::MeshtasticDebugDeviceDto
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::dto::MeshtasticDebugDeviceDto>
+    for crate::api::dto::MeshtasticDebugDeviceDto
+{
+    fn into_into_dart(self) -> crate::api::dto::MeshtasticDebugDeviceDto {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::dto::MeshtasticDebugFrameDto {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.kind.into_into_dart().into_dart(),
+            self.topic_tag_hex.into_into_dart().into_dart(),
+            self.message_id_hex.into_into_dart().into_dart(),
+            self.body_hex.into_into_dart().into_dart(),
+            self.body_text.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::dto::MeshtasticDebugFrameDto
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::dto::MeshtasticDebugFrameDto>
+    for crate::api::dto::MeshtasticDebugFrameDto
+{
+    fn into_into_dart(self) -> crate::api::dto::MeshtasticDebugFrameDto {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::dto::MeshtasticDebugReportDto {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.device_id.into_into_dart().into_dart(),
+            self.connected.into_into_dart().into_dart(),
+            self.mtu.into_into_dart().into_dart(),
+            self.services.into_into_dart().into_dart(),
+            self.sent_fragments.into_into_dart().into_dart(),
+            self.raw_from_radio_count.into_into_dart().into_dart(),
+            self.private_app_count.into_into_dart().into_dart(),
+            self.received_frames.into_into_dart().into_dart(),
+            self.events.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::dto::MeshtasticDebugReportDto
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::dto::MeshtasticDebugReportDto>
+    for crate::api::dto::MeshtasticDebugReportDto
+{
+    fn into_into_dart(self) -> crate::api::dto::MeshtasticDebugReportDto {
         self
     }
 }
@@ -4965,6 +5237,13 @@ impl SseEncode for crate::api::dto::HourlyWeatherDto {
     }
 }
 
+impl SseEncode for i16 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        serializer.cursor.write_i16::<NativeEndian>(self).unwrap();
+    }
+}
+
 impl SseEncode for i32 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -5105,6 +5384,26 @@ impl SseEncode for Vec<crate::api::dto::LineupStageDto> {
     }
 }
 
+impl SseEncode for Vec<crate::api::dto::MeshtasticDebugDeviceDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::api::dto::MeshtasticDebugDeviceDto>::sse_encode(item, serializer);
+        }
+    }
+}
+
+impl SseEncode for Vec<crate::api::dto::MeshtasticDebugFrameDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::api::dto::MeshtasticDebugFrameDto>::sse_encode(item, serializer);
+        }
+    }
+}
+
 impl SseEncode for Vec<crate::api::dto::PeerStatusInfo> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -5165,6 +5464,45 @@ impl SseEncode for Vec<crate::api::dto::TransportPeerDto> {
     }
 }
 
+impl SseEncode for crate::api::dto::MeshtasticDebugDeviceDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.device_id, serializer);
+        <Option<String>>::sse_encode(self.name, serializer);
+        <Option<i16>>::sse_encode(self.rssi, serializer);
+        <Vec<String>>::sse_encode(self.services, serializer);
+    }
+}
+
+impl SseEncode for crate::api::dto::MeshtasticDebugFrameDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.kind, serializer);
+        <String>::sse_encode(self.topic_tag_hex, serializer);
+        <String>::sse_encode(self.message_id_hex, serializer);
+        <String>::sse_encode(self.body_hex, serializer);
+        <Option<String>>::sse_encode(self.body_text, serializer);
+    }
+}
+
+impl SseEncode for crate::api::dto::MeshtasticDebugReportDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.device_id, serializer);
+        <bool>::sse_encode(self.connected, serializer);
+        <u16>::sse_encode(self.mtu, serializer);
+        <Vec<String>>::sse_encode(self.services, serializer);
+        <u32>::sse_encode(self.sent_fragments, serializer);
+        <u32>::sse_encode(self.raw_from_radio_count, serializer);
+        <u32>::sse_encode(self.private_app_count, serializer);
+        <Vec<crate::api::dto::MeshtasticDebugFrameDto>>::sse_encode(
+            self.received_frames,
+            serializer,
+        );
+        <Vec<String>>::sse_encode(self.events, serializer);
+    }
+}
+
 impl SseEncode for Option<String> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -5181,6 +5519,16 @@ impl SseEncode for Option<crate::api::dto::AttestationDto> {
         <bool>::sse_encode(self.is_some(), serializer);
         if let Some(value) = self {
             <crate::api::dto::AttestationDto>::sse_encode(value, serializer);
+        }
+    }
+}
+
+impl SseEncode for Option<i16> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <i16>::sse_encode(value, serializer);
         }
     }
 }
@@ -5265,6 +5613,13 @@ impl SseEncode for crate::api::dto::TransportStatusDto {
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <crate::api::dto::RelayStatusDto>::sse_encode(self.relay, serializer);
         <crate::api::dto::BleStatusDto>::sse_encode(self.ble, serializer);
+    }
+}
+
+impl SseEncode for u16 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        serializer.cursor.write_u16::<NativeEndian>(self).unwrap();
     }
 }
 
