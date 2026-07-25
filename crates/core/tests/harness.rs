@@ -4,7 +4,7 @@
 
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
-use std::sync::Once;
+use std::sync::{Mutex, Once, OnceLock};
 use std::time::Duration;
 
 /// A running `wrangler dev` instance with ephemeral state.
@@ -34,6 +34,11 @@ impl DevServer {
         TRACING.call_once(|| {
             let _ = tracing_subscriber::fmt::try_init();
         });
+        static START_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        let start_guard = START_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
@@ -126,6 +131,8 @@ impl DevServer {
                 }
             }
         }
+
+        drop(start_guard);
 
         // Additional warmup: poll with HTTP until /festivals responds
         let http_url = format!("http://127.0.0.1:{port}");

@@ -237,6 +237,14 @@ async fn ble_reconnect_tick(
 
 /// Drain all gossip receivers, dispatching events to the sync orchestrator
 /// and updating connection state on NeighborUp/NeighborDown.
+#[derive(Clone)]
+struct GossipPumpContext {
+    connection_manager: Arc<ConnectionManager>,
+    sync_orchestrator: Arc<SyncOrchestrator>,
+    endpoint: Option<iroh::Endpoint>,
+    doc_manager: Arc<DocManager>,
+}
+
 async fn gossip_event_pump(
     gossip_manager: Arc<Mutex<GossipManager>>,
     connection_manager: Arc<ConnectionManager>,
@@ -244,6 +252,12 @@ async fn gossip_event_pump(
     endpoint: Option<iroh::Endpoint>,
     doc_manager: Arc<DocManager>,
 ) {
+    let context = GossipPumpContext {
+        connection_manager,
+        sync_orchestrator,
+        endpoint,
+        doc_manager,
+    };
     // Wait briefly to let subscriptions get established before draining
     tokio::time::sleep(Duration::from_millis(500)).await;
 
@@ -269,10 +283,7 @@ async fn gossip_event_pump(
                 festival_id,
                 is_group,
                 topic_id,
-                connection_manager.clone(),
-                sync_orchestrator.clone(),
-                endpoint.clone(),
-                doc_manager.clone(),
+                context.clone(),
             )));
         }
     }
@@ -291,10 +302,7 @@ async fn gossip_event_pump(
                 festival_id,
                 is_group,
                 topic_id,
-                connection_manager.clone(),
-                sync_orchestrator.clone(),
-                endpoint.clone(),
-                doc_manager.clone(),
+                context.clone(),
             )));
         }
     }
@@ -309,11 +317,14 @@ async fn pump_single_receiver(
     festival_id: Option<String>,
     is_group_topic: bool,
     topic_id: TopicId,
-    connection_manager: Arc<ConnectionManager>,
-    sync_orchestrator: Arc<SyncOrchestrator>,
-    endpoint: Option<iroh::Endpoint>,
-    doc_manager: Arc<DocManager>,
+    context: GossipPumpContext,
 ) {
+    let GossipPumpContext {
+        connection_manager,
+        sync_orchestrator,
+        endpoint,
+        doc_manager,
+    } = context;
     let topic_label = topic_id.to_string();
     use iroh_gossip::api::Event;
 

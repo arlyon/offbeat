@@ -91,7 +91,7 @@ async fn test_ble_discovery_and_sync() {
     let group_key = db_a.load_group_key(&group_id).unwrap().unwrap();
 
     // Construct invite URL
-    let b64key = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&group_key);
+    let b64key = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(group_key);
     let invite_url = format!("offbeat://group/{}/{}/{}", festival_id, group_id, b64key);
 
     // Alice creates a document in that group
@@ -138,10 +138,10 @@ async fn test_ble_discovery_and_sync() {
     // Wait for sync
     timeout(Duration::from_secs(15), async {
         loop {
-            if let Some(val) = node_b.doc_manager.read_map_value(&doc_id, "hello") {
-                if val == "world" {
-                    break;
-                }
+            if let Some(val) = node_b.doc_manager.read_map_value(&doc_id, "hello")
+                && val == "world"
+            {
+                break;
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
