@@ -208,10 +208,7 @@ class AdminPanel extends StatelessWidget {
                                 width: 28,
                                 height: 28,
                                 decoration: BoxDecoration(
-                                  border: Border.all(
-                                    color: colorFg4,
-                                    width: 1,
-                                  ),
+                                  border: Border.all(color: colorFg4, width: 1),
                                 ),
                                 child: const Center(
                                   child: Icon(

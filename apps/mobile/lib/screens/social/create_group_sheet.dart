@@ -49,7 +49,9 @@ class _CreateGroupSheetState extends State<CreateGroupSheet> {
     } else {
       final code = _codeController.text.trim().toUpperCase();
       if (!RegExp(r'^[A-Z0-9]{3}-[A-Z0-9]{3}$').hasMatch(code)) {
-        setState(() => _error = 'CODE FORMAT: 3 CHARS \u2014 3 CHARS (E.G. 7K3-X9P)');
+        setState(
+          () => _error = 'CODE FORMAT: 3 CHARS \u2014 3 CHARS (E.G. 7K3-X9P)',
+        );
         return;
       }
       widget.onJoin(code);
@@ -241,7 +243,9 @@ class _CreateGroupSheetState extends State<CreateGroupSheet> {
                     fontFamily: 'JetBrainsMono',
                     fontSize: 10,
                     letterSpacing: 0.08 * 10,
-                    color: _error != null && _tab == 'new' ? colorErr : colorFg4,
+                    color: _error != null && _tab == 'new'
+                        ? colorErr
+                        : colorFg4,
                   ),
                 ),
               ],
@@ -372,7 +376,9 @@ class _CreateGroupSheetState extends State<CreateGroupSheet> {
                     fontFamily: 'JetBrainsMono',
                     fontSize: 10,
                     letterSpacing: 0.08 * 10,
-                    color: _error != null && _tab == 'join' ? colorErr : colorFg4,
+                    color: _error != null && _tab == 'join'
+                        ? colorErr
+                        : colorFg4,
                   ),
                 ),
               ],

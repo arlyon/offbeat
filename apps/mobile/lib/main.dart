@@ -34,11 +34,13 @@ Future<void> main() async {
   await RustLib.init();
   await BluetoothService.requestPermissions();
   await BluetoothService.initBle();
-  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
-    statusBarColor: Colors.transparent,
-    statusBarBrightness: Brightness.dark,
-    statusBarIconBrightness: Brightness.light,
-  ));
+  SystemChrome.setSystemUIOverlayStyle(
+    const SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarBrightness: Brightness.dark,
+      statusBarIconBrightness: Brightness.light,
+    ),
+  );
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
   runApp(const OffbeatApp());
 }
@@ -78,7 +80,8 @@ class _OffbeatShellState extends State<_OffbeatShell>
 
   // Rust bridge node
   AppNode? _node;
-  final ValueNotifier<TransportStatusDto?> _transportStatusNotifier = ValueNotifier(null);
+  final ValueNotifier<TransportStatusDto?> _transportStatusNotifier =
+      ValueNotifier(null);
   final ValueNotifier<SyncStatusDto?> _syncStatusNotifier = ValueNotifier(null);
 
   bool _nodeReady = false;
@@ -113,11 +116,9 @@ class _OffbeatShellState extends State<_OffbeatShell>
 
   // Sync status
   bool _isSyncing = false;
-  SyncStatusDto? _syncStatus;
 
   // Transport status
   StreamSubscription<TransportStatusDto>? _transportSub;
-  TransportStatusDto? _transportStatus;
   bool _relayConnected = false;
   String? _relayFestivalId;
   int _blePeerCount = -1; // -1 = unavailable
@@ -196,19 +197,22 @@ class _OffbeatShellState extends State<_OffbeatShell>
     final invitePayload = uri.toString();
     final displayName = _displayName ?? 'anon';
 
-    node.joinGroup(invitePayload: invitePayload, displayName: displayName).then((result) {
-      if (!mounted) return;
-      // If we know the festival_id, navigate to that festival
-      if (result.festivalId.isNotEmpty) {
-        final fest = _festivals.firstWhere(
-          (f) => f.id == result.festivalId,
-          orElse: () => _festivals.first,
-        );
-        _onFestivalTap(fest);
-      }
-    }).catchError((e) {
-      debugPrint('deep link join failed: $e');
-    });
+    node
+        .joinGroup(invitePayload: invitePayload, displayName: displayName)
+        .then((result) {
+          if (!mounted) return;
+          // If we know the festival_id, navigate to that festival
+          if (result.festivalId.isNotEmpty) {
+            final fest = _festivals.firstWhere(
+              (f) => f.id == result.festivalId,
+              orElse: () => _festivals.first,
+            );
+            _onFestivalTap(fest);
+          }
+        })
+        .catchError((e) {
+          debugPrint('deep link join failed: $e');
+        });
   }
 
   Future<void> _initNode() async {
@@ -262,7 +266,6 @@ class _OffbeatShellState extends State<_OffbeatShell>
       if (mounted) {
         setState(() {
           _isSyncing = status.syncing;
-          _syncStatus = status;
           _syncStatusNotifier.value = status;
         });
       }
@@ -273,7 +276,6 @@ class _OffbeatShellState extends State<_OffbeatShell>
     _transportSub = transportStream.listen((status) {
       if (mounted) {
         setState(() {
-          _transportStatus = status;
           _transportStatusNotifier.value = status;
           _relayConnected = status.relay.connected;
           _blePeerCount = status.ble.active ? status.ble.peerCount : -1;
@@ -293,7 +295,6 @@ class _OffbeatShellState extends State<_OffbeatShell>
     _relayFestivalId = null;
     setState(() {
       _nodeReady = false;
-      _transportStatus = null;
       _relayConnected = false;
       _blePeerCount = -1;
       _selectedFestival = null;
@@ -494,9 +495,14 @@ class _OffbeatShellState extends State<_OffbeatShell>
     try {
       // Fetch the festival DO's public key BEFORE connecting so the
       // receive loop can verify signed updates in the catchup.
-      final pubKeyHex = await _festivalService.fetchFestivalPublicKey(festivalId);
+      final pubKeyHex = await _festivalService.fetchFestivalPublicKey(
+        festivalId,
+      );
       if (pubKeyHex != null) {
-        await node.setFestivalPublicKey(festivalId: festivalId, hexKey: pubKeyHex);
+        await node.setFestivalPublicKey(
+          festivalId: festivalId,
+          hexKey: pubKeyHex,
+        );
       }
 
       // Connect WS relay to the Festival DO
@@ -656,6 +662,8 @@ class _OffbeatShellState extends State<_OffbeatShell>
       isAdmin: _isAdmin,
       adminRequestStatus: _adminRequestStatus,
       adminKeys: _adminKeys,
+      node: _node,
+      currentFestivalId: _selectedFestival?.id,
       onDisplayNameChanged: (name) async {
         await _node?.setDisplayName(name: name);
         setState(() => _displayName = name);
@@ -709,104 +717,108 @@ class _OffbeatShellState extends State<_OffbeatShell>
           }
         },
         child: Scaffold(
-        backgroundColor: colorBg,
-        body: Column(
-          children: [
-            // Shell-level TopNav with animation
-            TopNav(
-              festivalName: _selectedFestival?.name,
-              showBack: inFestival,
-              onBack: _navigateBack,
-              animation: _navController,
-              syncing: _isSyncing,
-              relayConnected: _relayConnected,
-              blePeerCount: _blePeerCount,
-              onConnectionTap: () => showConnectionDrawer(
-                context,
-                transportStatus: _transportStatusNotifier,
-                syncStatus: _syncStatusNotifier,
-                onStartBle: _restartNode,
-                onConnectPeer: (deviceId) => _node?.connectPeer(deviceId: deviceId),
-                onNudgeGossip: () => _node?.nudgeGossip(),
-                onRestartBle: () => _node?.restartBle(),
-              ),
-              rightWidgets: [
-                // Crossfade between settings (lobby) and search+admin (festival)
-                AnimatedBuilder(
-                  animation: _navController,
-                  builder: (context, _) {
-                    final t = _navController.value;
-                    return Stack(
-                      children: [
-                        // Settings button (lobby)
-                        IgnorePointer(
-                          ignoring: t >= 0.5,
-                          child: Opacity(
-                            opacity: 1.0 - t,
-                            child: NavIconButton(
-                              icon: Icons.settings,
-                              onTap: _showSettingsSheet,
-                            ),
-                          ),
-                        ),
-                        // Search + Admin (festival)
-                        IgnorePointer(
-                          ignoring: t < 0.5,
-                          child: Opacity(
-                            opacity: t,
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                NavIconButton(icon: Icons.search),
-                                if (_isAdmin)
-                                  NavIconButton(
-                                    icon: Icons.shield,
-                                    color: colorAccent,
-                                    onTap: () => _showAdminPanel(context),
-                                  ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ],
-                    );
-                  },
+          backgroundColor: colorBg,
+          body: Column(
+            children: [
+              // Shell-level TopNav with animation
+              TopNav(
+                festivalName: _selectedFestival?.name,
+                showBack: inFestival,
+                onBack: _navigateBack,
+                animation: _navController,
+                syncing: _isSyncing,
+                relayConnected: _relayConnected,
+                blePeerCount: _blePeerCount,
+                onConnectionTap: () => showConnectionDrawer(
+                  context,
+                  transportStatus: _transportStatusNotifier,
+                  syncStatus: _syncStatusNotifier,
+                  onStartBle: _restartNode,
+                  onConnectPeer: (deviceId) =>
+                      _node?.connectPeer(deviceId: deviceId),
+                  onNudgeGossip: () => _node?.nudgeGossip(),
+                  onRestartBle: () => _node?.restartBle(),
                 ),
-                // Weather pill (only visible inside festival when forecast available)
-                if (_weather != null && _weather!.hourly.time.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(left: 2),
-                    child: WeatherPill(forecast: _weather!),
+                rightWidgets: [
+                  // Crossfade between settings (lobby) and search+admin (festival)
+                  AnimatedBuilder(
+                    animation: _navController,
+                    builder: (context, _) {
+                      final t = _navController.value;
+                      return Stack(
+                        children: [
+                          // Settings button (lobby)
+                          IgnorePointer(
+                            ignoring: t >= 0.5,
+                            child: Opacity(
+                              opacity: 1.0 - t,
+                              child: NavIconButton(
+                                icon: Icons.settings,
+                                onTap: _showSettingsSheet,
+                              ),
+                            ),
+                          ),
+                          // Search + Admin (festival)
+                          IgnorePointer(
+                            ignoring: t < 0.5,
+                            child: Opacity(
+                              opacity: t,
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  NavIconButton(icon: Icons.search),
+                                  if (_isAdmin)
+                                    NavIconButton(
+                                      icon: Icons.shield,
+                                      color: colorAccent,
+                                      onTap: () => _showAdminPanel(context),
+                                    ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      );
+                    },
                   ),
-              ],
-            ),
-            // Body with slide animation
-            Expanded(child: _buildAnimatedBody()),
-            // Bottom tab bar — slides up when entering festival
-            AnimatedBuilder(
-              animation: _navController,
-              builder: (context, child) {
-                final showBar = inFestival || _navController.isAnimating;
-                if (!showBar) return const SizedBox.shrink();
-                return SlideTransition(
-                  position: Tween<Offset>(
-                    begin: const Offset(0.0, 1.0),
-                    end: Offset.zero,
-                  ).animate(CurvedAnimation(
-                    parent: _navController,
-                    curve: _curve,
-                  )),
-                  child: child,
-                );
-              },
-              child: OffbeatTabBar(
-                activeTab: _activeTab,
-                onTabChanged: (tab) => setState(() => _activeTab = tab),
+                  // Weather pill (only visible inside festival when forecast available)
+                  if (_weather != null && _weather!.hourly.time.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 2),
+                      child: WeatherPill(forecast: _weather!),
+                    ),
+                ],
               ),
-            ),
-          ],
+              // Body with slide animation
+              Expanded(child: _buildAnimatedBody()),
+              // Bottom tab bar — slides up when entering festival
+              AnimatedBuilder(
+                animation: _navController,
+                builder: (context, child) {
+                  final showBar = inFestival || _navController.isAnimating;
+                  if (!showBar) return const SizedBox.shrink();
+                  return SlideTransition(
+                    position:
+                        Tween<Offset>(
+                          begin: const Offset(0.0, 1.0),
+                          end: Offset.zero,
+                        ).animate(
+                          CurvedAnimation(
+                            parent: _navController,
+                            curve: _curve,
+                          ),
+                        ),
+                    child: child,
+                  );
+                },
+                child: OffbeatTabBar(
+                  activeTab: _activeTab,
+                  onTabChanged: (tab) => setState(() => _activeTab = tab),
+                ),
+              ),
+            ],
+          ),
         ),
-      ),
       ),
     );
   }
@@ -907,7 +919,10 @@ class _OffbeatShellState extends State<_OffbeatShell>
     if (node == null || fest == null) return;
 
     try {
-      final nowStarred = await node.toggleStar(festivalId: fest.id, setId: setId);
+      final nowStarred = await node.toggleStar(
+        festivalId: fest.id,
+        setId: setId,
+      );
       if (!mounted) return;
       setState(() {
         if (nowStarred) {
@@ -943,21 +958,29 @@ class _OffbeatShellState extends State<_OffbeatShell>
     List<FestSet>? sets;
 
     if (lineup != null) {
-      stages = lineup.stages.map((s) => Stage.fromJson({
-        'id': s.id,
-        'name': s.name,
-        'short': s.short,
-        'color': s.color,
-        'order': s.order,
-      })).toList();
+      stages = lineup.stages
+          .map(
+            (s) => Stage.fromJson({
+              'id': s.id,
+              'name': s.name,
+              'short': s.short,
+              'color': s.color,
+              'order': s.order,
+            }),
+          )
+          .toList();
 
-      days = lineup.days.map((d) => Day.fromJson({
-        'id': d.id,
-        'label': d.label,
-        'num': d.num,
-        'month': d.month,
-        'year': d.year,
-      })).toList();
+      days = lineup.days
+          .map(
+            (d) => Day.fromJson({
+              'id': d.id,
+              'label': d.label,
+              'num': d.num,
+              'month': d.month,
+              'year': d.year,
+            }),
+          )
+          .toList();
 
       sets = lineup.sets.map((s) {
         final festSet = FestSet.fromJson({
@@ -973,7 +996,6 @@ class _OffbeatShellState extends State<_OffbeatShell>
         festSet.starred = _starredSetIds.contains(s.id);
         return festSet;
       }).toList();
-
     }
 
     return FestivalDetailScreen(
@@ -987,7 +1009,6 @@ class _OffbeatShellState extends State<_OffbeatShell>
       onStar: _handleStarToggle,
     );
   }
-
 }
 
 class _NowTabContent extends StatelessWidget {

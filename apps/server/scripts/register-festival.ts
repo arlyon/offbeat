@@ -81,7 +81,9 @@ Example:
 		process.exit(0);
 	}
 
-	const jsonFile = args.find((a) => !a.startsWith("--") && !args[args.indexOf(a) - 1]?.startsWith("--api"));
+	const jsonFile = args.find(
+		(a) => !a.startsWith("--") && !args[args.indexOf(a) - 1]?.startsWith("--api"),
+	);
 	const apiUrlIdx = args.indexOf("--api-url");
 	const apiUrl = apiUrlIdx !== -1 ? args[apiUrlIdx + 1] : "http://localhost:8787";
 	const dryRun = args.includes("--dry-run");

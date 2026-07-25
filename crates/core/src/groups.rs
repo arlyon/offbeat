@@ -81,16 +81,17 @@ impl GroupManager {
         let festival_id_s = festival_id.to_string();
         let user_id_s = user_id.to_string();
         let display_name_s = display_name.to_string();
-        self.doc_manager.mutate(&doc_id, &["root", "members"], |maps, txn| {
-            let (root, members) = (&maps[0], &maps[1]);
-            root.insert(txn, "name", name);
-            root.insert(txn, "festival_id", festival_id_s);
-            root.insert(txn, "created_by", user_id_s.clone());
+        self.doc_manager
+            .mutate(&doc_id, &["root", "members"], |maps, txn| {
+                let (root, members) = (&maps[0], &maps[1]);
+                root.insert(txn, "name", name);
+                root.insert(txn, "festival_id", festival_id_s);
+                root.insert(txn, "created_by", user_id_s.clone());
 
-            let member = doc_manager::get_or_init_map(members, txn, &user_id_s);
-            member.insert(txn, "displayName", display_name_s);
-            member.insert(txn, "status", "active");
-        })?;
+                let member = doc_manager::get_or_init_map(members, txn, &user_id_s);
+                member.insert(txn, "displayName", display_name_s);
+                member.insert(txn, "status", "active");
+            })?;
 
         let b64key = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(key);
         let invite_payload = format!("offbeat://group/{festival_id}/{group_id}/{b64key}");
@@ -164,11 +165,12 @@ impl GroupManager {
 
         let user_id_s = user_id.to_string();
         let display_name_s = display_name.to_string();
-        self.doc_manager.mutate(&doc_id, &["members"], |maps, txn| {
-            let member = doc_manager::get_or_init_map(&maps[0], txn, &user_id_s);
-            member.insert(txn, "displayName", display_name_s);
-            member.insert(txn, "status", "active");
-        })?;
+        self.doc_manager
+            .mutate(&doc_id, &["members"], |maps, txn| {
+                let member = doc_manager::get_or_init_map(&maps[0], txn, &user_id_s);
+                member.insert(txn, "displayName", display_name_s);
+                member.insert(txn, "status", "active");
+            })?;
 
         let topic_state = topics::group_topic(&group_key, "state");
         let topic_chat = topics::group_topic(&group_key, "chat");
@@ -196,9 +198,11 @@ impl GroupManager {
     ) -> anyhow::Result<Option<Vec<u8>>> {
         let doc_id = format!("group/{group_id}/state");
         let user_id_s = user_id.to_string();
-        let update = self.doc_manager.mutate(&doc_id, &["members"], |maps, txn| {
-            maps[0].remove(txn, &user_id_s);
-        })?;
+        let update = self
+            .doc_manager
+            .mutate(&doc_id, &["members"], |maps, txn| {
+                maps[0].remove(txn, &user_id_s);
+            })?;
 
         self.db.delete_group(group_id)?;
 
@@ -229,18 +233,20 @@ impl GroupManager {
         let custom_loc_s = custom_location.map(String::from);
         let updated_at = now_rfc3339();
 
-        let diff = self.doc_manager.mutate(&doc_id, &["members"], |maps, txn| {
-            let member = doc_manager::get_or_init_map(&maps[0], txn, &user_id_s);
-            member.insert(txn, "status", "active");
-            member.insert(txn, "updatedAt", updated_at);
-            if let Some(sid) = stage_id_s {
-                member.insert(txn, "stageId", sid);
-                member.remove(txn, "customLocation");
-            } else if let Some(cl) = custom_loc_s {
-                member.insert(txn, "customLocation", cl);
-                member.remove(txn, "stageId");
-            }
-        })?;
+        let diff = self
+            .doc_manager
+            .mutate(&doc_id, &["members"], |maps, txn| {
+                let member = doc_manager::get_or_init_map(&maps[0], txn, &user_id_s);
+                member.insert(txn, "status", "active");
+                member.insert(txn, "updatedAt", updated_at);
+                if let Some(sid) = stage_id_s {
+                    member.insert(txn, "stageId", sid);
+                    member.remove(txn, "customLocation");
+                } else if let Some(cl) = custom_loc_s {
+                    member.insert(txn, "customLocation", cl);
+                    member.remove(txn, "stageId");
+                }
+            })?;
 
         let encrypted = crypto::encrypt(&group_key, &diff)?;
         Ok(encrypted)
@@ -332,8 +338,7 @@ impl GroupManager {
             .into_iter()
             .map(|(uid, fields)| GroupMember {
                 user_id: uid,
-                display_name: doc_manager::any_str(&fields, "displayName")
-                    .unwrap_or_default(),
+                display_name: doc_manager::any_str(&fields, "displayName").unwrap_or_default(),
                 status: doc_manager::any_str(&fields, "status")
                     .unwrap_or_else(|| "active".to_string()),
                 stage_id: doc_manager::any_str(&fields, "stageId"),
@@ -408,18 +413,13 @@ impl GroupManager {
 
     /// Read the starred set IDs for a user from the group doc.
     pub fn read_user_stars(&self, group_id: &str, user_id: &str) -> Vec<String> {
-        use yrs::{any::Any, Out};
+        use yrs::{Out, any::Any};
         let doc_id = format!("group/{group_id}/state");
         self.doc_manager.read(&doc_id, &["stars"], |maps, txn| {
             match maps[0].get(txn, user_id) {
                 Some(Out::YMap(user_stars)) => user_stars
                     .keys(txn)
-                    .filter(|k| {
-                        matches!(
-                            user_stars.get(txn, k),
-                            Some(Out::Any(Any::Bool(true)))
-                        )
-                    })
+                    .filter(|k| matches!(user_stars.get(txn, k), Some(Out::Any(Any::Bool(true)))))
                     .map(|k| k.to_string())
                     .collect(),
                 _ => vec![],
@@ -615,13 +615,7 @@ mod tests {
             .unwrap();
 
         let encrypted = gm
-            .add_pin(
-                &create.group_id,
-                "pin-1",
-                "Tent area",
-                "53.5,-2.2",
-                "user1",
-            )
+            .add_pin(&create.group_id, "pin-1", "Tent area", "53.5,-2.2", "user1")
             .await
             .unwrap();
 
@@ -674,11 +668,7 @@ mod tests {
         assert_eq!(state.pins.len(), 1);
         assert_eq!(state.pins[0].label, "Meeting point");
 
-        let alice = state
-            .members
-            .iter()
-            .find(|m| m.user_id == "user1")
-            .unwrap();
+        let alice = state.members.iter().find(|m| m.user_id == "user1").unwrap();
         assert_eq!(alice.stage_id.as_deref(), Some("main-stage"));
     }
 
@@ -710,9 +700,11 @@ mod tests {
             .unwrap();
 
         // New format: offbeat://group/{festival_id}/{group_id}/{key}
-        assert!(create
-            .invite_payload
-            .starts_with("offbeat://group/wavelength26/"));
+        assert!(
+            create
+                .invite_payload
+                .starts_with("offbeat://group/wavelength26/")
+        );
         assert_eq!(create.festival_id, "wavelength26");
 
         // Should have 3 segments after "offbeat://group/"
@@ -804,11 +796,7 @@ mod tests {
 
         // --- User A: star (like) some events ---
         let _encrypted_stars = gm_a
-            .update_stars(
-                group_id,
-                "alice",
-                vec!["event-1".into(), "event-2".into()],
-            )
+            .update_stars(group_id, "alice", vec!["event-1".into(), "event-2".into()])
             .await
             .unwrap();
 
@@ -943,8 +931,7 @@ mod tests {
             .handle_sync_request(group_id, &encrypted_sv_d1)
             .await
             .unwrap();
-        let diff_join =
-            crate::crypto::decrypt(&group_key, &encrypted_diff_d2_to_d1).unwrap();
+        let diff_join = crate::crypto::decrypt(&group_key, &encrypted_diff_d2_to_d1).unwrap();
         gm_d1
             .doc_manager
             .apply_update(&format!("group/{group_id}/state"), &diff_join)

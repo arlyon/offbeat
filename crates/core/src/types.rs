@@ -147,9 +147,18 @@ pub struct TransportStatus {
 
 #[derive(Debug, Clone)]
 pub struct SignedUpdate {
-    pub update: Vec<u8>,    // raw Yrs update bytes
+    pub update: Vec<u8>, // raw Yrs update bytes
     pub author: String,
     pub signature: Vec<u8>, // raw Ed25519 signature bytes
+}
+
+/// An authority-verified festival checkpoint or delta persisted for restart and relay.
+#[derive(Debug, Clone)]
+pub struct VerifiedFestivalUpdate {
+    pub doc_id: String,
+    pub kind: i32,
+    pub authority_seq: u64,
+    pub signed_update: SignedUpdate,
 }
 
 /// Hourly weather data arrays (parallel arrays, one entry per hour).
@@ -234,7 +243,10 @@ mod tests {
         let roundtrip: WeatherForecast = serde_json::from_str(&json).unwrap();
         assert_eq!(forecast.updated_at, roundtrip.updated_at);
         assert_eq!(forecast.hourly.time, roundtrip.hourly.time);
-        assert_eq!(forecast.hourly.temperature_2m, roundtrip.hourly.temperature_2m);
+        assert_eq!(
+            forecast.hourly.temperature_2m,
+            roundtrip.hourly.temperature_2m
+        );
     }
 
     #[test]

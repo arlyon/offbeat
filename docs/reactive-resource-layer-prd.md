@@ -1,6 +1,6 @@
 # OFFBEAT — Reactive Resource Layer PRD
 
-> Formalize the data sync lifecycle into a unified abstraction. Replace hand-wired per-entity boilerplate with a trait-driven resource model, reactive streams to Dart, and a clean sync protocol.
+> Implemented foundation with remaining lifecycle, trust, transport, and multi-device integration work. See `reactive-resource-layer-execution-plan.md` for the completion ledger.
 
 ## Introduction
 
@@ -11,9 +11,9 @@ Offbeat's core data model has four resource types arranged in a 2×2 matrix:
 | **CRDT Doc** (map-shaped) | Festival state (lineup, stages, sets, announcements) | Group state (members, check-ins, stars, pins) |
 | **Append Log** (ordered messages) | Stage chat | Group chat |
 
-Today, each cell is wired up independently — hand-rolled SQL CRUD, custom wire encoding, manual seq tracking, bespoke dispatch matching, and per-entity bridge DTOs. The same lifecycle (topic derivation → subscribe → catch-up → persist → stream to UI) is reimplemented four times with subtle differences.
+The repository now has a resource registry, state-vector/HWM sync foundations, and reactive bridge APIs. Remaining work is to complete resource registration and normal-path integration, enforce distinct trust envelopes, harden persistence, and validate physical routes.
 
-This PRD formalizes that lifecycle into a **resource abstraction** in `crates/core`, a **unified sync protocol**, **reactive FRB streams** to Dart, and an **iroh custom transport** replacing the WebSocket relay.
+This PRD defines the durable lifecycle: **resource abstraction** in `crates/core`, **two sync protocols selected by data shape**, **reactive FRB streams** to Dart, and **transport-neutral peer capabilities**. Whether a physical route carries native iroh framing is an evidence-driven implementation decision.
 
 ## Goals & Objectives
 
@@ -22,7 +22,7 @@ This PRD formalizes that lifecycle into a **resource abstraction** in `crates/co
 | Reduce sync boilerplate | Lines of code in gossip_manager + ws_relay + db CRUD | -60% |
 | Unified catch-up protocol | Number of distinct sync mechanisms | 2 (SV exchange + HWM) down from 3 |
 | Reactive UI | Dart screens using pull-based refresh | 0 (all stream-based) |
-| Transport unification | Separate transport abstractions (ws_relay vs gossip) | 1 (iroh only) |
+| Transport unification | Domain-specific sync protocols per route | 0 (shared resource semantics) |
 | Test reduction | Boilerplate test lines (manual SQL assertions) | -50% |
 
 ## Target Audience
@@ -144,6 +144,7 @@ For `CrdtDoc` resources, catch-up uses Yrs state vector exchange:
 The DO must hold the current Yrs doc state (not just a gossip log) so it can compute diffs. For encrypted resources, the SV and diff are encrypted with the group key before transmission.
 
 **What this replaces:**
+
 - `gossip_log` replay for CRDT data
 - `topic_sync_state` table (client-side)
 - `get_server_seq` / `set_server_seq` in `db/mod.rs`
@@ -188,6 +189,7 @@ Each chat message carries a `(user_id, writer_seq)` pair. The writer bumps their
 ```
 
 **What this replaces:**
+
 - `sinceSeq`-based catchup for chat
 - `gossip_log` sequential scan (server-side, for chat topics)
 
@@ -306,46 +308,37 @@ class GroupScreen extends StatelessWidget {
 }
 ```
 
-## WS Relay → iroh Custom Transport
+## Transport boundary
 
-### Current State
+### Settled requirement
 
-`ws_relay.rs` (350 lines) is a hand-built WebSocket client that:
-- Connects to the DO's WebSocket endpoint
-- Implements its own subscribe/unsubscribe protocol
-- Tracks `last_seen_seq` per topic
-- Does its own reconnect with exponential backoff
-- Feeds received messages into `dispatch_message`
+Every peer route must expose the same resource-level capabilities:
 
-This is a parallel transport alongside iroh-gossip, with its own protocol, its own state tracking, and its own reconnect logic.
+- subscribe/unsubscribe;
+- bilateral state-vector exchange;
+- per-writer chat catch-up;
+- live broadcast;
+- route profile and limits;
+- stable deduplication identity.
 
-### Target State
+The resource registry and sync orchestrator must not know whether a peer was reached through iroh, WebSocket, BLE, Wi-Fi, or Meshtastic.
 
-Replace `ws_relay.rs` with an iroh custom transport that speaks WebSocket underneath. The DO becomes just another peer in iroh's transport hierarchy:
+### Current WebSocket path
 
-```
-iroh::Endpoint
-  ├── QUIC (direct/relay)     ← default
-  ├── BLE                      ← proximity
-  ├── Meshtastic               ← mesh
-  └── WebSocket (custom)       ← DO relay ← NEW
-```
+`ws_relay.rs` connects to the JavaScript Festival Durable Object, restores subscriptions, performs catch-up, and feeds accepted messages into the common apply path. It remains a supported peer adapter until a replacement proves equivalent behaviour.
 
-The custom transport implements iroh's datagram transport traits (available via `unstable-custom-transports` feature, already enabled in `Cargo.toml`). WebSocket frames carry iroh datagrams. iroh handles multiplexing, gossip routing, and reconnect.
+### Open all-iroh decision
 
-### Benefits
+Using iroh for every practical route is desirable, especially where the existing BLE custom transport is mature. It is not yet an accepted requirement that all physical links carry identical iroh datagrams.
 
-- Delete `ws_relay.rs` entirely (~350 lines)
-- Delete `WsRelaySink`, `WsClientMessage`, `WsServerMessage` types
-- Delete manual reconnect logic (iroh handles it)
-- Delete manual seq tracking (replaced by Yrs SV exchange / chat HWM)
-- Gossip is truly transport-agnostic — same code path regardless of how data arrived
+Prototype before replacing the WebSocket path:
 
-### DO Protocol Changes
+1. Prove real state-vector and bounded chat sync over iroh BLE.
+2. Determine whether a JavaScript Durable Object can support the required WebSocket custom-transport semantics without retaining a second translation protocol.
+3. Measure native iroh framing versus compact resource frames over Meshtastic, including fragmentation and airtime.
+4. Preserve fallback to the current adapter until the prototype passes restart, catch-up, and multi-device tests.
 
-The DO's WebSocket protocol must change to speak iroh datagrams instead of the current JSON-envelope protocol. This is a server-side change in `festival-do.ts`.
-
-Alternatively (for the "server stays JS" constraint): the custom transport could adapt between iroh datagrams on the client side and the existing JSON protocol on the server side. This is a translation layer in the transport implementation. Less clean, but avoids changing the DO.
+The decision may choose native iroh for some routes and resource adapters for others. This does not weaken transport agnosticism at the domain layer.
 
 ## Data Schema Changes
 
@@ -389,8 +382,8 @@ The `gossip_log` table remains for chat catchup but is no longer used for CRDT s
 | `resource.rs` | **NEW** — Resource trait, ResourceKind, Visibility, Priority, concrete impls |
 | `sync.rs` | **NEW** — SyncOrchestrator, catch-up protocol implementations |
 | `gossip_manager.rs` | **SIMPLIFY** — remove wire encoding/decoding, GossipMessage enum, dispatch. Becomes thin: subscribe, broadcast Yrs diffs or chat messages |
-| `ws_relay.rs` | **DELETE** — replaced by iroh custom transport |
-| `ws_transport.rs` | **NEW** — iroh custom transport over WebSocket |
+| `ws_relay.rs` | **KEEP UNTIL PROVEN** — current WebSocket peer adapter and fallback |
+| `ws_transport.rs` | **PROTOTYPE** — add only if native iroh-over-WebSocket proves simpler and equivalent |
 | `db/mod.rs` | **SIMPLIFY** — remove gossip_log CRUD, topic_sync_state CRUD, generalize doc/chat persistence |
 | `db/schema.sql` | **MODIFY** — drop gossip_log + topic_sync_state, add writer_seq to chat_messages |
 | `doc_manager.rs` | **MODIFY** — integrate with Resource trait for persistence callbacks |
@@ -431,25 +424,24 @@ The `gossip_log` table remains for chat catchup but is no longer used for CRDT s
 
 ## Success Metrics
 
-1. `gossip_manager.rs` reduced from ~720 lines to < 100
-2. `ws_relay.rs` deleted (350 lines)
-3. `db/mod.rs` reduced from ~620 lines to < 300
-4. Bridge `mod.rs` reduced from ~840 lines to < 400
-5. Zero pull-based data fetching in Dart (all streams)
-6. `pnpm check` passes, `cargo test --workspace` passes
-7. Two-device sync test: check-in appears on other device in < 1s
+1. Four logical resources share one registration, catch-up, persistence, and watcher lifecycle.
+2. CRDT and append-log catch-up have no third feature-specific protocol.
+3. Physical routes do not duplicate resource schemas or apply logic.
+4. Synced Flutter surfaces update through typed streams.
+5. `pnpm check` and targeted convergence/restart tests pass.
+6. Two-device tests prove check-ins, state-vector catch-up, bounded chat catch-up, and duplicate suppression.
 
 ## Open Questions
 
-1. **iroh custom transport stability** — The `unstable-custom-transports` API may change. How tightly should we couple to it vs. using an adapter?
-2. **DO protocol migration** — Should the DO speak iroh datagrams natively (cleaner) or should the custom transport translate between iroh and the existing JSON protocol (less server churn)?
-3. **Chat writer_seq persistence** — Should each client track its own monotonic counter in SQLite, or derive it from a hash of the message content?
-4. **Stream backpressure** — If the Dart side is slow to consume, should streams drop intermediate states (latest-value-wins for CRDTs) or buffer (for chat)?
-5. **Yrs doc size limits** — Should we compact/snapshot Yrs docs periodically to prevent unbounded growth?
+1. **All-iroh scope** — Which routes pass the BLE, WebSocket, and Meshtastic prototypes?
+2. **Offline public trust** — How are MainDO attestations cached, expired, and displayed when unavailable?
+3. **Append-log ordering** — Which causal ordering tuple replaces wall-clock authority while retaining per-writer HWM?
+4. **Stream backpressure** — CRDT streams may coalesce to latest state; chat streams must not silently lose messages.
+5. **Yrs lifecycle** — Any compaction design must prove convergence with peers holding older state vectors.
 
 ## Future Considerations
 
 - Port the CF DO to Rust (via `workers-rs` or a standalone relay binary)
-- BLE transport via iroh custom transports (reference impl exists)
-- Meshtastic transport via iroh custom transports
+- Promote BLE to the production iroh custom transport after hardware validation.
+- Revisit native iroh over Meshtastic only if measured airtime is competitive with compact resource frames.
 - Conflict-free chat reactions (could be a CRDT map overlay on the chat log)

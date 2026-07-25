@@ -94,9 +94,9 @@ Examples:
 		console.log("Generated new admin keypair:\n");
 	} else {
 		// Use provided public key
-		newPublicKey = args.find(
-			(a, i) => !a.startsWith("--") && (i === 0 || !args[i - 1]?.startsWith("--api")),
-		) || "";
+		newPublicKey =
+			args.find((a, i) => !a.startsWith("--") && (i === 0 || !args[i - 1]?.startsWith("--api"))) ||
+			"";
 
 		if (!newPublicKey || newPublicKey.length !== 64) {
 			console.error("Error: Public key must be 64 hex characters");

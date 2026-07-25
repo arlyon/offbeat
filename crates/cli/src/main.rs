@@ -172,7 +172,11 @@ fn print_help() {
     );
 }
 
-async fn handle_command(node: &Arc<OffbeatNode>, festival_id: &str, line: &str) -> anyhow::Result<()> {
+async fn handle_command(
+    node: &Arc<OffbeatNode>,
+    festival_id: &str,
+    line: &str,
+) -> anyhow::Result<()> {
     let mut parts = line.splitn(2, char::is_whitespace);
     let cmd = parts.next().unwrap_or("");
     let rest = parts.next().unwrap_or("").trim();
@@ -267,11 +271,20 @@ async fn handle_command(node: &Arc<OffbeatNode>, festival_id: &str, line: &str) 
                 anyhow::bail!("usage: state <group_id>");
             }
             let st = node.group_manager.get_group_state(rest).await?;
-            tracing::info!("group '{}' ({} members, {} pins)", st.name, st.members.len(), st.pins.len());
+            tracing::info!(
+                "group '{}' ({} members, {} pins)",
+                st.name,
+                st.members.len(),
+                st.pins.len()
+            );
             for m in &st.members {
                 tracing::info!(
                     "  member {} [{}] status={} stage={:?} loc={:?}",
-                    m.display_name, m.user_id, m.status, m.stage_id, m.custom_location
+                    m.display_name,
+                    m.user_id,
+                    m.status,
+                    m.stage_id,
+                    m.custom_location
                 );
             }
             for p in &st.pins {
@@ -317,7 +330,12 @@ async fn handle_command(node: &Arc<OffbeatNode>, festival_id: &str, line: &str) 
                 let peers = cm.peer_snapshot();
                 tracing::info!("{} known peer(s)", peers.len());
                 for p in peers {
-                    tracing::info!("  {} source={:?} gossip={:?}", p.endpoint_id, p.source, p.gossip_status);
+                    tracing::info!(
+                        "  {} source={:?} gossip={:?}",
+                        p.endpoint_id,
+                        p.source,
+                        p.gossip_status
+                    );
                 }
             }
         }

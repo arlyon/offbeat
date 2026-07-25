@@ -144,6 +144,20 @@ abstract class AppNode implements RustOpaqueInterface {
   /// Leave a group.
   Future<void> leaveGroup({required String groupId});
 
+  /// Listen for Meshtastic group chat frames and apply matching local groups.
+  Future<MeshtasticDebugReportDto> meshtasticListenApplyGroupChats({
+    required String deviceId,
+    required String festivalId,
+    required int listenMs,
+  });
+
+  /// Send a compact encrypted group chat through a selected Meshtastic radio.
+  Future<MeshtasticDebugReportDto> meshtasticSendGroupChat({
+    required String deviceId,
+    required String groupId,
+    required String text,
+  });
+
   /// Manually trigger a gossip join nudge for all currently visible BLE peers.
   /// Useful for breaking sync deadlocks.
   Future<void> nudgeGossip();

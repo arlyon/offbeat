@@ -123,7 +123,10 @@ impl ConnectionManager {
     /// Record that a sync dial was just started for this peer.
     pub fn mark_sync_attempted(&self, endpoint_id: &str) {
         let mut state = self.sync_state.lock().expect("sync_state lock poisoned");
-        state.entry(endpoint_id.to_string()).or_default().last_attempt = Some(Instant::now());
+        state
+            .entry(endpoint_id.to_string())
+            .or_default()
+            .last_attempt = Some(Instant::now());
     }
 
     /// Record a dial's outcome: success resets the backoff, failure widens it.
@@ -232,9 +235,13 @@ impl ConnectionManager {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        if let Err(e) =
-            db.upsert_festival_peer(festival_id, endpoint_id, None, now, PeerSource::Gossip.as_str())
-        {
+        if let Err(e) = db.upsert_festival_peer(
+            festival_id,
+            endpoint_id,
+            None,
+            now,
+            PeerSource::Gossip.as_str(),
+        ) {
             tracing::warn!(festival_id, peer = %endpoint_id, ?e, "failed to harvest gossip neighbor");
         }
     }
@@ -455,7 +462,11 @@ mod tests {
     #[test]
     fn test_bootstrap_peers_without_db_is_empty() {
         let cm = ConnectionManager::new("own-id".to_string());
-        cm.record_festival_peers("fest-1", &[make_peer("peer-a", None, 100)], PeerSource::Crdt);
+        cm.record_festival_peers(
+            "fest-1",
+            &[make_peer("peer-a", None, 100)],
+            PeerSource::Crdt,
+        );
         assert!(cm.bootstrap_peers("fest-1", 10).is_empty());
     }
 

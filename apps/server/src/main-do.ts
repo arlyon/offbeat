@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { ed25519 } from "@noble/curves/ed25519.js";
 import type { ClashfinderSource, Lineup } from "@offbeat/protocol";
 import { fetchClashfinder, parseClashfinderApi } from "@offbeat/protocol";
 import {
@@ -8,8 +9,23 @@ import {
 	verifyAuthentication,
 	verifyRegistration,
 } from "./auth";
-import { ed25519 } from "@noble/curves/ed25519.js";
 import { generateKeypair, sign, verify } from "./signing";
+
+function requireUrl(value: string): URL {
+	try {
+		return new URL(value);
+	} catch (error) {
+		throw new Error(`Invalid request URL: ${value}`, { cause: error });
+	}
+}
+
+function parseStoredJson<T>(value: string, label: string): T {
+	try {
+		return JSON.parse(value) as T;
+	} catch (error) {
+		throw new Error(`Invalid JSON in ${label}`, { cause: error });
+	}
+}
 
 export class MainDO extends DurableObject {
 	#publicKey: Uint8Array | null = null;
@@ -33,9 +49,7 @@ export class MainDO extends DurableObject {
 		// Priority 1: Environment variable (useful for pinning the root key in the app)
 		const envSecret = (this.env as { MAIN_DO_ROOT_SECRET?: string }).MAIN_DO_ROOT_SECRET;
 		if (envSecret && /^[0-9a-f]{64}$/i.test(envSecret)) {
-			const secretKey = new Uint8Array(
-				envSecret.match(/.{1,2}/g)!.map((byte) => Number.parseInt(byte, 16)),
-			);
+			const secretKey = hexToBytes(envSecret);
 			this.#secretKey = secretKey;
 			this.#publicKey = ed25519.getPublicKey(secretKey);
 			console.log("[main] root keypair initialized from environment");
@@ -209,7 +223,7 @@ export class MainDO extends DurableObject {
 				country: row.country,
 				startDate: row.start_date,
 				endDate: row.end_date,
-				genres: JSON.parse(row.genres as string),
+				genres: parseStoredJson<unknown[]>(row.genres as string, `festival ${row.id} genres`),
 				status: row.status,
 				clashfinderId: row.clashfinder_id ?? undefined,
 				publicKey: row.public_key ?? "",
@@ -249,7 +263,7 @@ export class MainDO extends DurableObject {
 			country: row.country,
 			startDate: row.start_date,
 			endDate: row.end_date,
-			genres: JSON.parse(row.genres as string),
+			genres: parseStoredJson<unknown[]>(row.genres as string, `festival ${row.id} genres`),
 			status: row.status,
 			clashfinderId: row.clashfinder_id ?? undefined,
 			publicKey: row.public_key ?? "",
@@ -304,7 +318,7 @@ export class MainDO extends DurableObject {
 			return new Response("Not an admin", { status: 403 });
 		}
 
-		const url = new URL(request.url);
+		const url = requireUrl(request.url);
 		const message = new TextEncoder().encode(url.pathname);
 		const valid = await verify(hexToBytes(pubKeyHex), message, hexToBytes(sigHex));
 		if (!valid) {
@@ -325,12 +339,12 @@ export class MainDO extends DurableObject {
 			.exec("SELECT credential_data FROM credentials WHERE id = ?", credentialId)
 			.toArray() as { credential_data: string }[];
 		if (rows.length === 0) return null;
-		const data = JSON.parse(rows[0].credential_data) as {
+		const data = parseStoredJson<{
 			credentialId: string;
 			publicKey: Record<string, number>;
 			counter: number;
 			transports?: string[];
-		};
+		}>(rows[0].credential_data, `credential ${credentialId}`);
 		// publicKey was stored as a serialized Uint8Array (JSON object with numeric keys)
 		const pkBytes = new Uint8Array(Object.values(data.publicKey));
 		return {
@@ -421,7 +435,7 @@ export class MainDO extends DurableObject {
 	}
 
 	async fetch(request: Request): Promise<Response> {
-		const url = new URL(request.url);
+		const url = requireUrl(request.url);
 		const path = url.pathname;
 		const method = request.method;
 		const env = this.env as Record<string, unknown>;
@@ -537,48 +551,32 @@ export class MainDO extends DurableObject {
 			if (authResult instanceof Response) return authResult;
 
 			const id = festivalPutMatch[1];
-			if (!this.#getFestival(id)) {
+			const current = this.#getFestival(id) as Record<string, unknown> | null;
+			if (!current) {
 				return new Response("Festival not found", { status: 404 });
 			}
 
 			const body = (await request.json()) as Record<string, unknown>;
-			const updates: string[] = [];
-			const values: unknown[] = [];
-
-			for (const [key, col] of [
-				["name", "name"],
-				["year", "year"],
-				["location", "location"],
-				["city", "city"],
-				["country", "country"],
-				["startDate", "start_date"],
-				["endDate", "end_date"],
-				["status", "status"],
-			]) {
-				if (body[key] !== undefined) {
-					updates.push(`${col} = ?`);
-					values.push(body[key]);
-				}
-			}
-			if (body.genres !== undefined) {
-				updates.push("genres = ?");
-				values.push(JSON.stringify(body.genres));
-			}
-			for (const [key, col] of [
-				["lat", "lat"],
-				["lon", "lon"],
-			]) {
-				if (body[key] !== undefined) {
-					updates.push(`${col} = ?`);
-					values.push(body[key]);
-				}
-			}
-
-			if (updates.length > 0) {
-				updates.push("updated_at = datetime('now')");
-				values.push(id);
-				this.sql.exec(`UPDATE festivals SET ${updates.join(", ")} WHERE id = ?`, ...values);
-			}
+			const value = (key: string) => (body[key] === undefined ? current[key] : body[key]);
+			this.sql.exec(
+				`UPDATE festivals SET
+					name = ?, year = ?, location = ?, city = ?, country = ?,
+					start_date = ?, end_date = ?, status = ?, genres = ?, lat = ?, lon = ?,
+					updated_at = datetime('now')
+				 WHERE id = ?`,
+				value("name"),
+				value("year"),
+				value("location"),
+				value("city"),
+				value("country"),
+				value("startDate"),
+				value("endDate"),
+				value("status"),
+				JSON.stringify(value("genres")),
+				value("lat") ?? null,
+				value("lon") ?? null,
+				id,
+			);
 
 			return Response.json(this.#getFestival(id));
 		}

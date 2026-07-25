@@ -82,8 +82,7 @@ impl Resource {
 
     pub fn visibility(&self) -> Visibility {
         match self {
-            Resource::FestivalState { public_key, .. }
-            | Resource::StageChat { public_key, .. } => {
+            Resource::FestivalState { public_key, .. } | Resource::StageChat { public_key, .. } => {
                 Visibility::PublicSigned {
                     public_key: *public_key,
                 }
@@ -156,12 +155,18 @@ impl Resource {
 
     pub fn group_state(group_key: [u8; 32]) -> Self {
         let group_id = crypto::group_id_from_key(&group_key);
-        Self::GroupState { group_id, group_key }
+        Self::GroupState {
+            group_id,
+            group_key,
+        }
     }
 
     pub fn group_chat(group_key: [u8; 32]) -> Self {
         let group_id = crypto::group_id_from_key(&group_key);
-        Self::GroupChat { group_id, group_key }
+        Self::GroupChat {
+            group_id,
+            group_key,
+        }
     }
 
     pub fn stage_chat(
@@ -308,7 +313,10 @@ mod tests {
     #[test]
     fn stage_chat_topic_matches_topics_module() {
         let r = Resource::stage_chat("fest-2026", "main-stage", PK);
-        assert_eq!(r.topic(), topics::festival_topic("fest-2026", "chat/main-stage"));
+        assert_eq!(
+            r.topic(),
+            topics::festival_topic("fest-2026", "chat/main-stage")
+        );
     }
 
     #[test]
@@ -340,7 +348,11 @@ mod tests {
 
         let priorities: Vec<Priority> = ordered.iter().map(|r| r.priority()).collect();
         for window in priorities.windows(2) {
-            assert!(window[0] <= window[1], "priorities not sorted: {:?}", priorities);
+            assert!(
+                window[0] <= window[1],
+                "priorities not sorted: {:?}",
+                priorities
+            );
         }
 
         assert_eq!(priorities[0], Priority::CRITICAL);
@@ -377,7 +389,11 @@ mod tests {
         let priorities: Vec<Priority> = ordered.iter().map(|r| r.priority()).collect();
         // GroupState (HIGH) should come before GroupChat (MEDIUM)
         for window in priorities.windows(2) {
-            assert!(window[0] <= window[1], "priorities not sorted: {:?}", priorities);
+            assert!(
+                window[0] <= window[1],
+                "priorities not sorted: {:?}",
+                priorities
+            );
         }
 
         assert_eq!(priorities[0], Priority::HIGH);

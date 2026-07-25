@@ -604,6 +604,7 @@ class MeshtasticDebugReportDto {
   final int sentFragments;
   final int rawFromRadioCount;
   final int privateAppCount;
+  final int appliedGroupChats;
   final List<MeshtasticDebugFrameDto> receivedFrames;
   final List<String> events;
 
@@ -615,6 +616,7 @@ class MeshtasticDebugReportDto {
     required this.sentFragments,
     required this.rawFromRadioCount,
     required this.privateAppCount,
+    required this.appliedGroupChats,
     required this.receivedFrames,
     required this.events,
   });
@@ -628,6 +630,7 @@ class MeshtasticDebugReportDto {
       sentFragments.hashCode ^
       rawFromRadioCount.hashCode ^
       privateAppCount.hashCode ^
+      appliedGroupChats.hashCode ^
       receivedFrames.hashCode ^
       events.hashCode;
 
@@ -643,6 +646,7 @@ class MeshtasticDebugReportDto {
           sentFragments == other.sentFragments &&
           rawFromRadioCount == other.rawFromRadioCount &&
           privateAppCount == other.privateAppCount &&
+          appliedGroupChats == other.appliedGroupChats &&
           receivedFrames == other.receivedFrames &&
           events == other.events;
 }

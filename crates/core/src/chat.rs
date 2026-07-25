@@ -133,10 +133,7 @@ pub fn get_history(
 
 /// Return `(topic_string, TopicId)` pairs for general, campsite, and each
 /// stage channel of a festival.
-pub fn get_festival_chat_topics(
-    festival_id: &str,
-    stage_ids: &[&str],
-) -> Vec<(String, TopicId)> {
+pub fn get_festival_chat_topics(festival_id: &str, stage_ids: &[&str]) -> Vec<(String, TopicId)> {
     let mut result = Vec::new();
 
     result.push((
@@ -255,7 +252,8 @@ mod tests {
     #[test]
     fn test_send_festival_chat_general() {
         let db = test_db();
-        let (msg, topic_id) = send_festival_chat(&db, "fieldday", None, "user1", "Alice", "hello").unwrap();
+        let (msg, topic_id) =
+            send_festival_chat(&db, "fieldday", None, "user1", "Alice", "hello").unwrap();
 
         assert_eq!(msg.topic, "festival/fieldday/chat/general");
         assert_eq!(msg.stage_id, None);
@@ -265,15 +263,24 @@ mod tests {
         let expected_id = topics::festival_topic("fieldday", "chat/general");
         assert_eq!(topic_id, expected_id);
 
-        let stored = db.get_chat_messages("festival/fieldday/chat/general", 10, 0).unwrap();
+        let stored = db
+            .get_chat_messages("festival/fieldday/chat/general", 10, 0)
+            .unwrap();
         assert_eq!(stored.len(), 1);
     }
 
     #[test]
     fn test_send_festival_chat_stage() {
         let db = test_db();
-        let (msg, topic_id) =
-            send_festival_chat(&db, "fieldday", Some("main-stage"), "user1", "Alice", "nice set!").unwrap();
+        let (msg, topic_id) = send_festival_chat(
+            &db,
+            "fieldday",
+            Some("main-stage"),
+            "user1",
+            "Alice",
+            "nice set!",
+        )
+        .unwrap();
 
         assert_eq!(msg.topic, "festival/fieldday/chat/main-stage");
         assert_eq!(msg.stage_id.as_deref(), Some("main-stage"));
@@ -287,7 +294,8 @@ mod tests {
         let db = test_db();
         let group_key = crypto::generate_group_key();
         let group_id = crypto::group_id_from_key(&group_key);
-        db.save_group(&group_id, "fest-1", "Test Group", &group_key).unwrap();
+        db.save_group(&group_id, "fest-1", "Test Group", &group_key)
+            .unwrap();
 
         let (encrypted, topic_id) =
             send_group_chat(&db, &group_id, "user1", "Alice", "secret msg").unwrap();
@@ -297,7 +305,9 @@ mod tests {
         let expected_id = topics::group_topic(&group_key, "chat");
         assert_eq!(topic_id, expected_id);
 
-        let stored = db.get_chat_messages(&format!("group/{group_id}/chat"), 10, 0).unwrap();
+        let stored = db
+            .get_chat_messages(&format!("group/{group_id}/chat"), 10, 0)
+            .unwrap();
         assert_eq!(stored.len(), 1);
         assert_eq!(stored[0].text, "secret msg");
 
@@ -321,7 +331,9 @@ mod tests {
         };
         receive_festival_chat(&db, msg).unwrap();
 
-        let stored = db.get_chat_messages("festival/fieldday/chat/general", 10, 0).unwrap();
+        let stored = db
+            .get_chat_messages("festival/fieldday/chat/general", 10, 0)
+            .unwrap();
         assert_eq!(stored.len(), 1);
         assert_eq!(stored[0].text, "hi");
     }

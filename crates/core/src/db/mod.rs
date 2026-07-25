@@ -1,11 +1,11 @@
 mod migrations;
 
 use anyhow::Result;
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use std::path::Path;
 use std::sync::Mutex;
 
-use crate::types::ChatMessage;
+use crate::types::{ChatMessage, SignedUpdate, VerifiedFestivalUpdate};
 
 /// Thread-safe SQLite database wrapper.
 pub struct Database {
@@ -91,9 +91,8 @@ impl Database {
     /// Load all update blobs for a doc, ordered by insertion.
     pub fn load_doc_updates(&self, doc_id: &str) -> Result<Vec<Vec<u8>>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT update_data FROM doc_updates WHERE doc_id = ?1 ORDER BY id",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT update_data FROM doc_updates WHERE doc_id = ?1 ORDER BY id")?;
         let updates = stmt
             .query_map(params![doc_id], |row| row.get(0))?
             .collect::<rusqlite::Result<Vec<Vec<u8>>>>()?;
@@ -114,10 +113,7 @@ impl Database {
     /// Replace all updates for a doc with a single compacted blob.
     pub fn compact_doc_updates(&self, doc_id: &str, compacted: &[u8]) -> Result<()> {
         let conn = self.conn.lock().unwrap();
-        conn.execute(
-            "DELETE FROM doc_updates WHERE doc_id = ?1",
-            params![doc_id],
-        )?;
+        conn.execute("DELETE FROM doc_updates WHERE doc_id = ?1", params![doc_id])?;
         conn.execute(
             "INSERT INTO doc_updates (doc_id, update_data) VALUES (?1, ?2)",
             params![doc_id, compacted],
@@ -129,6 +125,65 @@ impl Database {
             params![doc_id, compacted],
         )?;
         Ok(())
+    }
+
+    pub fn save_verified_festival_update(&self, update: &VerifiedFestivalUpdate) -> Result<()> {
+        self.conn.lock().unwrap().execute(
+            "INSERT OR IGNORE INTO verified_festival_updates
+             (doc_id, authority_seq, kind, update_data, author, signature)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                update.doc_id,
+                i64::try_from(update.authority_seq)?,
+                update.kind,
+                update.signed_update.update,
+                update.signed_update.author,
+                update.signed_update.signature,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn highest_verified_festival_seq(&self, doc_id: &str) -> Result<u64> {
+        let seq: i64 = self.conn.lock().unwrap().query_row(
+            "SELECT COALESCE(MAX(authority_seq), 0)
+             FROM verified_festival_updates WHERE doc_id = ?1",
+            [doc_id],
+            |row| row.get(0),
+        )?;
+        Ok(u64::try_from(seq)?)
+    }
+
+    pub fn load_latest_festival_checkpoint(
+        &self,
+        doc_id: &str,
+        checkpoint_kind: i32,
+    ) -> Result<Option<VerifiedFestivalUpdate>> {
+        self.conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT authority_seq, kind, update_data, author, signature
+                 FROM verified_festival_updates
+                 WHERE doc_id = ?1 AND kind = ?2
+                 ORDER BY authority_seq DESC LIMIT 1",
+                params![doc_id, checkpoint_kind],
+                |row| {
+                    let authority_seq: i64 = row.get(0)?;
+                    Ok(VerifiedFestivalUpdate {
+                        doc_id: doc_id.to_string(),
+                        authority_seq: authority_seq as u64,
+                        kind: row.get(1)?,
+                        signed_update: SignedUpdate {
+                            update: row.get(2)?,
+                            author: row.get(3)?,
+                            signature: row.get(4)?,
+                        },
+                    })
+                },
+            )
+            .optional()
+            .map_err(Into::into)
     }
 
     // --- groups ---
@@ -145,8 +200,7 @@ impl Database {
     /// Returns (id, name, key) tuples for all groups of the given festival.
     pub fn load_groups(&self, festival_id: &str) -> Result<Vec<(String, String, Vec<u8>)>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt =
-            conn.prepare("SELECT id, name, key FROM groups WHERE festival_id = ?1")?;
+        let mut stmt = conn.prepare("SELECT id, name, key FROM groups WHERE festival_id = ?1")?;
         let groups = stmt
             .query_map(params![festival_id], |row| {
                 Ok((row.get(0)?, row.get(1)?, row.get(2)?))
@@ -193,8 +247,7 @@ impl Database {
     /// Returns the set IDs that are starred for a festival.
     pub fn get_stars(&self, festival_id: &str) -> Result<Vec<String>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt =
-            conn.prepare("SELECT set_id FROM starred_sets WHERE festival_id = ?1")?;
+        let mut stmt = conn.prepare("SELECT set_id FROM starred_sets WHERE festival_id = ?1")?;
         let ids = stmt
             .query_map(params![festival_id], |row| row.get(0))?
             .collect::<rusqlite::Result<Vec<String>>>()?;
@@ -383,12 +436,12 @@ impl Database {
         let blob = self.get_credential(Self::IROH_SECRET_KEY)?;
         match blob {
             Some(bytes) => {
-                let arr: [u8; 32] = bytes
-                    .try_into()
-                    .map_err(|v: Vec<u8>| anyhow::anyhow!(
+                let arr: [u8; 32] = bytes.try_into().map_err(|v: Vec<u8>| {
+                    anyhow::anyhow!(
                         "iroh secret key has wrong length: expected 32 bytes, got {}",
                         v.len()
-                    ))?;
+                    )
+                })?;
                 Ok(Some(iroh::SecretKey::from_bytes(&arr)))
             }
             None => Ok(None),
@@ -439,14 +492,24 @@ impl Database {
                  last_seen = MAX(last_seen, excluded.last_seen),
                  relay_url = COALESCE(excluded.relay_url, relay_url),
                  source = excluded.source",
-            params![festival_id, endpoint_id, relay_url, last_seen as i64, source],
+            params![
+                festival_id,
+                endpoint_id,
+                relay_url,
+                last_seen as i64,
+                source
+            ],
         )?;
         Ok(())
     }
 
     /// Load the freshest known peers for a festival, newest first, capped at
     /// `limit`. This is the cold-start bootstrap set fed to gossip `subscribe`.
-    pub fn load_festival_peers(&self, festival_id: &str, limit: usize) -> Result<Vec<BootstrapPeer>> {
+    pub fn load_festival_peers(
+        &self,
+        festival_id: &str,
+        limit: usize,
+    ) -> Result<Vec<BootstrapPeer>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT endpoint_id, relay_url, last_seen, source FROM festival_peers
@@ -761,7 +824,10 @@ mod tests {
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
-        assert_eq!(stored_text, "first", "INSERT OR IGNORE should preserve original text");
+        assert_eq!(
+            stored_text, "first",
+            "INSERT OR IGNORE should preserve original text"
+        );
         assert_eq!(
             stored_received_at, original_received_at,
             "INSERT OR IGNORE should preserve original received_at"
@@ -811,7 +877,10 @@ mod tests {
         let stored = db.get_chat_messages("topic/b", 10, 0).unwrap();
         assert_eq!(stored.len(), 2);
         let original = stored.iter().find(|m| m.id == "batch_dedup").unwrap();
-        assert_eq!(original.text, "original", "batch INSERT OR IGNORE should preserve original");
+        assert_eq!(
+            original.text, "original",
+            "batch INSERT OR IGNORE should preserve original"
+        );
     }
 
     #[test]
@@ -943,8 +1012,9 @@ mod tests {
     fn test_wal_mode_enabled() {
         let db = test_db();
         let conn = db.conn.lock().unwrap();
-        let mode: String =
-            conn.pragma_query_value(None, "journal_mode", |row| row.get(0)).unwrap();
+        let mode: String = conn
+            .pragma_query_value(None, "journal_mode", |row| row.get(0))
+            .unwrap();
         // In-memory databases use "memory" journal mode, but the pragmas should
         // still be set without error. For on-disk databases this would be "wal".
         // The key assertion is that we can open the DB and the pragma calls succeed.
@@ -960,8 +1030,9 @@ mod tests {
         let path = dir.path().join("test.db");
         let db = Database::new(&path).unwrap();
         let conn = db.conn.lock().unwrap();
-        let mode: String =
-            conn.pragma_query_value(None, "journal_mode", |row| row.get(0)).unwrap();
+        let mode: String = conn
+            .pragma_query_value(None, "journal_mode", |row| row.get(0))
+            .unwrap();
         assert_eq!(mode, "wal", "on-disk database should use WAL journal mode");
     }
 
@@ -969,9 +1040,13 @@ mod tests {
     fn test_busy_timeout_set() {
         let db = test_db();
         let conn = db.conn.lock().unwrap();
-        let timeout: i64 =
-            conn.pragma_query_value(None, "busy_timeout", |row| row.get(0)).unwrap();
-        assert!(timeout >= 5000, "busy_timeout should be at least 5000ms, got {timeout}");
+        let timeout: i64 = conn
+            .pragma_query_value(None, "busy_timeout", |row| row.get(0))
+            .unwrap();
+        assert!(
+            timeout >= 5000,
+            "busy_timeout should be at least 5000ms, got {timeout}"
+        );
     }
 
     #[test]
@@ -985,7 +1060,10 @@ mod tests {
         let key = iroh::SecretKey::generate();
         db.save_iroh_secret_key(&key).unwrap();
 
-        let loaded = db.load_iroh_secret_key().unwrap().expect("key should exist");
+        let loaded = db
+            .load_iroh_secret_key()
+            .unwrap()
+            .expect("key should exist");
         assert_eq!(
             key.public(),
             loaded.public(),

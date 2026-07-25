@@ -90,7 +90,10 @@ async fn ble_discovery_tick(
 
         let snapshot = ble_transport.snapshot_peers();
         if !snapshot.is_empty() {
-            tracing::info!(count = snapshot.len(), "ble_discovery_tick: snapshot not empty");
+            tracing::info!(
+                count = snapshot.len(),
+                "ble_discovery_tick: snapshot not empty"
+            );
         }
         let mut nudge_targets: Vec<EndpointId> = Vec::new();
 
@@ -141,10 +144,11 @@ async fn ble_discovery_tick(
             );
 
             let is_fresh_sighting = prev_phase.is_none() && now_connected_or_forming;
-            let is_ble_restored = !matches!(
-                prev_phase,
-                Some(iroh_ble_transport::BlePeerPhase::Connected)
-            ) && matches!(info.phase, iroh_ble_transport::BlePeerPhase::Connected);
+            let is_ble_restored =
+                !matches!(
+                    prev_phase,
+                    Some(iroh_ble_transport::BlePeerPhase::Connected)
+                ) && matches!(info.phase, iroh_ble_transport::BlePeerPhase::Connected);
 
             if (is_fresh_sighting || is_ble_restored)
                 && connection_manager.should_nudge_join(&endpoint_str, DISCOVERY_NUDGE_MIN_INTERVAL)
@@ -202,14 +206,15 @@ async fn ble_reconnect_tick(
             .collect();
 
         // 2. Proactive Recovery: Nudge Gossip for ALL currently verified peers.
-        // Even if they are already 'Connected' in BLE, Gossip might have missed 
+        // Even if they are already 'Connected' in BLE, Gossip might have missed
         // the initial sighting if the topic wasn't subscribed yet (auto-sub race).
         let snapshot = ble_transport.snapshot_peers();
         for info in snapshot {
             if let Some(eid) = info.verified_endpoint
-                && !targets.contains(&eid) {
-                    targets.push(eid);
-                }
+                && !targets.contains(&eid)
+            {
+                targets.push(eid);
+            }
         }
 
         if targets.is_empty() {
@@ -345,9 +350,15 @@ async fn pump_single_receiver(
                 if let Some(ep) = &endpoint
                     && connection_manager.should_sync_peer(&sync_key, SYNC_DIAL_MIN_INTERVAL)
                 {
-                    if let Some(permit) = connection_manager.try_acquire_dial_permit(is_group_topic) {
+                    if let Some(permit) = connection_manager.try_acquire_dial_permit(is_group_topic)
+                    {
                         connection_manager.mark_sync_attempted(&sync_key);
-                        let peer = IrohSyncPeer::new(ep.clone(), peer_id, doc_manager.clone());
+                        let peer = IrohSyncPeer::new(
+                            ep.clone(),
+                            peer_id,
+                            doc_manager.clone(),
+                            Some(sync_orchestrator.clone()),
+                        );
                         let so = sync_orchestrator.clone();
                         let cm = connection_manager.clone();
                         tokio::spawn(async move {

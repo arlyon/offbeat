@@ -20,10 +20,11 @@ use futures_util::{SinkExt, StreamExt};
 use harness::DevServer;
 use offbeat_core::proto::{self, relay_client_message, relay_server_message};
 use prost::Message as ProstMessage;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::time::timeout;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use yrs::updates::decoder::Decode;
+use yrs::updates::encoder::Encode;
 
 /// Convert bytes to hex string
 fn bytes_to_hex(bytes: &[u8]) -> String {
@@ -38,16 +39,81 @@ fn hex_to_bytes(hex: &str) -> Vec<u8> {
         .collect()
 }
 
+async fn register_festival_admin(
+    server: &DevServer,
+    festival_id: &str,
+) -> ed25519_dalek::SigningKey {
+    let key = offbeat_core::signing::generate_signing_key();
+    let public_key = bytes_to_hex(&key.verifying_key().to_bytes());
+    let client = reqwest::Client::new();
+    client
+        .put(format!(
+            "{}/festivals/{festival_id}/config",
+            server.http_url()
+        ))
+        .json(&json!({
+            "festivalId": festival_id,
+            "opensAt": "2020-01-01T00:00:00.000Z",
+            "closesAt": "2030-12-31T23:59:59.999Z"
+        }))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    client
+        .put(format!(
+            "{}/festivals/{festival_id}/admins",
+            server.http_url()
+        ))
+        .json(&json!({ "publicKey": public_key }))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    key
+}
+
+async fn publish_festival_update(
+    server: &DevServer,
+    festival_id: &str,
+    admin_key: &ed25519_dalek::SigningKey,
+    update: &[u8],
+) -> Value {
+    use base64::Engine as _;
+
+    let topic = format!("festival/{festival_id}/state");
+    let auth_signature =
+        offbeat_core::signing::sign(admin_key, format!("sign-update:{topic}").as_bytes());
+    reqwest::Client::new()
+        .post(format!(
+            "{}/festivals/{festival_id}/sign-update",
+            server.http_url()
+        ))
+        .json(&json!({
+            "publicKey": bytes_to_hex(&admin_key.verifying_key().to_bytes()),
+            "signature": bytes_to_hex(&auth_signature),
+            "docId": topic,
+            "topic": topic,
+            "update": base64::engine::general_purpose::STANDARD.encode(update),
+        }))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap()
+}
+
 type WsSinkType = futures_util::stream::SplitSink<
-    tokio_tungstenite::WebSocketStream<
-        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
-    >,
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
     Message,
 >;
 type WsStreamType = futures_util::stream::SplitStream<
-    tokio_tungstenite::WebSocketStream<
-        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
-    >,
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
 >;
 
 /// Connect to a festival's WebSocket endpoint (unauthenticated — can only read)
@@ -191,6 +257,20 @@ async fn connect_and_auth(
     server: &DevServer,
     festival_id: &str,
 ) -> Result<(WsSinkType, WsStreamType), anyhow::Error> {
+    reqwest::Client::new()
+        .put(format!(
+            "{}/festivals/{festival_id}/config",
+            server.http_url()
+        ))
+        .json(&json!({
+            "festivalId": festival_id,
+            "opensAt": "2020-01-01T00:00:00.000Z",
+            "closesAt": "2030-12-31T23:59:59.999Z"
+        }))
+        .send()
+        .await?
+        .error_for_status()?;
+
     let signing_key = {
         let mut seed = [0u8; 32];
         getrandom::getrandom(&mut seed).unwrap();
@@ -212,7 +292,10 @@ async fn connect_and_auth(
     use ed25519_dalek::Signer;
     let sig = signing_key.sign(session_msg.as_bytes());
 
-    let att_msg = attestation_json["message"].as_str().unwrap_or("").to_string();
+    let att_msg = attestation_json["message"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
     let att_sig = hex_to_bytes(attestation_json["signature"].as_str().unwrap_or(""));
     let att_issuer = hex_to_bytes(attestation_json["issuer"].as_str().unwrap_or(""));
 
@@ -296,10 +379,7 @@ async fn send_gossip(
 }
 
 /// Send a subscribe request.
-async fn send_subscribe(
-    sink: &mut WsSinkType,
-    topics: &[&str],
-) -> Result<(), anyhow::Error> {
+async fn send_subscribe(sink: &mut WsSinkType, topics: &[&str]) -> Result<(), anyhow::Error> {
     send_client_msg(
         sink,
         proto::RelayClientMessage {
@@ -326,6 +406,25 @@ async fn send_catchup(
                 topic: topic.to_string(),
                 since_seq,
             })),
+        },
+    )
+    .await
+}
+
+async fn send_sv_exchange(
+    sink: &mut WsSinkType,
+    doc_id: &str,
+    state_vector: Vec<u8>,
+) -> Result<(), anyhow::Error> {
+    send_client_msg(
+        sink,
+        proto::RelayClientMessage {
+            msg: Some(relay_client_message::Msg::SvExchange(
+                proto::SvExchangeRequest {
+                    doc_id: doc_id.to_string(),
+                    sv: state_vector,
+                },
+            )),
         },
     )
     .await
@@ -384,10 +483,17 @@ async fn test_single_client_subscribe() {
     let server = DevServer::start().await;
     let (mut sink, mut stream) = connect_and_auth(&server, "rust-test-1").await.unwrap();
 
-    send_subscribe(&mut sink, &["festival/rust-test-1/chat"]).await.unwrap();
+    send_subscribe(&mut sink, &["festival/rust-test-1/chat"])
+        .await
+        .unwrap();
 
     let response = wait_for_subscribed(&mut stream).await.unwrap();
-    assert!(response.topics.iter().any(|t| t == "festival/rust-test-1/chat"));
+    assert!(
+        response
+            .topics
+            .iter()
+            .any(|t| t == "festival/rust-test-1/chat")
+    );
 }
 
 // =============================================================================
@@ -399,16 +505,28 @@ async fn test_single_client_chat_and_catchup() {
     let server = DevServer::start().await;
     let (mut sink, mut stream) = connect_and_auth(&server, "rust-test-2").await.unwrap();
 
-    send_subscribe(&mut sink, &["festival/rust-test-2/chat"]).await.unwrap();
+    send_subscribe(&mut sink, &["festival/rust-test-2/chat"])
+        .await
+        .unwrap();
     wait_for_subscribed(&mut stream).await.unwrap();
 
     let msg_id = uuid::Uuid::new_v4().to_string();
-    let envelope = chat_envelope(&msg_id, "rust-user-1", "Rust User", "Hello from Rust!", "festival/rust-test-2/chat");
-    send_gossip(&mut sink, "festival/rust-test-2/chat", envelope).await.unwrap();
+    let envelope = chat_envelope(
+        &msg_id,
+        "rust-user-1",
+        "Rust User",
+        "Hello from Rust!",
+        "festival/rust-test-2/chat",
+    );
+    send_gossip(&mut sink, "festival/rust-test-2/chat", envelope)
+        .await
+        .unwrap();
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    send_catchup(&mut sink, "festival/rust-test-2/chat", 0).await.unwrap();
+    send_catchup(&mut sink, "festival/rust-test-2/chat", 0)
+        .await
+        .unwrap();
 
     let catchup = wait_for_catchup(&mut stream).await.unwrap();
     assert_eq!(catchup.topic, "festival/rust-test-2/chat");
@@ -440,11 +558,21 @@ async fn test_two_clients_relay() {
     let server = DevServer::start().await;
     let topic = "festival/rust-test-3/chat";
 
-    let (mut sink_a, _stream_a) = connect_and_subscribe(&server, "rust-test-3", topic).await.unwrap();
-    let (_sink_b, mut stream_b) = connect_and_subscribe(&server, "rust-test-3", topic).await.unwrap();
+    let (mut sink_a, _stream_a) = connect_and_subscribe(&server, "rust-test-3", topic)
+        .await
+        .unwrap();
+    let (_sink_b, mut stream_b) = connect_and_subscribe(&server, "rust-test-3", topic)
+        .await
+        .unwrap();
 
     let msg_id = uuid::Uuid::new_v4().to_string();
-    let envelope = chat_envelope(&msg_id, "client-a", "Client A", "Message from A to B via DO relay", topic);
+    let envelope = chat_envelope(
+        &msg_id,
+        "client-a",
+        "Client A",
+        "Message from A to B via DO relay",
+        topic,
+    );
     send_gossip(&mut sink_a, topic, envelope).await.unwrap();
 
     let received = wait_for_gossip(&mut stream_b, 5).await.unwrap();
@@ -463,17 +591,23 @@ async fn test_two_clients_relay() {
 #[tokio::test]
 async fn test_p2p_relay_update() {
     let server = DevServer::start().await;
-    let topic = "festival/rust-test-4/state";
+    let topic = "group/test-group/state";
 
-    let (mut sink_a, _stream_a) = connect_and_subscribe(&server, "rust-test-4", topic).await.unwrap();
-    let (_sink_b, mut stream_b) = connect_and_subscribe(&server, "rust-test-4", topic).await.unwrap();
+    let (mut sink_a, _stream_a) = connect_and_subscribe(&server, "rust-test-4", topic)
+        .await
+        .unwrap();
+    let (_sink_b, mut stream_b) = connect_and_subscribe(&server, "rust-test-4", topic)
+        .await
+        .unwrap();
 
     let envelope = proto::GossipEnvelope {
-        payload: Some(proto::gossip_envelope::Payload::GroupUpdate(proto::GroupUpdate {
-            doc_id: "test-doc".to_string(),
-            encrypted: b"crdt-update-from-p2p-client".to_vec(),
-            group_key_id: "test-key-id".to_string(),
-        })),
+        payload: Some(proto::gossip_envelope::Payload::GroupUpdate(
+            proto::GroupUpdate {
+                doc_id: "test-doc".to_string(),
+                encrypted: b"crdt-update-from-p2p-client".to_vec(),
+                group_key_id: "test-key-id".to_string(),
+            },
+        )),
     };
     send_gossip(&mut sink_a, topic, envelope).await.unwrap();
 
@@ -504,17 +638,25 @@ async fn test_yrs_crdt_sync_via_relay() {
         text_a.insert(&mut txn, 0, "Hello from client A");
     }
 
-    let update_a = doc_a.transact().encode_state_as_update_v1(&yrs::StateVector::default());
+    let update_a = doc_a
+        .transact()
+        .encode_state_as_update_v1(&yrs::StateVector::default());
 
-    let (mut sink_a, _stream_a) = connect_and_subscribe(&server, "rust-test-5", topic).await.unwrap();
-    let (_sink_b, mut stream_b) = connect_and_subscribe(&server, "rust-test-5", topic).await.unwrap();
+    let (mut sink_a, _stream_a) = connect_and_subscribe(&server, "rust-test-5", topic)
+        .await
+        .unwrap();
+    let (_sink_b, mut stream_b) = connect_and_subscribe(&server, "rust-test-5", topic)
+        .await
+        .unwrap();
 
     let envelope = proto::GossipEnvelope {
-        payload: Some(proto::gossip_envelope::Payload::GroupUpdate(proto::GroupUpdate {
-            doc_id: "test-crdt-doc".to_string(),
-            encrypted: update_a.clone(),
-            group_key_id: String::new(),
-        })),
+        payload: Some(proto::gossip_envelope::Payload::GroupUpdate(
+            proto::GroupUpdate {
+                doc_id: "test-crdt-doc".to_string(),
+                encrypted: update_a.clone(),
+                group_key_id: String::new(),
+            },
+        )),
     };
     send_gossip(&mut sink_a, topic, envelope).await.unwrap();
 
@@ -528,7 +670,8 @@ async fn test_yrs_crdt_sync_via_relay() {
     let text_b = doc_b.get_or_insert_text("content");
     {
         let mut txn = doc_b.transact_mut();
-        txn.apply_update(yrs::Update::decode_v1(&gu.encrypted).unwrap()).unwrap();
+        txn.apply_update(yrs::Update::decode_v1(&gu.encrypted).unwrap())
+            .unwrap();
     }
 
     let content_b = {
@@ -547,15 +690,25 @@ async fn test_late_joiner_catchup() {
     let server = DevServer::start().await;
     let topic = "festival/rust-test-6/chat";
 
-    let (mut sink_a, _stream_a) = connect_and_subscribe(&server, "rust-test-6", topic).await.unwrap();
+    let (mut sink_a, _stream_a) = connect_and_subscribe(&server, "rust-test-6", topic)
+        .await
+        .unwrap();
 
     let msg_id = uuid::Uuid::new_v4().to_string();
-    let envelope = chat_envelope(&msg_id, "early-user", "Early User", "Message sent before late joiner", topic);
+    let envelope = chat_envelope(
+        &msg_id,
+        "early-user",
+        "Early User",
+        "Message sent before late joiner",
+        topic,
+    );
     send_gossip(&mut sink_a, topic, envelope).await.unwrap();
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let (mut sink_b, mut stream_b) = connect_and_subscribe(&server, "rust-test-6", topic).await.unwrap();
+    let (mut sink_b, mut stream_b) = connect_and_subscribe(&server, "rust-test-6", topic)
+        .await
+        .unwrap();
 
     send_catchup(&mut sink_b, topic, 0).await.unwrap();
 
@@ -586,8 +739,12 @@ async fn test_d1_d2_s1_relay_chat() {
     let server = DevServer::start().await;
     let topic = "festival/relay-test-1/chat";
 
-    let (mut sink_d1, mut stream_d1) = connect_and_subscribe(&server, "relay-test-1", topic).await.unwrap();
-    let (mut sink_d2, mut stream_d2) = connect_and_subscribe(&server, "relay-test-1", topic).await.unwrap();
+    let (mut sink_d1, mut stream_d1) = connect_and_subscribe(&server, "relay-test-1", topic)
+        .await
+        .unwrap();
+    let (mut sink_d2, mut stream_d2) = connect_and_subscribe(&server, "relay-test-1", topic)
+        .await
+        .unwrap();
 
     // D1 → D2
     let msg_id_1 = uuid::Uuid::new_v4().to_string();
@@ -632,18 +789,26 @@ async fn test_d1_d2_s1_relay_crdt_update() {
         let mut txn = doc_d1.transact_mut();
         map_d1.insert(&mut txn, "meetup", "main-stage");
     }
-    let update_bytes = doc_d1.transact().encode_state_as_update_v1(&StateVector::default());
+    let update_bytes = doc_d1
+        .transact()
+        .encode_state_as_update_v1(&StateVector::default());
     let encrypted = crypto::encrypt(&group_key, &update_bytes).unwrap();
 
-    let (mut sink_d1, _stream_d1) = connect_and_subscribe(&server, "relay-test-2", topic).await.unwrap();
-    let (_sink_d2, mut stream_d2) = connect_and_subscribe(&server, "relay-test-2", topic).await.unwrap();
+    let (mut sink_d1, _stream_d1) = connect_and_subscribe(&server, "relay-test-2", topic)
+        .await
+        .unwrap();
+    let (_sink_d2, mut stream_d2) = connect_and_subscribe(&server, "relay-test-2", topic)
+        .await
+        .unwrap();
 
     let envelope = proto::GossipEnvelope {
-        payload: Some(proto::gossip_envelope::Payload::GroupUpdate(proto::GroupUpdate {
-            doc_id: "group-doc".to_string(),
-            encrypted: encrypted.clone(),
-            group_key_id: crypto::group_id_from_key(&group_key),
-        })),
+        payload: Some(proto::gossip_envelope::Payload::GroupUpdate(
+            proto::GroupUpdate {
+                doc_id: "group-doc".to_string(),
+                encrypted: encrypted.clone(),
+                group_key_id: crypto::group_id_from_key(&group_key),
+            },
+        )),
     };
     send_gossip(&mut sink_d1, topic, envelope).await.unwrap();
 
@@ -659,7 +824,8 @@ async fn test_d1_d2_s1_relay_crdt_update() {
     let map_d2 = doc_d2.get_or_insert_map("root");
     {
         let mut txn = doc_d2.transact_mut();
-        txn.apply_update(yrs::Update::decode_v1(&decrypted).unwrap()).unwrap();
+        txn.apply_update(yrs::Update::decode_v1(&decrypted).unwrap())
+            .unwrap();
     }
 
     let val = {
@@ -681,7 +847,9 @@ async fn test_d1_disconnect_d2_sends_d1_catchup() {
     let server = DevServer::start().await;
     let topic = "festival/relay-test-3/chat";
 
-    let (mut sink_d1, stream_d1) = connect_and_subscribe(&server, "relay-test-3", topic).await.unwrap();
+    let (mut sink_d1, stream_d1) = connect_and_subscribe(&server, "relay-test-3", topic)
+        .await
+        .unwrap();
 
     let initial_msg_id = uuid::Uuid::new_v4().to_string();
     let envelope = chat_envelope(&initial_msg_id, "d1", "D1", "D1 initial message", topic);
@@ -692,7 +860,9 @@ async fn test_d1_disconnect_d2_sends_d1_catchup() {
     drop(sink_d1);
     drop(stream_d1);
 
-    let (mut sink_d2, _stream_d2) = connect_and_subscribe(&server, "relay-test-3", topic).await.unwrap();
+    let (mut sink_d2, _stream_d2) = connect_and_subscribe(&server, "relay-test-3", topic)
+        .await
+        .unwrap();
 
     let mut d2_msg_ids = Vec::new();
     for i in 1..=3 {
@@ -704,14 +874,20 @@ async fn test_d1_disconnect_d2_sends_d1_catchup() {
 
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    let (mut sink_d1_new, mut stream_d1_new) = connect_and_subscribe(&server, "relay-test-3", topic).await.unwrap();
+    let (mut sink_d1_new, mut stream_d1_new) =
+        connect_and_subscribe(&server, "relay-test-3", topic)
+            .await
+            .unwrap();
 
     send_catchup(&mut sink_d1_new, topic, 0).await.unwrap();
 
     let catchup = wait_for_catchup(&mut stream_d1_new).await.unwrap();
 
     // All messages should be present
-    assert!(catchup.messages.len() >= 4, "should have at least 4 messages in catchup");
+    assert!(
+        catchup.messages.len() >= 4,
+        "should have at least 4 messages in catchup"
+    );
 
     drop(sink_d1_new);
     drop(sink_d2);
@@ -727,7 +903,6 @@ async fn test_group_encrypted_state_sync_via_relay() {
     use offbeat_core::{OffbeatNode, crypto};
 
     let festival_id = "relay-group-test-1";
-    let topic = format!("festival/{festival_id}/state");
 
     let node_d1 = OffbeatNode::new_in_memory().unwrap();
     let create_result = node_d1
@@ -738,7 +913,8 @@ async fn test_group_encrypted_state_sync_via_relay() {
 
     let group_id = &create_result.group_id;
     let group_key = node_d1.db.load_group_key(group_id).unwrap().unwrap();
-    let doc_id = format!("group/{group_id}");
+    let doc_id = format!("group/{group_id}/state");
+    let topic = doc_id.clone();
 
     node_d1
         .group_manager
@@ -753,19 +929,31 @@ async fn test_group_encrypted_state_sync_via_relay() {
         .await
         .unwrap();
 
-    let (mut sink_d1, mut stream_d1) = connect_and_subscribe(&server, festival_id, &topic).await.unwrap();
-    let (mut sink_d2, mut stream_d2) = connect_and_subscribe(&server, festival_id, &topic).await.unwrap();
+    let (mut sink_d1, mut stream_d1) = connect_and_subscribe(&server, festival_id, &topic)
+        .await
+        .unwrap();
+    let (mut sink_d2, mut stream_d2) = connect_and_subscribe(&server, festival_id, &topic)
+        .await
+        .unwrap();
 
     // D2 sends SV as a gossip message
-    let encrypted_sv_d2 = node_d2.group_manager.request_group_sync(group_id).await.unwrap();
+    let encrypted_sv_d2 = node_d2
+        .group_manager
+        .request_group_sync(group_id)
+        .await
+        .unwrap();
     let envelope_sv = proto::GossipEnvelope {
-        payload: Some(proto::gossip_envelope::Payload::SyncRequest(proto::SyncRequest {
-            doc_id: doc_id.clone(),
-            encrypted_sv: encrypted_sv_d2,
-            group_key_id: crypto::group_id_from_key(&group_key),
-        })),
+        payload: Some(proto::gossip_envelope::Payload::SyncRequest(
+            proto::SyncRequest {
+                doc_id: doc_id.clone(),
+                encrypted_sv: encrypted_sv_d2,
+                group_key_id: crypto::group_id_from_key(&group_key),
+            },
+        )),
     };
-    send_gossip(&mut sink_d2, &topic, envelope_sv).await.unwrap();
+    send_gossip(&mut sink_d2, &topic, envelope_sv)
+        .await
+        .unwrap();
 
     // D1 receives, computes diff, sends back
     let recv = wait_for_gossip(&mut stream_d1, 5).await.unwrap();
@@ -773,15 +961,23 @@ async fn test_group_encrypted_state_sync_via_relay() {
         Some(proto::gossip_envelope::Payload::SyncRequest(sr)) => sr,
         other => panic!("expected SyncRequest, got {other:?}"),
     };
-    let diff_for_d2 = node_d1.group_manager.handle_sync_request(group_id, &sr.encrypted_sv).await.unwrap();
+    let diff_for_d2 = node_d1
+        .group_manager
+        .handle_sync_request(group_id, &sr.encrypted_sv)
+        .await
+        .unwrap();
     let envelope_diff = proto::GossipEnvelope {
-        payload: Some(proto::gossip_envelope::Payload::SyncResponse(proto::SyncResponse {
-            doc_id: doc_id.clone(),
-            encrypted_diff: diff_for_d2,
-            group_key_id: crypto::group_id_from_key(&group_key),
-        })),
+        payload: Some(proto::gossip_envelope::Payload::SyncResponse(
+            proto::SyncResponse {
+                doc_id: doc_id.clone(),
+                encrypted_diff: diff_for_d2,
+                group_key_id: crypto::group_id_from_key(&group_key),
+            },
+        )),
     };
-    send_gossip(&mut sink_d1, &topic, envelope_diff).await.unwrap();
+    send_gossip(&mut sink_d1, &topic, envelope_diff)
+        .await
+        .unwrap();
 
     // D2 receives diff and applies
     let recv_d2 = wait_for_gossip(&mut stream_d2, 5).await.unwrap();
@@ -790,9 +986,16 @@ async fn test_group_encrypted_state_sync_via_relay() {
         other => panic!("expected SyncResponse, got {other:?}"),
     };
     let diff_bytes = crypto::decrypt(&group_key, &sr_resp.encrypted_diff).unwrap();
-    node_d2.doc_manager.apply_update(&doc_id, &diff_bytes).unwrap();
+    node_d2
+        .doc_manager
+        .apply_update(&doc_id, &diff_bytes)
+        .unwrap();
 
-    let state_d2 = node_d2.group_manager.get_group_state(group_id).await.unwrap();
+    let state_d2 = node_d2
+        .group_manager
+        .get_group_state(group_id)
+        .await
+        .unwrap();
     assert_eq!(state_d2.pins.len(), 1);
     assert_eq!(state_d2.pins[0].label, "Tent Area");
 
@@ -810,7 +1013,6 @@ async fn test_sv_handshake_group_sync() {
     use offbeat_core::{OffbeatNode, crypto};
 
     let festival_id = "sv-handshake-test-1";
-    let topic = format!("festival/{festival_id}/state");
 
     let node_d1 = OffbeatNode::new_in_memory().unwrap();
     let create_result = node_d1
@@ -821,7 +1023,8 @@ async fn test_sv_handshake_group_sync() {
 
     let group_id = &create_result.group_id;
     let group_key = node_d1.db.load_group_key(group_id).unwrap().unwrap();
-    let doc_id = format!("group/{group_id}");
+    let doc_id = format!("group/{group_id}/state");
+    let topic = doc_id.clone();
 
     node_d1
         .group_manager
@@ -841,19 +1044,31 @@ async fn test_sv_handshake_group_sync() {
         .await
         .unwrap();
 
-    let (mut sink_d1, mut stream_d1) = connect_and_subscribe(&server, festival_id, &topic).await.unwrap();
-    let (mut sink_d2, mut stream_d2) = connect_and_subscribe(&server, festival_id, &topic).await.unwrap();
+    let (mut sink_d1, mut stream_d1) = connect_and_subscribe(&server, festival_id, &topic)
+        .await
+        .unwrap();
+    let (mut sink_d2, mut stream_d2) = connect_and_subscribe(&server, festival_id, &topic)
+        .await
+        .unwrap();
 
     // D2 → sync_request → D1
-    let encrypted_sv = node_d2.group_manager.request_group_sync(group_id).await.unwrap();
+    let encrypted_sv = node_d2
+        .group_manager
+        .request_group_sync(group_id)
+        .await
+        .unwrap();
     let envelope_req = proto::GossipEnvelope {
-        payload: Some(proto::gossip_envelope::Payload::SyncRequest(proto::SyncRequest {
-            doc_id: doc_id.clone(),
-            encrypted_sv,
-            group_key_id: crypto::group_id_from_key(&group_key),
-        })),
+        payload: Some(proto::gossip_envelope::Payload::SyncRequest(
+            proto::SyncRequest {
+                doc_id: doc_id.clone(),
+                encrypted_sv,
+                group_key_id: crypto::group_id_from_key(&group_key),
+            },
+        )),
     };
-    send_gossip(&mut sink_d2, &topic, envelope_req).await.unwrap();
+    send_gossip(&mut sink_d2, &topic, envelope_req)
+        .await
+        .unwrap();
 
     // D1 receives, responds
     let recv = wait_for_gossip(&mut stream_d1, 5).await.unwrap();
@@ -861,15 +1076,23 @@ async fn test_sv_handshake_group_sync() {
         Some(proto::gossip_envelope::Payload::SyncRequest(sr)) => sr,
         other => panic!("expected SyncRequest, got {other:?}"),
     };
-    let diff_for_d2 = node_d1.group_manager.handle_sync_request(group_id, &sr.encrypted_sv).await.unwrap();
+    let diff_for_d2 = node_d1
+        .group_manager
+        .handle_sync_request(group_id, &sr.encrypted_sv)
+        .await
+        .unwrap();
     let envelope_resp = proto::GossipEnvelope {
-        payload: Some(proto::gossip_envelope::Payload::SyncResponse(proto::SyncResponse {
-            doc_id: doc_id.clone(),
-            encrypted_diff: diff_for_d2,
-            group_key_id: crypto::group_id_from_key(&group_key),
-        })),
+        payload: Some(proto::gossip_envelope::Payload::SyncResponse(
+            proto::SyncResponse {
+                doc_id: doc_id.clone(),
+                encrypted_diff: diff_for_d2,
+                group_key_id: crypto::group_id_from_key(&group_key),
+            },
+        )),
     };
-    send_gossip(&mut sink_d1, &topic, envelope_resp).await.unwrap();
+    send_gossip(&mut sink_d1, &topic, envelope_resp)
+        .await
+        .unwrap();
 
     // D2 applies
     let recv_d2 = wait_for_gossip(&mut stream_d2, 5).await.unwrap();
@@ -880,10 +1103,18 @@ async fn test_sv_handshake_group_sync() {
     let diff = crypto::decrypt(&group_key, &sr_resp.encrypted_diff).unwrap();
     node_d2.doc_manager.apply_update(&doc_id, &diff).unwrap();
 
-    let state_d2 = node_d2.group_manager.get_group_state(group_id).await.unwrap();
+    let state_d2 = node_d2
+        .group_manager
+        .get_group_state(group_id)
+        .await
+        .unwrap();
     assert_eq!(state_d2.pins.len(), 1);
     assert_eq!(state_d2.pins[0].label, "Base Camp");
-    let d1_member = state_d2.members.iter().find(|m| m.user_id == "d1-user").expect("d1-user");
+    let d1_member = state_d2
+        .members
+        .iter()
+        .find(|m| m.user_id == "d1-user")
+        .expect("d1-user");
     assert_eq!(d1_member.stage_id.as_deref(), Some("main-stage"));
 
     drop(sink_d1);
@@ -902,16 +1133,24 @@ async fn test_festival_stage_chat_via_relay() {
     let topic_stage1 = format!("festival/{festival_id}/chat/stage-1");
     let topic_stage2 = format!("festival/{festival_id}/chat/stage-2");
 
-    let (mut sink_d1, _stream_d1) = connect_and_subscribe(&server, festival_id, &topic_stage1).await.unwrap();
-    let (_sink_d2, mut stream_d2) = connect_and_subscribe(&server, festival_id, &topic_stage1).await.unwrap();
+    let (mut sink_d1, _stream_d1) = connect_and_subscribe(&server, festival_id, &topic_stage1)
+        .await
+        .unwrap();
+    let (_sink_d2, mut stream_d2) = connect_and_subscribe(&server, festival_id, &topic_stage1)
+        .await
+        .unwrap();
 
     // Also subscribe D1 to stage-2
-    send_subscribe(&mut sink_d1, &[&topic_stage2]).await.unwrap();
+    send_subscribe(&mut sink_d1, &[&topic_stage2])
+        .await
+        .unwrap();
 
     // D1 sends on stage-1 → D2 receives
     let msg_id_1 = uuid::Uuid::new_v4().to_string();
     let envelope1 = chat_envelope(&msg_id_1, "d1", "D1", "Stage 1 message", &topic_stage1);
-    send_gossip(&mut sink_d1, &topic_stage1, envelope1).await.unwrap();
+    send_gossip(&mut sink_d1, &topic_stage1, envelope1)
+        .await
+        .unwrap();
 
     let recv = wait_for_gossip(&mut stream_d2, 5).await.unwrap();
     assert!(matches!(
@@ -922,17 +1161,16 @@ async fn test_festival_stage_chat_via_relay() {
     // D1 sends on stage-2 → D2 should NOT receive (timeout)
     let msg_id_2 = uuid::Uuid::new_v4().to_string();
     let envelope2 = chat_envelope(&msg_id_2, "d1", "D1", "Stage 2 message", &topic_stage2);
-    send_gossip(&mut sink_d1, &topic_stage2, envelope2).await.unwrap();
+    send_gossip(&mut sink_d1, &topic_stage2, envelope2)
+        .await
+        .unwrap();
 
-    let result = tokio::time::timeout(
-        Duration::from_secs(2),
-        wait_for_gossip(&mut stream_d2, 2),
-    )
-    .await;
+    let result =
+        tokio::time::timeout(Duration::from_secs(2), wait_for_gossip(&mut stream_d2, 2)).await;
     match result {
-        Err(_) => {} // expected timeout
+        Err(_) => {}       // expected timeout
         Ok(Ok(_msg)) => {} // could be another message, acceptable
-        Ok(Err(_)) => {} // connection error — acceptable
+        Ok(Err(_)) => {}   // connection error — acceptable
     }
 
     drop(sink_d1);
@@ -968,14 +1206,20 @@ async fn test_encrypted_group_chat_via_relay() {
     let encrypted = crypto::encrypt(&group_key, &plaintext).unwrap();
 
     let envelope = proto::GossipEnvelope {
-        payload: Some(proto::gossip_envelope::Payload::EncryptedChat(proto::EncryptedPayload {
-            encrypted: encrypted.clone(),
-            group_key_id: crypto::group_id_from_key(&group_key),
-        })),
+        payload: Some(proto::gossip_envelope::Payload::EncryptedChat(
+            proto::EncryptedPayload {
+                encrypted: encrypted.clone(),
+                group_key_id: crypto::group_id_from_key(&group_key),
+            },
+        )),
     };
 
-    let (mut sink_d1, _) = connect_and_subscribe(&server, festival_id, &topic).await.unwrap();
-    let (_sink_d2, mut stream_d2) = connect_and_subscribe(&server, festival_id, &topic).await.unwrap();
+    let (mut sink_d1, _) = connect_and_subscribe(&server, festival_id, &topic)
+        .await
+        .unwrap();
+    let (_sink_d2, mut stream_d2) = connect_and_subscribe(&server, festival_id, &topic)
+        .await
+        .unwrap();
 
     send_gossip(&mut sink_d1, &topic, envelope).await.unwrap();
 
@@ -1008,7 +1252,9 @@ async fn test_chat_catchup_on_reconnect() {
     let festival_id = "chat-catchup-test-1";
     let topic = format!("festival/{festival_id}/chat/general");
 
-    let (mut sink_d1, _stream_d1) = connect_and_subscribe(&server, festival_id, &topic).await.unwrap();
+    let (mut sink_d1, _stream_d1) = connect_and_subscribe(&server, festival_id, &topic)
+        .await
+        .unwrap();
 
     let mut msg_ids = Vec::new();
     for i in 1..=5 {
@@ -1020,13 +1266,18 @@ async fn test_chat_catchup_on_reconnect() {
 
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    let (mut sink_d2, mut stream_d2) = connect_and_subscribe(&server, festival_id, &topic).await.unwrap();
+    let (mut sink_d2, mut stream_d2) = connect_and_subscribe(&server, festival_id, &topic)
+        .await
+        .unwrap();
 
     send_catchup(&mut sink_d2, &topic, 0).await.unwrap();
 
     let catchup = wait_for_catchup(&mut stream_d2).await.unwrap();
 
-    assert!(catchup.messages.len() >= 5, "should have at least 5 messages in catchup");
+    assert!(
+        catchup.messages.len() >= 5,
+        "should have at least 5 messages in catchup"
+    );
 
     drop(sink_d1);
     drop(sink_d2);
@@ -1046,19 +1297,27 @@ async fn test_festival_stage_chat_multi_stage_routing() {
 
     // D1 subscribes to all three topics
     let (mut sink_d1, mut stream_d1) = connect_and_auth(&server, festival_id).await.unwrap();
-    send_subscribe(&mut sink_d1, &[&topic_main, &topic_second, &topic_general]).await.unwrap();
+    send_subscribe(&mut sink_d1, &[&topic_main, &topic_second, &topic_general])
+        .await
+        .unwrap();
     wait_for_subscribed(&mut stream_d1).await.unwrap();
 
     // D2 subscribes only to main-stage
-    let (mut sink_d2, mut stream_d2) = connect_and_subscribe(&server, festival_id, &topic_main).await.unwrap();
+    let (mut sink_d2, mut stream_d2) = connect_and_subscribe(&server, festival_id, &topic_main)
+        .await
+        .unwrap();
 
     // D3 subscribes only to general
-    let (_sink_d3, mut stream_d3) = connect_and_subscribe(&server, festival_id, &topic_general).await.unwrap();
+    let (_sink_d3, mut stream_d3) = connect_and_subscribe(&server, festival_id, &topic_general)
+        .await
+        .unwrap();
 
     // D1 sends on main-stage → D2 receives, D3 does not
     let msg_id_main = uuid::Uuid::new_v4().to_string();
     let envelope_main = chat_envelope(&msg_id_main, "d1", "D1", "Main stage rocks!", &topic_main);
-    send_gossip(&mut sink_d1, &topic_main, envelope_main).await.unwrap();
+    send_gossip(&mut sink_d1, &topic_main, envelope_main)
+        .await
+        .unwrap();
 
     let recv_d2 = wait_for_gossip(&mut stream_d2, 5).await.unwrap();
     match recv_d2.message.as_ref().and_then(|m| m.payload.as_ref()) {
@@ -1070,12 +1329,23 @@ async fn test_festival_stage_chat_multi_stage_routing() {
 
     // D3 should not receive (timeout)
     let d3_result = wait_for_gossip(&mut stream_d3, 1).await;
-    assert!(d3_result.is_err(), "D3 should not receive main-stage messages");
+    assert!(
+        d3_result.is_err(),
+        "D3 should not receive main-stage messages"
+    );
 
     // D1 sends on general → D3 receives, D2 does not
     let msg_id_gen = uuid::Uuid::new_v4().to_string();
-    let envelope_gen = chat_envelope(&msg_id_gen, "d1", "D1", "General announcement", &topic_general);
-    send_gossip(&mut sink_d1, &topic_general, envelope_gen).await.unwrap();
+    let envelope_gen = chat_envelope(
+        &msg_id_gen,
+        "d1",
+        "D1",
+        "General announcement",
+        &topic_general,
+    );
+    send_gossip(&mut sink_d1, &topic_general, envelope_gen)
+        .await
+        .unwrap();
 
     let recv_d3 = wait_for_gossip(&mut stream_d3, 5).await.unwrap();
     match recv_d3.message.as_ref().and_then(|m| m.payload.as_ref()) {
@@ -1088,7 +1358,9 @@ async fn test_festival_stage_chat_multi_stage_routing() {
     // D2 sends reply on main-stage → D1 receives
     let msg_id_reply = uuid::Uuid::new_v4().to_string();
     let envelope_reply = chat_envelope(&msg_id_reply, "d2", "D2", "Agreed!", &topic_main);
-    send_gossip(&mut sink_d2, &topic_main, envelope_reply).await.unwrap();
+    send_gossip(&mut sink_d2, &topic_main, envelope_reply)
+        .await
+        .unwrap();
 
     let recv_d1 = wait_for_gossip(&mut stream_d1, 5).await.unwrap();
     match recv_d1.message.as_ref().and_then(|m| m.payload.as_ref()) {
@@ -1105,82 +1377,114 @@ async fn test_festival_stage_chat_multi_stage_routing() {
 
 #[tokio::test]
 async fn test_signed_festival_update_propagation() {
-    let server = DevServer::start().await;
+    use base64::Engine as _;
     use offbeat_core::signing;
     use yrs::{Doc, Map, ReadTxn, StateVector, Transact};
 
+    let server = DevServer::start().await;
     let festival_id = "signed-prop-test-1";
     let topic = format!("festival/{festival_id}/state");
+    let base_url = server.http_url();
+    let client = reqwest::Client::new();
 
-    // Generate a signing keypair (simulating the festival DO's key)
-    let signing_key = signing::generate_signing_key();
-    let public_key: [u8; 32] = signing_key.verifying_key().to_bytes();
+    let admin_key = signing::generate_signing_key();
+    let admin_pub_hex = bytes_to_hex(&admin_key.verifying_key().to_bytes());
+    let (_subscriber, mut live_stream) = connect_and_subscribe(&server, festival_id, &topic)
+        .await
+        .unwrap();
+    client
+        .put(format!("{base_url}/festivals/{festival_id}/admins"))
+        .json(&json!({ "publicKey": admin_pub_hex }))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
 
-    // N1 creates a Yrs update (lineup change)
-    let doc_n1 = Doc::new();
-    let map = doc_n1.get_or_insert_map("root");
+    let source = Doc::new();
+    let map = source.get_or_insert_map("root");
     {
-        let mut txn = doc_n1.transact_mut();
+        let mut txn = source.transact_mut();
         map.insert(&mut txn, "headliner", "Aphex Twin");
         map.insert(&mut txn, "stage", "main-stage");
     }
-    let update_bytes = doc_n1.transact().encode_state_as_update_v1(&StateVector::default());
+    let update = source
+        .transact()
+        .encode_state_as_update_v1(&StateVector::default());
+    let admin_sig = signing::sign(&admin_key, format!("sign-update:{topic}").as_bytes());
+    let response = client
+        .post(format!("{base_url}/festivals/{festival_id}/sign-update"))
+        .json(&json!({
+            "publicKey": admin_pub_hex,
+            "signature": bytes_to_hex(&admin_sig),
+            "docId": topic,
+            "topic": topic,
+            "update": base64::engine::general_purpose::STANDARD.encode(update),
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let response: Value = response.json().await.unwrap();
+    let public_key: [u8; 32] = hex_to_bytes(response["publicKey"].as_str().unwrap())
+        .try_into()
+        .unwrap();
 
-    // N1 signs the update
-    let sig = signing::sign(&signing_key, &update_bytes);
-
-    let envelope = proto::GossipEnvelope {
-        payload: Some(proto::gossip_envelope::Payload::FestivalUpdate(proto::FestivalUpdate {
-            doc_id: format!("festival/{festival_id}"),
-            signed_update: Some(proto::SignedUpdate {
-                update: update_bytes.clone(),
-                author: "festival-organiser".to_string(),
-                signature: sig.to_vec(),
-            }),
-        })),
+    let live = wait_for_gossip(&mut live_stream, 5).await.unwrap();
+    let live_update = match live.message.and_then(|message| message.payload) {
+        Some(proto::gossip_envelope::Payload::FestivalUpdate(update)) => update,
+        other => panic!("expected signed festival delta, got {other:?}"),
     };
+    assert_eq!(live_update.kind, 1);
+    let signed = live_update.signed_update.as_ref().unwrap();
+    assert!(signing::verify_festival_update(
+        &public_key,
+        &live_update.doc_id,
+        live_update.kind,
+        live_update.authority_seq,
+        &signed.update,
+        &signed.signature,
+    ));
 
-    let (mut sink_n1, _stream_n1) = connect_and_subscribe(&server, festival_id, &topic).await.unwrap();
-    let (_sink_n2, mut stream_n2) = connect_and_subscribe(&server, festival_id, &topic).await.unwrap();
-
-    // N1 sends the signed update
-    send_gossip(&mut sink_n1, &topic, envelope).await.unwrap();
-
-    // N2 receives
-    let recv = wait_for_gossip(&mut stream_n2, 5).await.unwrap();
-    let fu = match recv.message.as_ref().and_then(|m| m.payload.as_ref()) {
-        Some(proto::gossip_envelope::Payload::FestivalUpdate(fu)) => fu,
-        other => panic!("expected FestivalUpdate, got {other:?}"),
+    let (mut late_sink, mut late_stream) = connect_and_subscribe(&server, festival_id, &topic)
+        .await
+        .unwrap();
+    send_sv_exchange(
+        &mut late_sink,
+        &topic,
+        yrs::StateVector::default().encode_v1(),
+    )
+    .await
+    .unwrap();
+    let checkpoint = wait_for_gossip(&mut late_stream, 5).await.unwrap();
+    let checkpoint = match checkpoint.message.and_then(|message| message.payload) {
+        Some(proto::gossip_envelope::Payload::FestivalUpdate(update)) => update,
+        other => panic!("expected signed festival checkpoint, got {other:?}"),
     };
+    assert_eq!(checkpoint.kind, 2);
+    let signed = checkpoint.signed_update.as_ref().unwrap();
+    assert!(signing::verify_festival_update(
+        &public_key,
+        &checkpoint.doc_id,
+        checkpoint.kind,
+        checkpoint.authority_seq,
+        &signed.update,
+        &signed.signature,
+    ));
 
-    // N2 verifies the signature and applies the update
-    let signed_upd = fu.signed_update.as_ref().unwrap();
-    let received_update = &signed_upd.update;
-    let received_sig = &signed_upd.signature;
-
-    // Signature is valid with the correct public key
-    assert!(
-        signing::verify(&public_key, received_update, received_sig),
-        "signature should be valid"
-    );
-
-    // Apply to a local doc
-    let doc_n2 = Doc::new();
-    let map_n2 = doc_n2.get_or_insert_map("root");
-    {
-        let mut txn = doc_n2.transact_mut();
-        txn.apply_update(yrs::Update::decode_v1(received_update).unwrap()).unwrap();
+    let late_doc = Doc::new();
+    let late_map = late_doc.get_or_insert_map("root");
+    late_doc
+        .transact_mut()
+        .apply_update(yrs::Update::decode_v1(&signed.update).unwrap())
+        .unwrap();
+    let txn = late_doc.transact();
+    match late_map.get(&txn, "headliner") {
+        Some(yrs::Out::Any(yrs::any::Any::String(value))) => {
+            assert_eq!(value.to_string(), "Aphex Twin")
+        }
+        other => panic!("expected checkpoint lineup, got {other:?}"),
     }
-    let txn = doc_n2.transact();
-    match map_n2.get(&txn, "headliner") {
-        Some(yrs::Out::Any(yrs::any::Any::String(s))) => assert_eq!(s.to_string(), "Aphex Twin"),
-        other => panic!("expected 'Aphex Twin', got {other:?}"),
-    }
-
-    // Wrong key rejects
-    let wrong_key = signing::generate_signing_key();
-    let wrong_pub: [u8; 32] = wrong_key.verifying_key().to_bytes();
-    assert!(!signing::verify(&wrong_pub, received_update, received_sig));
 }
 
 // =============================================================================
@@ -1190,58 +1494,46 @@ async fn test_signed_festival_update_propagation() {
 #[tokio::test]
 async fn test_signed_update_rejected_by_wrong_key() {
     let server = DevServer::start().await;
-    use offbeat_core::signing;
-    use yrs::{Doc, Map, ReadTxn, StateVector, Transact};
-
     let festival_id = "signed-reject-test-1";
     let topic = format!("festival/{festival_id}/state");
-
-    // Attacker's key
-    let attacker_key = signing::generate_signing_key();
-    // Real festival key
-    let real_key = signing::generate_signing_key();
-    let real_pub: [u8; 32] = real_key.verifying_key().to_bytes();
-
-    let doc = Doc::new();
-    let map = doc.get_or_insert_map("root");
-    {
-        let mut txn = doc.transact_mut();
-        map.insert(&mut txn, "evil", "payload");
-    }
-    let update_bytes = doc.transact().encode_state_as_update_v1(&StateVector::default());
-
-    let sig = signing::sign(&attacker_key, &update_bytes);
-
     let envelope = proto::GossipEnvelope {
-        payload: Some(proto::gossip_envelope::Payload::FestivalUpdate(proto::FestivalUpdate {
-            doc_id: "festival/fake".to_string(),
-            signed_update: Some(proto::SignedUpdate {
-                update: update_bytes.clone(),
-                author: "attacker".to_string(),
-                signature: sig.to_vec(),
-            }),
-        })),
+        payload: Some(proto::gossip_envelope::Payload::FestivalUpdate(
+            proto::FestivalUpdate {
+                doc_id: topic.clone(),
+                kind: 1,
+                authority_seq: 1,
+                signed_update: Some(proto::SignedUpdate {
+                    update: vec![0, 0],
+                    author: "attacker".to_string(),
+                    signature: vec![0; 64],
+                }),
+            },
+        )),
     };
 
-    let (mut sink, _stream) = connect_and_subscribe(&server, festival_id, &topic).await.unwrap();
-    let (_sink_n2, mut stream_n2) = connect_and_subscribe(&server, festival_id, &topic).await.unwrap();
+    let (mut sink, mut sender_stream) = connect_and_subscribe(&server, festival_id, &topic)
+        .await
+        .unwrap();
+    let (_receiver, mut receiver_stream) = connect_and_subscribe(&server, festival_id, &topic)
+        .await
+        .unwrap();
 
     send_gossip(&mut sink, &topic, envelope).await.unwrap();
-
-    // N2 receives the message (DO relays it blind — it's a dumb pipe)
-    let recv = wait_for_gossip(&mut stream_n2, 5).await.unwrap();
-
-    // But verification with the REAL public key fails
-    let fu = match recv.message.as_ref().and_then(|m| m.payload.as_ref()) {
-        Some(proto::gossip_envelope::Payload::FestivalUpdate(fu)) => fu,
-        other => panic!("expected FestivalUpdate, got {other:?}"),
-    };
-    let signed_upd = fu.signed_update.as_ref().unwrap();
-
-    assert!(
-        !signing::verify(&real_pub, &signed_upd.update, &signed_upd.signature),
-        "attacker's signature should not verify with real key"
-    );
+    let error = wait_for_msg(
+        &mut sender_stream,
+        |message| matches!(message, relay_server_message::Msg::Error(_)),
+        "festival update rejection",
+        5,
+    )
+    .await
+    .unwrap();
+    match error {
+        relay_server_message::Msg::Error(error) => {
+            assert!(error.error.contains("cannot send festival updates"));
+        }
+        _ => unreachable!(),
+    }
+    assert!(wait_for_gossip(&mut receiver_stream, 1).await.is_err());
 }
 
 // =============================================================================
@@ -1257,11 +1549,8 @@ async fn test_do_fastforward_general_data() {
     let festival_id = "ff-general-test-1";
     let topic = format!("festival/{festival_id}/state");
 
-    let signing_key = signing::generate_signing_key();
-    let public_key: [u8; 32] = signing_key.verifying_key().to_bytes();
-
-    // N1 sends multiple signed updates
-    let (mut sink_n1, _stream_n1) = connect_and_subscribe(&server, festival_id, &topic).await.unwrap();
+    let admin_key = register_festival_admin(&server, festival_id).await;
+    let mut public_key = None;
 
     let updates = vec![
         ("day1_headliner", "Radiohead"),
@@ -1276,49 +1565,54 @@ async fn test_do_fastforward_general_data() {
             let mut txn = doc.transact_mut();
             map.insert(&mut txn, *key, *value);
         }
-        let update_bytes = doc.transact().encode_state_as_update_v1(&StateVector::default());
-        let sig = signing::sign(&signing_key, &update_bytes);
-
-        let envelope = proto::GossipEnvelope {
-            payload: Some(proto::gossip_envelope::Payload::FestivalUpdate(proto::FestivalUpdate {
-                doc_id: format!("festival/{festival_id}"),
-                signed_update: Some(proto::SignedUpdate {
-                    update: update_bytes.clone(),
-                    author: "organiser".to_string(),
-                    signature: sig.to_vec(),
-                }),
-            })),
-        };
-        send_gossip(&mut sink_n1, &topic, envelope).await.unwrap();
-
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        let update_bytes = doc
+            .transact()
+            .encode_state_as_update_v1(&StateVector::default());
+        let response =
+            publish_festival_update(&server, festival_id, &admin_key, &update_bytes).await;
+        public_key = Some(
+            hex_to_bytes(response["publicKey"].as_str().unwrap())
+                .try_into()
+                .unwrap(),
+        );
     }
 
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     // Late joiner N2 connects and catches up
-    let (mut sink_n2, mut stream_n2) = connect_and_subscribe(&server, festival_id, &topic).await.unwrap();
-    send_catchup(&mut sink_n2, &topic, 0).await.unwrap();
+    let (mut sink_n2, mut stream_n2) = connect_and_subscribe(&server, festival_id, &topic)
+        .await
+        .unwrap();
+    send_sv_exchange(
+        &mut sink_n2,
+        &topic,
+        yrs::StateVector::default().encode_v1(),
+    )
+    .await
+    .unwrap();
 
-    let catchup = wait_for_catchup(&mut stream_n2).await.unwrap();
-    assert!(catchup.messages.len() >= 3, "should have at least 3 updates in catchup, got {}", catchup.messages.len());
+    let checkpoint = wait_for_gossip(&mut stream_n2, 5).await.unwrap();
+    let checkpoint = match checkpoint.message.and_then(|message| message.payload) {
+        Some(proto::gossip_envelope::Payload::FestivalUpdate(update)) => update,
+        other => panic!("expected signed checkpoint, got {other:?}"),
+    };
+    assert_eq!(checkpoint.kind, 2);
+    let signed = checkpoint.signed_update.as_ref().unwrap();
+    assert!(signing::verify_festival_update(
+        &public_key.unwrap(),
+        &checkpoint.doc_id,
+        checkpoint.kind,
+        checkpoint.authority_seq,
+        &signed.update,
+        &signed.signature,
+    ));
 
-    // Verify all updates, apply them to a fresh doc, check the values
     let doc_n2 = Doc::new();
     let map_n2 = doc_n2.get_or_insert_map("root");
-
-    for entry in &catchup.messages {
-        let fu = match entry.message.as_ref().and_then(|m| m.payload.as_ref()) {
-            Some(proto::gossip_envelope::Payload::FestivalUpdate(fu)) => fu,
-            _ => continue,
-        };
-        let signed_upd = fu.signed_update.as_ref().unwrap();
-
-        assert!(signing::verify(&public_key, &signed_upd.update, &signed_upd.signature), "catchup message signature should verify");
-
-        let mut txn = doc_n2.transact_mut();
-        txn.apply_update(yrs::Update::decode_v1(&signed_upd.update).unwrap()).unwrap();
-    }
+    doc_n2
+        .transact_mut()
+        .apply_update(yrs::Update::decode_v1(&signed.update).unwrap())
+        .unwrap();
 
     let txn = doc_n2.transact();
     for (key, value) in &updates {
@@ -1339,7 +1633,6 @@ async fn test_do_fastforward_group_data() {
     use offbeat_core::{OffbeatNode, crypto};
 
     let festival_id = "ff-group-test-1";
-    let topic = format!("festival/{festival_id}/state");
 
     // N1 creates a group and makes several changes
     let node_n1 = OffbeatNode::new_in_memory().unwrap();
@@ -1351,40 +1644,66 @@ async fn test_do_fastforward_group_data() {
 
     let group_id = &create.group_id;
     let group_key = node_n1.db.load_group_key(group_id).unwrap().unwrap();
-    let doc_id = format!("group/{group_id}");
+    let doc_id = format!("group/{group_id}/state");
+    let topic = doc_id.clone();
 
     // N1 adds pins and checks in
-    node_n1.group_manager.add_pin(group_id, "pin-ff-1", "Bar Tent", "51.5,-0.1", "n1-user").await.unwrap();
-    node_n1.group_manager.add_pin(group_id, "pin-ff-2", "Main Gate", "51.6,-0.2", "n1-user").await.unwrap();
-    node_n1.group_manager.check_in(group_id, "n1-user", Some("arena"), None).await.unwrap();
+    node_n1
+        .group_manager
+        .add_pin(group_id, "pin-ff-1", "Bar Tent", "51.5,-0.1", "n1-user")
+        .await
+        .unwrap();
+    node_n1
+        .group_manager
+        .add_pin(group_id, "pin-ff-2", "Main Gate", "51.6,-0.2", "n1-user")
+        .await
+        .unwrap();
+    node_n1
+        .group_manager
+        .check_in(group_id, "n1-user", Some("arena"), None)
+        .await
+        .unwrap();
 
-    let (mut sink_n1, _stream_n1) = connect_and_subscribe(&server, festival_id, &topic).await.unwrap();
+    let (mut sink_n1, _stream_n1) = connect_and_subscribe(&server, festival_id, &topic)
+        .await
+        .unwrap();
 
     // N1 sends full state as an encrypted group_update
     let full_state = node_n1.doc_manager.encode_full_state(&doc_id).unwrap();
     let encrypted = crypto::encrypt(&group_key, &full_state).unwrap();
 
     let envelope = proto::GossipEnvelope {
-        payload: Some(proto::gossip_envelope::Payload::GroupUpdate(proto::GroupUpdate {
-            doc_id: doc_id.clone(),
-            encrypted: encrypted.clone(),
-            group_key_id: crypto::group_id_from_key(&group_key),
-        })),
+        payload: Some(proto::gossip_envelope::Payload::GroupUpdate(
+            proto::GroupUpdate {
+                doc_id: doc_id.clone(),
+                encrypted: encrypted.clone(),
+                group_key_id: crypto::group_id_from_key(&group_key),
+            },
+        )),
     };
     send_gossip(&mut sink_n1, &topic, envelope).await.unwrap();
 
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     // Late joiner N2 connects and catches up via DO
-    let (mut sink_n2, mut stream_n2) = connect_and_subscribe(&server, festival_id, &topic).await.unwrap();
+    let (mut sink_n2, mut stream_n2) = connect_and_subscribe(&server, festival_id, &topic)
+        .await
+        .unwrap();
     send_catchup(&mut sink_n2, &topic, 0).await.unwrap();
 
     let catchup = wait_for_catchup(&mut stream_n2).await.unwrap();
-    assert!(!catchup.messages.is_empty(), "catchup should have at least 1 group_update");
+    assert!(
+        !catchup.messages.is_empty(),
+        "catchup should have at least 1 group_update"
+    );
 
     // N2 has the group key (simulating join via invite)
     let node_n2 = OffbeatNode::new_in_memory().unwrap();
-    node_n2.group_manager.join_group(&create.invite_payload, "n2-user", "N2").await.unwrap();
+    node_n2
+        .group_manager
+        .join_group(&create.invite_payload, "n2-user", "N2")
+        .await
+        .unwrap();
 
     // Apply all caught-up group_update messages
     for entry in &catchup.messages {
@@ -1393,11 +1712,18 @@ async fn test_do_fastforward_group_data() {
             _ => continue,
         };
         let decrypted = crypto::decrypt(&group_key, &gu.encrypted).unwrap();
-        node_n2.doc_manager.apply_update(&doc_id, &decrypted).unwrap();
+        node_n2
+            .doc_manager
+            .apply_update(&doc_id, &decrypted)
+            .unwrap();
     }
 
     // N2 should now see all of N1's data
-    let state_n2 = node_n2.group_manager.get_group_state(group_id).await.unwrap();
+    let state_n2 = node_n2
+        .group_manager
+        .get_group_state(group_id)
+        .await
+        .unwrap();
     assert_eq!(state_n2.pins.len(), 2, "N2 should see both pins");
     let labels: Vec<&str> = state_n2.pins.iter().map(|p| p.label.as_str()).collect();
     assert!(labels.contains(&"Bar Tent"));
@@ -1422,77 +1748,73 @@ async fn test_signed_update_via_do_advisory_catchup() {
 
     let festival_id = "advisory-test-1";
     let topic = format!("festival/{festival_id}/state");
+    let admin_key = register_festival_admin(&server, festival_id).await;
+    let (_live_sink, mut live_stream) = connect_and_subscribe(&server, festival_id, &topic)
+        .await
+        .unwrap();
 
-    let signing_key = signing::generate_signing_key();
-    let public_key: [u8; 32] = signing_key.verifying_key().to_bytes();
+    let source = Doc::new();
+    let map = source.get_or_insert_map("root");
+    map.insert(
+        &mut source.transact_mut(),
+        "set/1",
+        "DJ Shadow @ Main Stage 22:00",
+    );
+    let update = source
+        .transact()
+        .encode_state_as_update_v1(&StateVector::default());
+    let response = publish_festival_update(&server, festival_id, &admin_key, &update).await;
+    let public_key: [u8; 32] = hex_to_bytes(response["publicKey"].as_str().unwrap())
+        .try_into()
+        .unwrap();
 
-    let (mut sink_n1, _stream_n1) = connect_and_subscribe(&server, festival_id, &topic).await.unwrap();
-    let (_sink_n2, mut stream_n2) = connect_and_subscribe(&server, festival_id, &topic).await.unwrap();
-
-    let doc = Doc::new();
-    let map = doc.get_or_insert_map("root");
-    {
-        let mut txn = doc.transact_mut();
-        map.insert(&mut txn, "set/1", "DJ Shadow @ Main Stage 22:00");
-        map.insert(&mut txn, "set/2", "Four Tet @ Tent 23:00");
-    }
-    let update_bytes = doc.transact().encode_state_as_update_v1(&StateVector::default());
-    let sig = signing::sign(&signing_key, &update_bytes);
-
-    let envelope = proto::GossipEnvelope {
-        payload: Some(proto::gossip_envelope::Payload::FestivalUpdate(proto::FestivalUpdate {
-            doc_id: format!("festival/{festival_id}"),
-            signed_update: Some(proto::SignedUpdate {
-                update: update_bytes.clone(),
-                author: "festival-do".to_string(),
-                signature: sig.to_vec(),
-            }),
-        })),
+    let live = wait_for_gossip(&mut live_stream, 5).await.unwrap();
+    let live = match live.message.and_then(|message| message.payload) {
+        Some(proto::gossip_envelope::Payload::FestivalUpdate(update)) => update,
+        other => panic!("expected signed delta, got {other:?}"),
     };
-    send_gossip(&mut sink_n1, &topic, envelope).await.unwrap();
+    let signed = live.signed_update.as_ref().unwrap();
+    assert!(signing::verify_festival_update(
+        &public_key,
+        &live.doc_id,
+        live.kind,
+        live.authority_seq,
+        &signed.update,
+        &signed.signature,
+    ));
 
-    let recv_n2 = wait_for_gossip(&mut stream_n2, 5).await.unwrap();
-    let fu = match recv_n2.message.as_ref().unwrap().payload.as_ref().unwrap() {
-        proto::gossip_envelope::Payload::FestivalUpdate(fu) => fu,
-        other => panic!("expected festival_update, got {other:?}"),
+    let (mut late_sink, mut late_stream) = connect_and_subscribe(&server, festival_id, &topic)
+        .await
+        .unwrap();
+    send_sv_exchange(&mut late_sink, &topic, StateVector::default().encode_v1())
+        .await
+        .unwrap();
+    let checkpoint = wait_for_gossip(&mut late_stream, 5).await.unwrap();
+    let checkpoint = match checkpoint.message.and_then(|message| message.payload) {
+        Some(proto::gossip_envelope::Payload::FestivalUpdate(update)) => update,
+        other => panic!("expected signed checkpoint, got {other:?}"),
     };
-    assert!(recv_n2.seq > 0);
-    let su = fu.signed_update.as_ref().unwrap();
-    assert!(signing::verify(&public_key, &su.update, &su.signature));
+    assert_eq!(checkpoint.kind, 2);
+    let signed = checkpoint.signed_update.as_ref().unwrap();
+    assert!(signing::verify_festival_update(
+        &public_key,
+        &checkpoint.doc_id,
+        checkpoint.kind,
+        checkpoint.authority_seq,
+        &signed.update,
+        &signed.signature,
+    ));
 
-    drop(_sink_n2);
-    drop(stream_n2);
-    tokio::time::sleep(Duration::from_millis(200)).await;
-
-    let (mut sink_n3, mut stream_n3) = connect_and_subscribe(&server, festival_id, &topic).await.unwrap();
-    send_catchup(&mut sink_n3, &topic, 0).await.unwrap();
-
-    let catchup = wait_for_catchup(&mut stream_n3).await.unwrap();
-    assert!(!catchup.messages.is_empty(), "DO advisory catchup should contain the signed update");
-
-    let festival_updates: Vec<_> = catchup.messages.iter()
-        .filter(|e| matches!(e.message.as_ref().and_then(|m| m.payload.as_ref()), Some(proto::gossip_envelope::Payload::FestivalUpdate(_))))
-        .collect();
-    assert!(!festival_updates.is_empty(), "catchup should contain festival_update messages");
-
-    let cu_fu = match festival_updates[0].message.as_ref().unwrap().payload.as_ref().unwrap() {
-        proto::gossip_envelope::Payload::FestivalUpdate(fu) => fu,
-        _ => unreachable!(),
-    };
-    let cu_su = cu_fu.signed_update.as_ref().unwrap();
-    assert!(signing::verify(&public_key, &cu_su.update, &cu_su.signature),
-        "caught-up signed update should still verify");
-
-    let doc_n3 = Doc::new();
-    let map_n3 = doc_n3.get_or_insert_map("root");
-    {
-        let mut txn = doc_n3.transact_mut();
-        txn.apply_update(yrs::Update::decode_v1(&cu_su.update).unwrap()).unwrap();
-    }
-    let txn = doc_n3.transact();
-    match map_n3.get(&txn, "set/1") {
-        Some(yrs::Out::Any(yrs::any::Any::String(s))) => {
-            assert_eq!(s.to_string(), "DJ Shadow @ Main Stage 22:00");
+    let restored = Doc::new();
+    let map = restored.get_or_insert_map("root");
+    restored
+        .transact_mut()
+        .apply_update(yrs::Update::decode_v1(&signed.update).unwrap())
+        .unwrap();
+    let txn = restored.transact();
+    match map.get(&txn, "set/1") {
+        Some(yrs::Out::Any(yrs::any::Any::String(value))) => {
+            assert_eq!(value.to_string(), "DJ Shadow @ Main Stage 22:00");
         }
         other => panic!("expected set/1, got {other:?}"),
     }
@@ -1520,7 +1842,12 @@ async fn test_do_public_key_endpoint() {
     assert_eq!(resp.status(), 200);
 
     let hex_key = resp.text().await.unwrap();
-    assert_eq!(hex_key.len(), 64, "Ed25519 public key should be 64 hex chars, got {}", hex_key.len());
+    assert_eq!(
+        hex_key.len(),
+        64,
+        "Ed25519 public key should be 64 hex chars, got {}",
+        hex_key.len()
+    );
 
     // Parse it as valid hex → 32 bytes
     let key_bytes: Vec<u8> = (0..hex_key.len())
@@ -1532,7 +1859,10 @@ async fn test_do_public_key_endpoint() {
     // Key should be stable (same DO instance)
     let resp2 = reqwest::get(&url).await.unwrap();
     let hex_key2 = resp2.text().await.unwrap();
-    assert_eq!(hex_key, hex_key2, "public key should be stable across requests");
+    assert_eq!(
+        hex_key, hex_key2,
+        "public key should be stable across requests"
+    );
 }
 
 // =============================================================================
@@ -1545,7 +1875,9 @@ async fn test_partial_catchup_since_seq() {
     let festival_id = "partial-catchup-test-1";
     let topic = format!("festival/{festival_id}/chat/general");
 
-    let (mut sink, _stream) = connect_and_subscribe(&server, festival_id, &topic).await.unwrap();
+    let (mut sink, _stream) = connect_and_subscribe(&server, festival_id, &topic)
+        .await
+        .unwrap();
 
     // Send 5 messages
     for i in 0..5 {
@@ -1556,10 +1888,15 @@ async fn test_partial_catchup_since_seq() {
     }
 
     // First catchup from 0 — should get all 5
-    let (mut sink2, mut stream2) = connect_and_subscribe(&server, festival_id, &topic).await.unwrap();
+    let (mut sink2, mut stream2) = connect_and_subscribe(&server, festival_id, &topic)
+        .await
+        .unwrap();
     send_catchup(&mut sink2, &topic, 0).await.unwrap();
     let catchup1 = wait_for_catchup(&mut stream2).await.unwrap();
-    assert!(catchup1.messages.len() >= 5, "full catchup should have >= 5 messages");
+    assert!(
+        catchup1.messages.len() >= 5,
+        "full catchup should have >= 5 messages"
+    );
 
     // Get the seq of message 3 (0-indexed)
     let seq_3 = catchup1.messages[2].seq;
@@ -1569,7 +1906,10 @@ async fn test_partial_catchup_since_seq() {
     let catchup2 = wait_for_catchup(&mut stream2).await.unwrap();
 
     // Should have fewer messages (only those after seq_3)
-    assert!(catchup2.messages.len() < catchup1.messages.len(), "partial catchup should return fewer messages");
+    assert!(
+        catchup2.messages.len() < catchup1.messages.len(),
+        "partial catchup should return fewer messages"
+    );
     for msg in &catchup2.messages {
         assert!(msg.seq > seq_3, "all messages should be after sinceSeq");
     }
@@ -1589,8 +1929,7 @@ async fn test_three_node_signed_relay() {
     let festival_id = "three-node-test-1";
     let topic = format!("festival/{festival_id}/state");
 
-    let signing_key = signing::generate_signing_key();
-    let public_key: [u8; 32] = signing_key.verifying_key().to_bytes();
+    let admin_key = register_festival_admin(&server, festival_id).await;
 
     let doc = Doc::new();
     let map = doc.get_or_insert_map("root");
@@ -1598,25 +1937,20 @@ async fn test_three_node_signed_relay() {
         let mut txn = doc.transact_mut();
         map.insert(&mut txn, "announcement", "Gates open at 10am");
     }
-    let update_bytes = doc.transact().encode_state_as_update_v1(&StateVector::default());
-    let sig = signing::sign(&signing_key, &update_bytes);
+    let update_bytes = doc
+        .transact()
+        .encode_state_as_update_v1(&StateVector::default());
+    let (_sink_n2, mut stream_n2) = connect_and_subscribe(&server, festival_id, &topic)
+        .await
+        .unwrap();
+    let (_sink_n3, mut stream_n3) = connect_and_subscribe(&server, festival_id, &topic)
+        .await
+        .unwrap();
 
-    let envelope = proto::GossipEnvelope {
-        payload: Some(proto::gossip_envelope::Payload::FestivalUpdate(proto::FestivalUpdate {
-            doc_id: format!("festival/{festival_id}"),
-            signed_update: Some(proto::SignedUpdate {
-                update: update_bytes.clone(),
-                author: "organiser".to_string(),
-                signature: sig.to_vec(),
-            }),
-        })),
-    };
-
-    let (mut sink_n1, _stream_n1) = connect_and_subscribe(&server, festival_id, &topic).await.unwrap();
-    let (_sink_n2, mut stream_n2) = connect_and_subscribe(&server, festival_id, &topic).await.unwrap();
-    let (_sink_n3, mut stream_n3) = connect_and_subscribe(&server, festival_id, &topic).await.unwrap();
-
-    send_gossip(&mut sink_n1, &topic, envelope).await.unwrap();
+    let response = publish_festival_update(&server, festival_id, &admin_key, &update_bytes).await;
+    let public_key: [u8; 32] = hex_to_bytes(response["publicKey"].as_str().unwrap())
+        .try_into()
+        .unwrap();
 
     let recv_n2 = wait_for_gossip(&mut stream_n2, 5).await.unwrap();
     let recv_n3 = wait_for_gossip(&mut stream_n3, 5).await.unwrap();
@@ -1627,13 +1961,21 @@ async fn test_three_node_signed_relay() {
             other => panic!("{label}: expected festival_update, got {other:?}"),
         };
         let su = fu.signed_update.as_ref().unwrap();
-        assert!(signing::verify(&public_key, &su.update, &su.signature), "{label} should verify signature");
+        assert!(signing::verify_festival_update(
+            &public_key,
+            &fu.doc_id,
+            fu.kind,
+            fu.authority_seq,
+            &su.update,
+            &su.signature,
+        ));
 
         let d = Doc::new();
         let m = d.get_or_insert_map("root");
         {
             let mut txn = d.transact_mut();
-            txn.apply_update(yrs::Update::decode_v1(&su.update).unwrap()).unwrap();
+            txn.apply_update(yrs::Update::decode_v1(&su.update).unwrap())
+                .unwrap();
         }
         let txn = d.transact();
         match m.get(&txn, "announcement") {
@@ -1661,7 +2003,9 @@ async fn test_encrypted_group_chat_catchup() {
     let group_id = crypto::group_id_from_key(&group_key);
     let topic = format!("group/{group_id}/chat");
 
-    let (mut sink_d1, _stream_d1) = connect_and_subscribe(&server, festival_id, &topic).await.unwrap();
+    let (mut sink_d1, _stream_d1) = connect_and_subscribe(&server, festival_id, &topic)
+        .await
+        .unwrap();
 
     let mut expected_texts = Vec::new();
     for i in 1..=3 {
@@ -1682,10 +2026,12 @@ async fn test_encrypted_group_chat_catchup() {
         let encrypted = crypto::encrypt(&group_key, &plaintext).unwrap();
 
         let envelope = proto::GossipEnvelope {
-            payload: Some(proto::gossip_envelope::Payload::EncryptedChat(proto::EncryptedPayload {
-                encrypted,
-                group_key_id: group_id.clone(),
-            })),
+            payload: Some(proto::gossip_envelope::Payload::EncryptedChat(
+                proto::EncryptedPayload {
+                    encrypted,
+                    group_key_id: group_id.clone(),
+                },
+            )),
         };
         send_gossip(&mut sink_d1, &topic, envelope).await.unwrap();
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -1693,15 +2039,28 @@ async fn test_encrypted_group_chat_catchup() {
 
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    let (mut sink_d2, mut stream_d2) = connect_and_subscribe(&server, festival_id, &topic).await.unwrap();
+    let (mut sink_d2, mut stream_d2) = connect_and_subscribe(&server, festival_id, &topic)
+        .await
+        .unwrap();
     send_catchup(&mut sink_d2, &topic, 0).await.unwrap();
 
     let catchup = wait_for_catchup(&mut stream_d2).await.unwrap();
 
-    let encrypted_chats: Vec<_> = catchup.messages.iter()
-        .filter(|e| matches!(e.message.as_ref().and_then(|m| m.payload.as_ref()), Some(proto::gossip_envelope::Payload::EncryptedChat(_))))
+    let encrypted_chats: Vec<_> = catchup
+        .messages
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.message.as_ref().and_then(|m| m.payload.as_ref()),
+                Some(proto::gossip_envelope::Payload::EncryptedChat(_))
+            )
+        })
         .collect();
-    assert_eq!(encrypted_chats.len(), 3, "should catch up all 3 encrypted chat messages");
+    assert_eq!(
+        encrypted_chats.len(),
+        3,
+        "should catch up all 3 encrypted chat messages"
+    );
 
     let mut decrypted_texts = Vec::new();
     for entry in &encrypted_chats {
@@ -1719,7 +2078,14 @@ async fn test_encrypted_group_chat_catchup() {
 
     // Without the key, decryption fails
     let wrong_key = crypto::generate_group_key();
-    let first_ec = match encrypted_chats[0].message.as_ref().unwrap().payload.as_ref().unwrap() {
+    let first_ec = match encrypted_chats[0]
+        .message
+        .as_ref()
+        .unwrap()
+        .payload
+        .as_ref()
+        .unwrap()
+    {
         proto::gossip_envelope::Payload::EncryptedChat(ec) => ec,
         _ => unreachable!(),
     };
@@ -1733,7 +2099,6 @@ async fn test_encrypted_group_chat_catchup() {
 #[tokio::test]
 async fn test_mixed_chat_and_crdt_traffic() {
     let server = DevServer::start().await;
-    use offbeat_core::signing;
     use yrs::{Doc, Map, ReadTxn, StateVector, Transact};
 
     let festival_id = "mixed-traffic-test-1";
@@ -1741,14 +2106,18 @@ async fn test_mixed_chat_and_crdt_traffic() {
     let state_topic = format!("festival/{festival_id}/state");
 
     let (mut sink_d1, mut _stream_d1) = connect_and_auth(&server, festival_id).await.unwrap();
-    send_subscribe(&mut sink_d1, &[&chat_topic, &state_topic]).await.unwrap();
+    send_subscribe(&mut sink_d1, &[&chat_topic, &state_topic])
+        .await
+        .unwrap();
     wait_for_subscribed(&mut _stream_d1).await.unwrap();
 
     let (mut _sink_d2, mut stream_d2) = connect_and_auth(&server, festival_id).await.unwrap();
-    send_subscribe(&mut _sink_d2, &[&chat_topic, &state_topic]).await.unwrap();
+    send_subscribe(&mut _sink_d2, &[&chat_topic, &state_topic])
+        .await
+        .unwrap();
     wait_for_subscribed(&mut stream_d2).await.unwrap();
 
-    let signing_key = signing::generate_signing_key();
+    let admin_key = register_festival_admin(&server, festival_id).await;
 
     let doc = Doc::new();
     let map = doc.get_or_insert_map("root");
@@ -1756,24 +2125,22 @@ async fn test_mixed_chat_and_crdt_traffic() {
         let mut txn = doc.transact_mut();
         map.insert(&mut txn, "schedule_version", "v2");
     }
-    let update_bytes = doc.transact().encode_state_as_update_v1(&StateVector::default());
-    let sig = signing::sign(&signing_key, &update_bytes);
-
-    let state_envelope = proto::GossipEnvelope {
-        payload: Some(proto::gossip_envelope::Payload::FestivalUpdate(proto::FestivalUpdate {
-            doc_id: format!("festival/{festival_id}"),
-            signed_update: Some(proto::SignedUpdate {
-                update: update_bytes,
-                author: "organiser".to_string(),
-                signature: sig.to_vec(),
-            }),
-        })),
-    };
-    send_gossip(&mut sink_d1, &state_topic, state_envelope).await.unwrap();
+    let update_bytes = doc
+        .transact()
+        .encode_state_as_update_v1(&StateVector::default());
+    publish_festival_update(&server, festival_id, &admin_key, &update_bytes).await;
 
     let chat_msg_id = uuid::Uuid::new_v4().to_string();
-    let chat_env = chat_envelope(&chat_msg_id, "d1", "D1", "Check the new schedule!", &chat_topic);
-    send_gossip(&mut sink_d1, &chat_topic, chat_env).await.unwrap();
+    let chat_env = chat_envelope(
+        &chat_msg_id,
+        "d1",
+        "D1",
+        "Check the new schedule!",
+        &chat_topic,
+    );
+    send_gossip(&mut sink_d1, &chat_topic, chat_env)
+        .await
+        .unwrap();
 
     // D2 receives both (order may vary)
     let mut has_festival = false;
@@ -1817,7 +2184,9 @@ async fn test_do_real_keypair_sign_and_catchup() {
     let resp = client
         .put(format!("{base_url}/festivals/{festival_id}/admins"))
         .json(&json!({ "publicKey": admin_pub_hex }))
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), 200, "admin registration should succeed");
 
     let sig = signing::sign(&admin_key, b"export-signing-key");
@@ -1825,7 +2194,9 @@ async fn test_do_real_keypair_sign_and_catchup() {
     let resp = client
         .post(format!("{base_url}/festivals/{festival_id}/signing-key"))
         .json(&json!({ "publicKey": admin_pub_hex, "signature": sig_hex }))
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), 200, "signing key export should succeed");
     let do_secret_hex = resp.text().await.unwrap();
     assert_eq!(do_secret_hex.len(), 64);
@@ -1833,11 +2204,20 @@ async fn test_do_real_keypair_sign_and_catchup() {
     let do_secret: [u8; 32] = hex_to_bytes(&do_secret_hex).try_into().unwrap();
     let do_signing_key = ed25519_dalek::SigningKey::from_bytes(&do_secret);
 
-    let resp = client.get(format!("{base_url}/festivals/{festival_id}/public-key")).send().await.unwrap();
+    let resp = client
+        .get(format!("{base_url}/festivals/{festival_id}/public-key"))
+        .send()
+        .await
+        .unwrap();
     let do_pub_hex = resp.text().await.unwrap();
     let do_public_key: [u8; 32] = hex_to_bytes(&do_pub_hex).try_into().unwrap();
     assert_eq!(do_signing_key.verifying_key().to_bytes(), do_public_key);
 
+    use base64::Engine as _;
+    let topic = format!("festival/{festival_id}/state");
+    let (_live_sink, mut live_stream) = connect_and_subscribe(&server, festival_id, &topic)
+        .await
+        .unwrap();
     let doc = Doc::new();
     let map = doc.get_or_insert_map("root");
     {
@@ -1845,65 +2225,78 @@ async fn test_do_real_keypair_sign_and_catchup() {
         map.insert(&mut txn, "headliner_day1", "Aphex Twin");
         map.insert(&mut txn, "headliner_day2", "Autechre");
     }
-    let update_bytes = doc.transact().encode_state_as_update_v1(&StateVector::default());
-    let do_sig = signing::sign(&do_signing_key, &update_bytes);
+    let update_bytes = doc
+        .transact()
+        .encode_state_as_update_v1(&StateVector::default());
+    let auth_sig = signing::sign(&admin_key, format!("sign-update:{topic}").as_bytes());
+    client
+        .post(format!("{base_url}/festivals/{festival_id}/sign-update"))
+        .json(&json!({
+            "publicKey": admin_pub_hex,
+            "signature": bytes_to_hex(&auth_sig),
+            "docId": topic,
+            "topic": topic,
+            "update": base64::engine::general_purpose::STANDARD.encode(update_bytes),
+        }))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
 
-    let envelope = proto::GossipEnvelope {
-        payload: Some(proto::gossip_envelope::Payload::FestivalUpdate(proto::FestivalUpdate {
-            doc_id: format!("festival/{festival_id}"),
-            signed_update: Some(proto::SignedUpdate {
-                update: update_bytes.clone(),
-                author: "festival-organiser".to_string(),
-                signature: do_sig.to_vec(),
-            }),
-        })),
+    let live = wait_for_gossip(&mut live_stream, 5).await.unwrap();
+    let live = match live.message.and_then(|message| message.payload) {
+        Some(proto::gossip_envelope::Payload::FestivalUpdate(update)) => update,
+        other => panic!("expected signed delta, got {other:?}"),
     };
+    let signed = live.signed_update.as_ref().unwrap();
+    assert!(signing::verify_festival_update(
+        &do_public_key,
+        &live.doc_id,
+        live.kind,
+        live.authority_seq,
+        &signed.update,
+        &signed.signature,
+    ));
 
-    let topic = format!("festival/{festival_id}/state");
-    let (mut sink_n1, _stream_n1) = connect_and_subscribe(&server, festival_id, &topic).await.unwrap();
-    let (_sink_n2, mut stream_n2) = connect_and_subscribe(&server, festival_id, &topic).await.unwrap();
-
-    send_gossip(&mut sink_n1, &topic, envelope).await.unwrap();
-
-    let recv = wait_for_gossip(&mut stream_n2, 5).await.unwrap();
-    let fu = match recv.message.as_ref().unwrap().payload.as_ref().unwrap() {
-        proto::gossip_envelope::Payload::FestivalUpdate(fu) => fu,
-        other => panic!("expected festival_update, got {other:?}"),
+    let (mut late_sink, mut late_stream) = connect_and_subscribe(&server, festival_id, &topic)
+        .await
+        .unwrap();
+    send_sv_exchange(
+        &mut late_sink,
+        &topic,
+        yrs::StateVector::default().encode_v1(),
+    )
+    .await
+    .unwrap();
+    let checkpoint = wait_for_gossip(&mut late_stream, 5).await.unwrap();
+    let checkpoint = match checkpoint.message.and_then(|message| message.payload) {
+        Some(proto::gossip_envelope::Payload::FestivalUpdate(update)) => update,
+        other => panic!("expected signed checkpoint, got {other:?}"),
     };
-    let su = fu.signed_update.as_ref().unwrap();
-    assert!(signing::verify(&do_public_key, &su.update, &su.signature),
-        "update signed with DO's key must verify against DO's public key");
+    assert_eq!(checkpoint.kind, 2);
+    let signed = checkpoint.signed_update.as_ref().unwrap();
+    assert!(signing::verify_festival_update(
+        &do_public_key,
+        &checkpoint.doc_id,
+        checkpoint.kind,
+        checkpoint.authority_seq,
+        &signed.update,
+        &signed.signature,
+    ));
 
-    drop(_sink_n2);
-    drop(stream_n2);
-    tokio::time::sleep(Duration::from_millis(200)).await;
-
-    let (mut sink_n3, mut stream_n3) = connect_and_subscribe(&server, festival_id, &topic).await.unwrap();
-    send_catchup(&mut sink_n3, &topic, 0).await.unwrap();
-
-    let catchup = wait_for_catchup(&mut stream_n3).await.unwrap();
-    let festival_updates: Vec<_> = catchup.messages.iter()
-        .filter(|e| matches!(e.message.as_ref().and_then(|m| m.payload.as_ref()), Some(proto::gossip_envelope::Payload::FestivalUpdate(_))))
-        .collect();
-    assert!(!festival_updates.is_empty(), "catchup should contain the signed update");
-
-    let cu_fu = match festival_updates[0].message.as_ref().unwrap().payload.as_ref().unwrap() {
-        proto::gossip_envelope::Payload::FestivalUpdate(fu) => fu,
-        _ => unreachable!(),
-    };
-    let cu_su = cu_fu.signed_update.as_ref().unwrap();
-    assert!(signing::verify(&do_public_key, &cu_su.update, &cu_su.signature));
-
-    let doc_n3 = Doc::new();
-    let map_n3 = doc_n3.get_or_insert_map("root");
-    {
-        let mut txn = doc_n3.transact_mut();
-        txn.apply_update(yrs::Update::decode_v1(&cu_su.update).unwrap()).unwrap();
-    }
-    let txn = doc_n3.transact();
-    match map_n3.get(&txn, "headliner_day1") {
-        Some(yrs::Out::Any(yrs::any::Any::String(s))) => assert_eq!(s.to_string(), "Aphex Twin"),
-        other => panic!("expected 'Aphex Twin', got {other:?}"),
+    let restored = Doc::new();
+    let restored_map = restored.get_or_insert_map("root");
+    restored
+        .transact_mut()
+        .apply_update(yrs::Update::decode_v1(&signed.update).unwrap())
+        .unwrap();
+    let txn = restored.transact();
+    match restored_map.get(&txn, "headliner_day1") {
+        Some(yrs::Out::Any(yrs::any::Any::String(value))) => {
+            assert_eq!(value.to_string(), "Aphex Twin")
+        }
+        other => panic!("expected checkpoint state, got {other:?}"),
     }
 }
 
@@ -1923,7 +2316,7 @@ async fn test_do_sign_update_endpoint() {
     let base_url = server.http_url();
     let client = reqwest::Client::new();
     let topic = format!("festival/{festival_id}/state");
-    let doc_id = format!("festival/{festival_id}");
+    let doc_id = topic.clone();
 
     let admin_key = signing::generate_signing_key();
     let admin_pub_hex = bytes_to_hex(&admin_key.verifying_key().to_bytes());
@@ -1936,9 +2329,13 @@ async fn test_do_sign_update_endpoint() {
     client
         .put(format!("{base_url}/festivals/{festival_id}/admins"))
         .json(&json!({ "publicKey": admin_pub_hex }))
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
 
-    let (_sink_ws, mut stream_ws) = connect_and_subscribe(&server, festival_id, &topic).await.unwrap();
+    let (_sink_ws, mut stream_ws) = connect_and_subscribe(&server, festival_id, &topic)
+        .await
+        .unwrap();
 
     let doc = Doc::new();
     let map = doc.get_or_insert_map("root");
@@ -1947,7 +2344,9 @@ async fn test_do_sign_update_endpoint() {
         map.insert(&mut txn, "weather", "sunny");
         map.insert(&mut txn, "wind", "calm");
     }
-    let update_bytes = doc.transact().encode_state_as_update_v1(&StateVector::default());
+    let update_bytes = doc
+        .transact()
+        .encode_state_as_update_v1(&StateVector::default());
     let engine = base64::engine::general_purpose::STANDARD;
 
     let auth_msg = format!("sign-update:{doc_id}");
@@ -1963,19 +2362,34 @@ async fn test_do_sign_update_endpoint() {
             "topic": topic,
             "update": engine.encode(&update_bytes),
         }))
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), 200, "sign-update should succeed");
 
     let resp_body: Value = resp.json().await.unwrap();
-    assert!(resp_body["seq"].as_u64().is_some());
+    let response_kind = resp_body["kind"].as_i64().unwrap() as i32;
+    let response_seq = resp_body["authoritySeq"]
+        .as_str()
+        .unwrap()
+        .parse::<u64>()
+        .unwrap();
     let do_pub_hex = resp_body["publicKey"].as_str().unwrap();
     let do_public_key: [u8; 32] = hex_to_bytes(do_pub_hex).try_into().unwrap();
 
     let signed = &resp_body["signedUpdate"];
     let resp_update_bytes = engine.decode(signed["update"].as_str().unwrap()).unwrap();
-    let resp_sig_bytes = engine.decode(signed["signature"].as_str().unwrap()).unwrap();
-    assert!(signing::verify(&do_public_key, &resp_update_bytes, &resp_sig_bytes),
-        "DO-signed update should verify");
+    let resp_sig_bytes = engine
+        .decode(signed["signature"].as_str().unwrap())
+        .unwrap();
+    assert!(signing::verify_festival_update(
+        &do_public_key,
+        &doc_id,
+        response_kind,
+        response_seq,
+        &resp_update_bytes,
+        &resp_sig_bytes,
+    ));
 
     // The WS subscriber should have received it as binary protobuf
     let recv = wait_for_gossip(&mut stream_ws, 5).await.unwrap();
@@ -1984,14 +2398,21 @@ async fn test_do_sign_update_endpoint() {
         other => panic!("expected festival_update, got {other:?}"),
     };
     let su = fu.signed_update.as_ref().unwrap();
-    assert!(signing::verify(&do_public_key, &su.update, &su.signature),
-        "WS-delivered update should verify against DO's public key");
+    assert!(signing::verify_festival_update(
+        &do_public_key,
+        &fu.doc_id,
+        fu.kind,
+        fu.authority_seq,
+        &su.update,
+        &su.signature,
+    ));
 
     let doc_ws = Doc::new();
     let map_ws = doc_ws.get_or_insert_map("root");
     {
         let mut txn = doc_ws.transact_mut();
-        txn.apply_update(yrs::Update::decode_v1(&su.update).unwrap()).unwrap();
+        txn.apply_update(yrs::Update::decode_v1(&su.update).unwrap())
+            .unwrap();
     }
     let txn = doc_ws.transact();
     match map_ws.get(&txn, "weather") {
@@ -2003,22 +2424,32 @@ async fn test_do_sign_update_endpoint() {
     drop(stream_ws);
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    let (mut sink_late, mut stream_late) = connect_and_subscribe(&server, festival_id, &topic).await.unwrap();
-    send_catchup(&mut sink_late, &topic, 0).await.unwrap();
+    let (mut sink_late, mut stream_late) = connect_and_subscribe(&server, festival_id, &topic)
+        .await
+        .unwrap();
+    send_sv_exchange(
+        &mut sink_late,
+        &topic,
+        yrs::StateVector::default().encode_v1(),
+    )
+    .await
+    .unwrap();
 
-    let catchup = wait_for_catchup(&mut stream_late).await.unwrap();
-    let updates: Vec<_> = catchup.messages.iter()
-        .filter(|e| matches!(e.message.as_ref().and_then(|m| m.payload.as_ref()), Some(proto::gossip_envelope::Payload::FestivalUpdate(_))))
-        .collect();
-    assert!(!updates.is_empty());
-
-    let cu_fu = match updates[0].message.as_ref().unwrap().payload.as_ref().unwrap() {
-        proto::gossip_envelope::Payload::FestivalUpdate(fu) => fu,
-        _ => unreachable!(),
+    let catchup = wait_for_gossip(&mut stream_late, 5).await.unwrap();
+    let checkpoint = match catchup.message.and_then(|message| message.payload) {
+        Some(proto::gossip_envelope::Payload::FestivalUpdate(update)) => update,
+        other => panic!("expected checkpoint, got {other:?}"),
     };
-    let cu_su = cu_fu.signed_update.as_ref().unwrap();
-    assert!(signing::verify(&do_public_key, &cu_su.update, &cu_su.signature),
-        "caught-up DO-signed update should verify");
+    assert_eq!(checkpoint.kind, 2);
+    let signed = checkpoint.signed_update.as_ref().unwrap();
+    assert!(signing::verify_festival_update(
+        &do_public_key,
+        &checkpoint.doc_id,
+        checkpoint.kind,
+        checkpoint.authority_seq,
+        &signed.update,
+        &signed.signature,
+    ));
 }
 
 // =============================================================================
@@ -2080,7 +2511,11 @@ async fn test_do_signing_key_rejected_for_non_admin() {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 403, "non-admin sign-update should be rejected");
+    assert_eq!(
+        resp.status(),
+        403,
+        "non-admin sign-update should be rejected"
+    );
 
     // Admin with wrong signature should also fail (401, not 403)
     let wrong_sig = signing::sign(&admin_key, b"wrong-challenge");
@@ -2120,10 +2555,18 @@ async fn test_global_admins_inherited_by_festival_do() {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 200, "global admin registration should succeed");
+    assert_eq!(
+        resp.status(),
+        200,
+        "global admin registration should succeed"
+    );
 
     // Verify it's listed
-    let resp = client.get(format!("{base_url}/admins")).send().await.unwrap();
+    let resp = client
+        .get(format!("{base_url}/admins"))
+        .send()
+        .await
+        .unwrap();
     let admins: Vec<String> = resp.json().await.unwrap();
     assert!(admins.contains(&admin_pub_hex));
 
@@ -2147,7 +2590,11 @@ async fn test_global_admins_inherited_by_festival_do() {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 200, "global admin should be able to export festival signing key");
+    assert_eq!(
+        resp.status(),
+        200,
+        "global admin should be able to export festival signing key"
+    );
     let key_hex = resp.text().await.unwrap();
     assert_eq!(key_hex.len(), 64);
 }
@@ -2157,10 +2604,7 @@ async fn test_global_admins_inherited_by_festival_do() {
 // =============================================================================
 
 /// Build auth headers: X-Admin-Key (hex pubkey) and X-Admin-Sig (hex sig over path).
-fn admin_headers(
-    key: &ed25519_dalek::SigningKey,
-    path: &str,
-) -> reqwest::header::HeaderMap {
+fn admin_headers(key: &ed25519_dalek::SigningKey, path: &str) -> reqwest::header::HeaderMap {
     use offbeat_core::signing;
     use reqwest::header::{HeaderMap, HeaderValue};
 
@@ -2199,73 +2643,73 @@ async fn test_create_festival_and_publish_lineup() {
         .post(format!("{base}/festivals"))
         .headers(admin_headers(&admin_key, "/festivals"))
         .json(&json!({
-            "id": "testfest-1",
-            "name": "Test Festival",
-            "year": 2026,
-            "location": "Hyde Park",
-            "city": "London",
-            "country": "GB",
-            "startDate": "2026-07-01",
-            "endDate": "2026-07-03",
-            "genres": ["Rock", "Electronic"],
+            "source": {
+                "festivalId": "testfest-1",
+                "clashfinderId": "fieldday2026",
+                "name": "Test Festival",
+                "location": "Hyde Park",
+                "city": "London",
+                "country": "GB",
+                "genres": ["Rock", "Electronic"]
+            }
         }))
         .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), 201, "festival creation should succeed");
 
-    let festival: Value = resp.json().await.unwrap();
-    assert_eq!(festival["id"], "testfest-1");
-    assert_eq!(festival["name"], "Test Festival");
-    assert_eq!(festival["city"], "London");
+    let created: Value = resp.json().await.unwrap();
+    assert_eq!(created["festival"]["id"], "testfest-1");
+    assert_eq!(created["festival"]["name"], "Test Festival");
+    assert_eq!(created["festival"]["city"], "London");
+    let initial_set_count = created["lineup"]["sets"].as_array().unwrap().len();
+    assert!(initial_set_count > 0);
 
     // Read it back via GET
-    let resp = client.get(format!("{base}/festivals/testfest-1")).send().await.unwrap();
+    let resp = client
+        .get(format!("{base}/festivals/testfest-1"))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), 200);
     let fetched: Value = resp.json().await.unwrap();
     assert_eq!(fetched["name"], "Test Festival");
 
     // It should appear in the festivals list
-    let resp = client.get(format!("{base}/festivals")).send().await.unwrap();
-    let festivals: Vec<Value> = resp.json().await.unwrap();
-    assert!(festivals.iter().any(|f| f["id"] == "testfest-1"));
-
-    // Publish lineup with raw ClashfinderEvent data
-    let events = json!([
-        { "artist": "The Cure", "stage": "Main Stage", "day": "friday", "start": "21:00", "end": "23:00" },
-        { "artist": "LCD Soundsystem", "stage": "Main Stage", "day": "saturday", "start": "22:00", "end": "23:30" },
-        { "artist": "Four Tet", "stage": "Tent", "day": "friday", "start": "20:00", "end": "21:30" },
-    ]);
-
     let resp = client
-        .put(format!("{base}/festivals/testfest-1/lineup"))
-        .headers(admin_headers(&admin_key, "/festivals/testfest-1/lineup"))
-        .json(&json!({ "events": events }))
+        .get(format!("{base}/festivals"))
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 200, "lineup publish should succeed");
+    let festivals: Vec<Value> = resp.json().await.unwrap();
+    assert!(festivals.iter().any(|f| f["id"] == "testfest-1"));
 
-    let lineup: Value = resp.json().await.unwrap();
-    assert_eq!(lineup["stages"].as_array().unwrap().len(), 2); // Main Stage + Tent
-    assert_eq!(lineup["sets"].as_array().unwrap().len(), 3);
+    // Refresh from the configured Clashfinder source. This replaces rather
+    // than appends the stored lineup.
+    let resp = client
+        .put(format!("{base}/festivals/testfest-1/lineup"))
+        .headers(admin_headers(&admin_key, "/festivals/testfest-1/lineup"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "lineup refresh should succeed");
+    let refreshed: Value = resp.json().await.unwrap();
+    assert_eq!(
+        refreshed["sets"].as_array().unwrap().len(),
+        initial_set_count
+    );
 
-    // Read lineup via GET
-    let resp = client.get(format!("{base}/festivals/testfest-1/lineup")).send().await.unwrap();
-    assert_eq!(resp.status(), 200);
-    let fetched_lineup: Value = resp.json().await.unwrap();
-    assert_eq!(fetched_lineup["sets"].as_array().unwrap().len(), 3);
-
-    // Verify artists are correct
-    let artists: Vec<&str> = fetched_lineup["sets"]
-        .as_array()
+    let fetched: Value = client
+        .get(format!("{base}/festivals/testfest-1/lineup"))
+        .send()
+        .await
         .unwrap()
-        .iter()
-        .map(|s| s["artist"].as_str().unwrap())
-        .collect();
-    assert!(artists.contains(&"The Cure"));
-    assert!(artists.contains(&"LCD Soundsystem"));
-    assert!(artists.contains(&"Four Tet"));
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(fetched["sets"].as_array().unwrap().len(), initial_set_count);
 }
 
 // =============================================================================
@@ -2354,18 +2798,29 @@ async fn test_update_festival_and_replace_lineup() {
         .await
         .unwrap();
 
-    client
+    let created: Value = client
         .post(format!("{base}/festivals"))
         .headers(admin_headers(&admin_key, "/festivals"))
         .json(&json!({
-            "id": "updatefest",
-            "name": "Original Name",
-            "startDate": "2026-08-01",
-            "endDate": "2026-08-02",
+            "source": {
+                "festivalId": "updatefest",
+                "clashfinderId": "fieldday2026",
+                "name": "Original Name",
+                "location": "Victoria Park",
+                "city": "London",
+                "country": "GB"
+            }
         }))
         .send()
         .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
         .unwrap();
+    let expected_sets = created["lineup"]["sets"].as_array().unwrap().len();
+    assert!(expected_sets > 0);
 
     // Update metadata
     let resp = client
@@ -2380,47 +2835,22 @@ async fn test_update_festival_and_replace_lineup() {
     assert_eq!(updated["name"], "Updated Name");
     assert_eq!(updated["city"], "Berlin");
 
-    // Publish initial lineup
-    client
-        .put(format!("{base}/festivals/updatefest/lineup"))
-        .headers(admin_headers(&admin_key, "/festivals/updatefest/lineup"))
-        .json(&json!({ "events": [
-            { "artist": "Artist A", "stage": "S1", "day": "friday", "start": "20:00", "end": "21:00" },
-        ]}))
-        .send()
-        .await
-        .unwrap();
-
-    let resp = client.get(format!("{base}/festivals/updatefest/lineup")).send().await.unwrap();
-    let lineup: Value = resp.json().await.unwrap();
-    assert_eq!(lineup["sets"].as_array().unwrap().len(), 1);
-
-    // Replace lineup with new data
-    let resp = client
-        .put(format!("{base}/festivals/updatefest/lineup"))
-        .headers(admin_headers(&admin_key, "/festivals/updatefest/lineup"))
-        .json(&json!({ "events": [
-            { "artist": "Artist B", "stage": "S1", "day": "friday", "start": "19:00", "end": "20:00" },
-            { "artist": "Artist C", "stage": "S2", "day": "friday", "start": "20:00", "end": "21:30" },
-        ]}))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 200);
-
-    let new_lineup: Value = resp.json().await.unwrap();
-    assert_eq!(new_lineup["sets"].as_array().unwrap().len(), 2, "lineup should be replaced, not appended");
-
-    // Old artist should be gone
-    let artists: Vec<&str> = new_lineup["sets"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|s| s["artist"].as_str().unwrap())
-        .collect();
-    assert!(!artists.contains(&"Artist A"), "old lineup should be replaced");
-    assert!(artists.contains(&"Artist B"));
-    assert!(artists.contains(&"Artist C"));
+    // Refreshing the configured source replaces rows idempotently rather than
+    // appending duplicate sets.
+    for _ in 0..2 {
+        let refreshed: Value = client
+            .put(format!("{base}/festivals/updatefest/lineup"))
+            .headers(admin_headers(&admin_key, "/festivals/updatefest/lineup"))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(refreshed["sets"].as_array().unwrap().len(), expected_sets);
+    }
 }
 
 // =============================================================================
@@ -2428,18 +2858,27 @@ async fn test_update_festival_and_replace_lineup() {
 // =============================================================================
 
 #[tokio::test]
-async fn test_seeded_festival_lineup_from_db() {
+async fn test_fresh_registry_has_no_implicit_seed_data() {
     let server = DevServer::start().await;
     let base = server.http_url();
     let client = reqwest::Client::new();
 
-    // The seeded fieldday26 should have a lineup
-    let resp = client.get(format!("{base}/festivals/fieldday26/lineup")).send().await.unwrap();
-    assert_eq!(resp.status(), 200);
+    let festivals: Vec<Value> = client
+        .get(format!("{base}/festivals"))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(festivals.is_empty());
 
-    let lineup: Value = resp.json().await.unwrap();
-    assert!(!lineup["stages"].as_array().unwrap().is_empty(), "should have stages");
-    assert!(!lineup["days"].as_array().unwrap().is_empty(), "should have days");
-    assert!(!lineup["sets"].as_array().unwrap().is_empty(), "should have sets");
-    assert_eq!(lineup["festival"]["id"], "fieldday26");
+    let response = client
+        .get(format!("{base}/festivals/fieldday26/lineup"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 404);
 }

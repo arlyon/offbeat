@@ -4,17 +4,22 @@ use rusqlite::Connection;
 /// Each migration: (version, SQL to apply).
 const MIGRATIONS: &[(u32, &str)] = &[
     (1, include_str!("schema.sql")),
-    (2, "CREATE TABLE IF NOT EXISTS doc_updates (
+    (
+        2,
+        "CREATE TABLE IF NOT EXISTS doc_updates (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         doc_id TEXT NOT NULL,
         update_data BLOB NOT NULL,
         created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
-    CREATE INDEX IF NOT EXISTS idx_doc_updates_doc_id ON doc_updates(doc_id);"),
+    CREATE INDEX IF NOT EXISTS idx_doc_updates_doc_id ON doc_updates(doc_id);",
+    ),
     // Durable peer directory: persists peers learned online so the mesh can
     // cold-start offline. Scoped per festival because gossip bootstrap is
     // per-topic — only peers seen on a festival's topics seed that topic.
-    (3, "CREATE TABLE IF NOT EXISTS festival_peers (
+    (
+        3,
+        "CREATE TABLE IF NOT EXISTS festival_peers (
         festival_id TEXT NOT NULL,
         endpoint_id TEXT NOT NULL,
         relay_url TEXT,
@@ -23,7 +28,23 @@ const MIGRATIONS: &[(u32, &str)] = &[
         PRIMARY KEY (festival_id, endpoint_id)
     );
     CREATE INDEX IF NOT EXISTS idx_festival_peers_recency
-        ON festival_peers(festival_id, last_seen DESC);"),
+        ON festival_peers(festival_id, last_seen DESC);",
+    ),
+    (
+        4,
+        "CREATE TABLE IF NOT EXISTS verified_festival_updates (
+        doc_id TEXT NOT NULL,
+        authority_seq INTEGER NOT NULL,
+        kind INTEGER NOT NULL,
+        update_data BLOB NOT NULL,
+        author TEXT NOT NULL,
+        signature BLOB NOT NULL,
+        received_at TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (doc_id, authority_seq, kind)
+    );
+    CREATE INDEX IF NOT EXISTS idx_verified_festival_checkpoint
+        ON verified_festival_updates(doc_id, kind, authority_seq DESC);",
+    ),
 ];
 
 /// Ensure the `_migrations` table exists and apply any pending migrations.
@@ -46,10 +67,7 @@ pub fn apply_migrations(conn: &Connection) -> Result<()> {
 
         if !applied {
             conn.execute_batch(sql)?;
-            conn.execute(
-                "INSERT INTO _migrations (version) VALUES (?1)",
-                [version],
-            )?;
+            conn.execute("INSERT INTO _migrations (version) VALUES (?1)", [version])?;
             tracing::info!("applied migration v{version}");
         }
     }
@@ -97,6 +115,7 @@ mod tests {
         assert!(tables.contains(&"credentials".to_string()));
         assert!(tables.contains(&"starred_sets".to_string()));
         assert!(tables.contains(&"festival_peers".to_string()));
+        assert!(tables.contains(&"verified_festival_updates".to_string()));
         assert!(tables.contains(&"_migrations".to_string()));
     }
 }

@@ -2,7 +2,7 @@
 
 # Meshtastic Implementation Plan
 
-This document is the accountability checklist for Offbeat's Meshtastic route. The goal is not to pretend Meshtastic is a full iroh transport. It is a constrained physical route for the shared Offbeat sync protocol, carried through a Bluetooth-paired Meshtastic radio.
+This document is the accountability checklist for Offbeat's Meshtastic route. Meshtastic is always classified as a constrained physical route carried through a Bluetooth-paired radio. The production baseline uses compact Offbeat resource frames; a native iroh framing experiment remains welcome, but must demonstrate acceptable bytes, fragmentation, latency, and airtime before replacing the compact path.
 
 ## Current honest state
 
@@ -14,15 +14,15 @@ Implemented:
 - `FromRadio` decoding with official protobufs and extraction of `PRIVATE_APP` payloads.
 - Fragmentation/reassembly and dedupe keyed by `(topic_tag, message_id)`.
 - A Rust lifecycle manager that scans, connects, queues outbound frames, flushes TX, polls RX, reconnects/backoffs, and reports status counters.
-- Android bridge scaffold that uses the existing BLE central for scan/connect/discover/subscribe/write against Meshtastic service and ToRadio/FromRadio characteristics.
+- Android FRB hardware harness that scans/connects with `blew`, subscribes to `FromNum`, drains `FromRadio`, writes `ToRadio`, and reports decoded frames.
+- Compact encrypted group-chat bodies that can be sent over Meshtastic and applied into the local chat DB for matching local groups.
 
 Not implemented yet:
 
-- Rust ↔ Android JNI binding for `MeshtasticSidecarBridge`.
+- Background Rust ↔ Android sidecar task that keeps a selected Meshtastic radio connected outside the debug harness.
 - iOS CoreBluetooth bridge for Meshtastic sidecar BLE.
-- Real device notification callback plumbing from `FromRadio` into `MeshtasticSidecar::poll_rx`.
-- Runtime integration from domain changes (festival update, group update, group chat) into `MeshtasticSidecar::queue_frame`.
-- Applying inbound compact frames back into DocManager/Chat DB.
+- Runtime integration from normal domain changes (festival update, group update, group chat) into a persistent Meshtastic queue.
+- Applying inbound festival/group-state compact frames back into DocManager; group chat apply is wired in the harness.
 - Persistent queue/retry across app restarts.
 - Real airtime/rate limiting beyond queue limits and payload/fragment caps.
 - Hardware tests against actual Meshtastic firmware.
@@ -64,18 +64,21 @@ Offbeat owns only the bytes inside `Data.payload` for `PRIVATE_APP`.
 ## Layering
 
 ```text
-Offbeat resource update
+Offbeat logical resource
+  -> shared IDs, trust, dedupe, and apply semantics
   -> TransportProfile::Constrained policy
-  -> Offbeat compact PRIVATE_APP payload packet(s)
+  -> compact PRIVATE_APP payload packet(s)
   -> Meshtastic protobuf ToRadio/MeshPacket/Data(portnum=PRIVATE_APP)
   -> BLE ToRadio characteristic
   -> Meshtastic firmware / LoRa mesh
   -> BLE FromNum notification
   -> repeated BLE FromRadio characteristic reads until empty
   -> Meshtastic protobuf FromRadio/MeshPacket/Data(portnum=PRIVATE_APP)
-  -> Offbeat compact packet reassembly/dedupe
-  -> Offbeat DocManager/Chat application path
+  -> compact packet reassembly/dedupe
+  -> normal Offbeat DocManager/Chat application path
 ```
+
+This baseline keeps the data structures transport-agnostic: only representation and scheduling differ. An all-iroh prototype must preserve the same profile suppression and be compared against this baseline on real radios.
 
 ## Implementation phases
 
@@ -116,7 +119,7 @@ Offbeat resource update
   - P1 encrypted group update/check-in/pin
   - P2 encrypted short group chat
   - P3 festival chat only when idle
-- Apply inbound compact bodies through the same DocManager/ChatManager semantics used by other routes.
+- Apply inbound compact bodies through the same DocManager/ChatManager semantics used by other routes. Group chat is implemented in the hardware harness; group state and festival signed updates remain.
 - Ensure dedupe across WebSocket/BLE/Wi-Fi Aware/Meshtastic.
 
 ### Phase 5 — Field hardening
@@ -165,9 +168,15 @@ Two-radio Offbeat `PRIVATE_APP` test:
 2. Open **Meshtastic Test Rig** on phone B, scan/select radio B, tap **Listen 30s**.
 3. Within that window, use phone A to scan/select radio A and tap **Send + listen**.
 4. Pass if phone B reports `private_app > 0` and at least one decoded frame whose body matches the debug payload.
-5. Repeat with duplicate sends; decoded message IDs should make dedupe expectations visible before domain-level application is wired.
 
-Full app E2E, after domain integration:
+Two-radio encrypted group-chat test:
+
+1. Both phones must have joined the same group for the current festival.
+2. Phone B: open **Meshtastic Test Rig**, scan/select radio B, tap **Listen + apply**.
+3. Phone A: open **Meshtastic Test Rig**, enter the group ID and short message, tap **Send group chat**.
+4. Pass if phone B reports `applied_group_chats > 0` and the message appears in the normal Social group chat history.
+
+Full app E2E, after background queue integration:
 
 1. Pair phone with Meshtastic radio.
 2. Verify service and `ToRadio`/`FromNum`/`FromRadio` characteristics are discovered.

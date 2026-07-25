@@ -50,10 +50,7 @@ class WeatherPill extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(
-              icon,
-              style: const TextStyle(fontSize: 13, height: 1),
-            ),
+            Text(icon, style: const TextStyle(fontSize: 13, height: 1)),
             const SizedBox(width: 4),
             Text(
               '$temp°',
@@ -94,7 +91,8 @@ class WeatherPill extends StatelessWidget {
 /// Falls back to 0 if no match found.
 int _currentHourIndex(List<String> times, DateTime now) {
   // Times are like "2026-06-13T06:00"
-  final nowHour = '${now.year}-${_p2(now.month)}-${_p2(now.day)}T${_p2(now.hour)}:00';
+  final nowHour =
+      '${now.year}-${_p2(now.month)}-${_p2(now.day)}T${_p2(now.hour)}:00';
 
   for (int i = 0; i < times.length; i++) {
     if (times[i] == nowHour) return i;

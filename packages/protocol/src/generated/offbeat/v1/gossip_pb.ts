@@ -2,8 +2,8 @@
 // @generated from file offbeat/v1/gossip.proto (package offbeat.v1, syntax proto3)
 /* eslint-disable */
 
-import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
-import { fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
+import type { GenEnum, GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
+import { enumDesc, fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
 import type { ChatMessage, SignedUpdate } from "./types_pb";
 import { file_offbeat_v1_types } from "./types_pb";
 import type { Message } from "@bufbuild/protobuf";
@@ -12,7 +12,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file offbeat/v1/gossip.proto.
  */
 export const file_offbeat_v1_gossip: GenFile = /*@__PURE__*/
-  fileDesc("ChdvZmZiZWF0L3YxL2dvc3NpcC5wcm90bxIKb2ZmYmVhdC52MSL3AgoOR29zc2lwRW52ZWxvcGUSNQoPZmVzdGl2YWxfdXBkYXRlGAEgASgLMhoub2ZmYmVhdC52MS5GZXN0aXZhbFVwZGF0ZUgAEi8KDGdyb3VwX3VwZGF0ZRgCIAEoCzIXLm9mZmJlYXQudjEuR3JvdXBVcGRhdGVIABInCgRjaGF0GAMgASgLMhcub2ZmYmVhdC52MS5DaGF0TWVzc2FnZUgAEjYKDmVuY3J5cHRlZF9jaGF0GAQgASgLMhwub2ZmYmVhdC52MS5FbmNyeXB0ZWRQYXlsb2FkSAASLwoMc3luY19yZXF1ZXN0GAUgASgLMhcub2ZmYmVhdC52MS5TeW5jUmVxdWVzdEgAEjEKDXN5bmNfcmVzcG9uc2UYBiABKAsyGC5vZmZiZWF0LnYxLlN5bmNSZXNwb25zZUgAEi0KC3N5bmNfdXBkYXRlGAcgASgLMhYub2ZmYmVhdC52MS5TeW5jVXBkYXRlSABCCQoHcGF5bG9hZCJRCg5GZXN0aXZhbFVwZGF0ZRIOCgZkb2NfaWQYASABKAkSLwoNc2lnbmVkX3VwZGF0ZRgCIAEoCzIYLm9mZmJlYXQudjEuU2lnbmVkVXBkYXRlIkYKC0dyb3VwVXBkYXRlEg4KBmRvY19pZBgBIAEoCRIRCgllbmNyeXB0ZWQYAiABKAwSFAoMZ3JvdXBfa2V5X2lkGAMgASgJIjsKEEVuY3J5cHRlZFBheWxvYWQSEQoJZW5jcnlwdGVkGAEgASgMEhQKDGdyb3VwX2tleV9pZBgCIAEoCSJJCgtTeW5jUmVxdWVzdBIOCgZkb2NfaWQYASABKAkSFAoMZW5jcnlwdGVkX3N2GAIgASgMEhQKDGdyb3VwX2tleV9pZBgDIAEoCSJMCgxTeW5jUmVzcG9uc2USDgoGZG9jX2lkGAEgASgJEhYKDmVuY3J5cHRlZF9kaWZmGAIgASgMEhQKDGdyb3VwX2tleV9pZBgDIAEoCSJKCgpTeW5jVXBkYXRlEg4KBmRvY19pZBgBIAEoCRIWCg5lbmNyeXB0ZWRfZGlmZhgCIAEoDBIUCgxncm91cF9rZXlfaWQYAyABKAkiNwoOR3JvdXBIYW5kc2hha2USFQoNc2Vzc2lvbl9ub25jZRgBIAEoDBIOCgZ0b2tlbnMYAiADKAwiRAoWR3JvdXBIYW5kc2hha2VSZXNwb25zZRIqCgZvZmZlcnMYASADKAsyGi5vZmZiZWF0LnYxLkdyb3VwU3luY09mZmVyIk4KDkdyb3VwU3luY09mZmVyEhAKCGdyb3VwX2lkGAEgASgJEhQKDGVuY3J5cHRlZF9zdhgCIAEoDBIUCgxncm91cF9rZXlfaWQYAyABKAliBnByb3RvMw", [file_offbeat_v1_types]);
+  fileDesc("ChdvZmZiZWF0L3YxL2dvc3NpcC5wcm90bxIKb2ZmYmVhdC52MSL3AgoOR29zc2lwRW52ZWxvcGUSNQoPZmVzdGl2YWxfdXBkYXRlGAEgASgLMhoub2ZmYmVhdC52MS5GZXN0aXZhbFVwZGF0ZUgAEi8KDGdyb3VwX3VwZGF0ZRgCIAEoCzIXLm9mZmJlYXQudjEuR3JvdXBVcGRhdGVIABInCgRjaGF0GAMgASgLMhcub2ZmYmVhdC52MS5DaGF0TWVzc2FnZUgAEjYKDmVuY3J5cHRlZF9jaGF0GAQgASgLMhwub2ZmYmVhdC52MS5FbmNyeXB0ZWRQYXlsb2FkSAASLwoMc3luY19yZXF1ZXN0GAUgASgLMhcub2ZmYmVhdC52MS5TeW5jUmVxdWVzdEgAEjEKDXN5bmNfcmVzcG9uc2UYBiABKAsyGC5vZmZiZWF0LnYxLlN5bmNSZXNwb25zZUgAEi0KC3N5bmNfdXBkYXRlGAcgASgLMhYub2ZmYmVhdC52MS5TeW5jVXBkYXRlSABCCQoHcGF5bG9hZCKWAQoORmVzdGl2YWxVcGRhdGUSDgoGZG9jX2lkGAEgASgJEi8KDXNpZ25lZF91cGRhdGUYAiABKAsyGC5vZmZiZWF0LnYxLlNpZ25lZFVwZGF0ZRIsCgRraW5kGAMgASgOMh4ub2ZmYmVhdC52MS5GZXN0aXZhbFVwZGF0ZUtpbmQSFQoNYXV0aG9yaXR5X3NlcRgEIAEoBCJGCgtHcm91cFVwZGF0ZRIOCgZkb2NfaWQYASABKAkSEQoJZW5jcnlwdGVkGAIgASgMEhQKDGdyb3VwX2tleV9pZBgDIAEoCSI7ChBFbmNyeXB0ZWRQYXlsb2FkEhEKCWVuY3J5cHRlZBgBIAEoDBIUCgxncm91cF9rZXlfaWQYAiABKAkiSQoLU3luY1JlcXVlc3QSDgoGZG9jX2lkGAEgASgJEhQKDGVuY3J5cHRlZF9zdhgCIAEoDBIUCgxncm91cF9rZXlfaWQYAyABKAkiTAoMU3luY1Jlc3BvbnNlEg4KBmRvY19pZBgBIAEoCRIWCg5lbmNyeXB0ZWRfZGlmZhgCIAEoDBIUCgxncm91cF9rZXlfaWQYAyABKAkiSgoKU3luY1VwZGF0ZRIOCgZkb2NfaWQYASABKAkSFgoOZW5jcnlwdGVkX2RpZmYYAiABKAwSFAoMZ3JvdXBfa2V5X2lkGAMgASgJIjcKDkdyb3VwSGFuZHNoYWtlEhUKDXNlc3Npb25fbm9uY2UYASABKAwSDgoGdG9rZW5zGAIgAygMIkQKFkdyb3VwSGFuZHNoYWtlUmVzcG9uc2USKgoGb2ZmZXJzGAEgAygLMhoub2ZmYmVhdC52MS5Hcm91cFN5bmNPZmZlciJOCg5Hcm91cFN5bmNPZmZlchIQCghncm91cF9pZBgBIAEoCRIUCgxlbmNyeXB0ZWRfc3YYAiABKAwSFAoMZ3JvdXBfa2V5X2lkGAMgASgJKn8KEkZlc3RpdmFsVXBkYXRlS2luZBIkCiBGRVNUSVZBTF9VUERBVEVfS0lORF9VTlNQRUNJRklFRBAAEh4KGkZFU1RJVkFMX1VQREFURV9LSU5EX0RFTFRBEAESIwofRkVTVElWQUxfVVBEQVRFX0tJTkRfQ0hFQ0tQT0lOVBACYgZwcm90bzM", [file_offbeat_v1_types]);
 
 /**
  * @generated from message offbeat.v1.GossipEnvelope
@@ -86,6 +86,16 @@ export type FestivalUpdate = Message<"offbeat.v1.FestivalUpdate"> & {
    * @generated from field: offbeat.v1.SignedUpdate signed_update = 2;
    */
   signedUpdate?: SignedUpdate | undefined;
+
+  /**
+   * @generated from field: offbeat.v1.FestivalUpdateKind kind = 3;
+   */
+  kind: FestivalUpdateKind;
+
+  /**
+   * @generated from field: uint64 authority_seq = 4;
+   */
+  authoritySeq: bigint;
 };
 
 /**
@@ -302,4 +312,30 @@ export type GroupSyncOffer = Message<"offbeat.v1.GroupSyncOffer"> & {
  */
 export const GroupSyncOfferSchema: GenMessage<GroupSyncOffer> = /*@__PURE__*/
   messageDesc(file_offbeat_v1_gossip, 9);
+
+/**
+ * @generated from enum offbeat.v1.FestivalUpdateKind
+ */
+export enum FestivalUpdateKind {
+  /**
+   * @generated from enum value: FESTIVAL_UPDATE_KIND_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * @generated from enum value: FESTIVAL_UPDATE_KIND_DELTA = 1;
+   */
+  DELTA = 1,
+
+  /**
+   * @generated from enum value: FESTIVAL_UPDATE_KIND_CHECKPOINT = 2;
+   */
+  CHECKPOINT = 2,
+}
+
+/**
+ * Describes the enum offbeat.v1.FestivalUpdateKind.
+ */
+export const FestivalUpdateKindSchema: GenEnum<FestivalUpdateKind> = /*@__PURE__*/
+  enumDesc(file_offbeat_v1_gossip, 0);
 

@@ -30,4 +30,6 @@ console.log("To use:");
 console.log("  1. Add public key to admins table in the database");
 console.log("  2. Set ADMIN_SECRET_KEY env var when running scripts");
 console.log("\nExample:");
-console.log(`  ADMIN_SECRET_KEY=${bytesToHex(secretKey)} npx tsx scripts/register-festival.ts myfest.json`);
+console.log(
+	`  ADMIN_SECRET_KEY=${bytesToHex(secretKey)} npx tsx scripts/register-festival.ts myfest.json`,
+);

@@ -31,6 +31,91 @@ pub const MESSAGE_ID_BYTES: usize = 8;
 pub const PACKET_HEADER_BYTES: usize = 27;
 pub const MAX_FRAGMENTS: u8 = 4;
 const MAGIC: [u8; 2] = *b"OB";
+const GROUP_CHAT_TAG_CONTEXT: &[u8] = b"offbeat/meshtastic/group/chat/v1";
+const COMPACT_GROUP_CHAT_VERSION: u8 = 1;
+
+pub fn group_chat_topic_tag(group_key: &[u8; 32]) -> [u8; TOPIC_TAG_BYTES] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(GROUP_CHAT_TAG_CONTEXT);
+    hasher.update(group_key);
+    let hash = hasher.finalize();
+    let mut tag = [0u8; TOPIC_TAG_BYTES];
+    tag.copy_from_slice(&hash.as_bytes()[..TOPIC_TAG_BYTES]);
+    tag
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompactGroupChat {
+    pub message_uuid: [u8; 16],
+    pub user_id: String,
+    pub display_name: String,
+    pub text: String,
+    pub writer_seq: u64,
+    pub timestamp_secs: u64,
+}
+
+impl CompactGroupChat {
+    pub fn encode(&self) -> anyhow::Result<Vec<u8>> {
+        let user_id = bounded_string_bytes("user_id", &self.user_id, 64)?;
+        let display_name = bounded_string_bytes("display_name", &self.display_name, 48)?;
+        let text = bounded_string_bytes("text", &self.text, 96)?;
+
+        let mut out = Vec::with_capacity(36 + user_id.len() + display_name.len() + text.len());
+        out.push(COMPACT_GROUP_CHAT_VERSION);
+        out.extend_from_slice(&self.message_uuid);
+        out.extend_from_slice(&self.writer_seq.to_be_bytes());
+        out.extend_from_slice(&self.timestamp_secs.to_be_bytes());
+        out.push(user_id.len() as u8);
+        out.push(display_name.len() as u8);
+        out.push(text.len() as u8);
+        out.extend_from_slice(user_id);
+        out.extend_from_slice(display_name);
+        out.extend_from_slice(text);
+        Ok(out)
+    }
+
+    pub fn decode(raw: &[u8]) -> anyhow::Result<Self> {
+        if raw.len() < 36 {
+            anyhow::bail!("compact group chat too short");
+        }
+        if raw[0] != COMPACT_GROUP_CHAT_VERSION {
+            anyhow::bail!("unsupported compact group chat version {}", raw[0]);
+        }
+        let mut message_uuid = [0u8; 16];
+        message_uuid.copy_from_slice(&raw[1..17]);
+        let writer_seq = u64::from_be_bytes(raw[17..25].try_into()?);
+        let timestamp_secs = u64::from_be_bytes(raw[25..33].try_into()?);
+        let user_len = raw[33] as usize;
+        let display_len = raw[34] as usize;
+        let text_len = raw[35] as usize;
+        let expected = 36 + user_len + display_len + text_len;
+        if raw.len() != expected {
+            anyhow::bail!("compact group chat length mismatch");
+        }
+        let user_start = 36;
+        let display_start = user_start + user_len;
+        let text_start = display_start + display_len;
+        Ok(Self {
+            message_uuid,
+            user_id: String::from_utf8(raw[user_start..display_start].to_vec())?,
+            display_name: String::from_utf8(raw[display_start..text_start].to_vec())?,
+            text: String::from_utf8(raw[text_start..].to_vec())?,
+            writer_seq,
+            timestamp_secs,
+        })
+    }
+}
+
+fn bounded_string_bytes<'a>(name: &str, value: &'a str, max: usize) -> anyhow::Result<&'a [u8]> {
+    let bytes = value.as_bytes();
+    if bytes.len() > max {
+        anyhow::bail!(
+            "compact group chat {name} is {} bytes; max is {max}",
+            bytes.len()
+        );
+    }
+    Ok(bytes)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OffbeatSyncFrame {
@@ -735,6 +820,25 @@ mod tests {
 
     const TOPIC: [u8; TOPIC_TAG_BYTES] = *b"topic123";
     const MSG: [u8; MESSAGE_ID_BYTES] = *b"msgid123";
+
+    #[test]
+    fn compact_group_chat_round_trips_and_tag_is_keyed() {
+        let key_a = [7u8; 32];
+        let key_b = [8u8; 32];
+        assert_ne!(group_chat_topic_tag(&key_a), group_chat_topic_tag(&key_b));
+
+        let chat = CompactGroupChat {
+            message_uuid: [1u8; 16],
+            user_id: "user-1".to_string(),
+            display_name: "Alice".to_string(),
+            text: "meet left of the main stage".to_string(),
+            writer_seq: 42,
+            timestamp_secs: 123456,
+        };
+        let encoded = chat.encode().unwrap();
+        assert!(encoded.len() < 160);
+        assert_eq!(CompactGroupChat::decode(&encoded).unwrap(), chat);
+    }
 
     #[test]
     fn private_app_packet_round_trips_as_constrained_sync_payload() {

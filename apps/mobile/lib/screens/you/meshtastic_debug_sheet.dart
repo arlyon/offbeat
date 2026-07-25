@@ -6,7 +6,10 @@ import '../../theme/tokens.dart';
 import '../../widgets/dotted_border.dart';
 
 class MeshtasticDebugSheet extends StatefulWidget {
-  const MeshtasticDebugSheet({super.key});
+  final rust.AppNode? node;
+  final String? festivalId;
+
+  const MeshtasticDebugSheet({super.key, this.node, this.festivalId});
 
   @override
   State<MeshtasticDebugSheet> createState() => _MeshtasticDebugSheetState();
@@ -15,6 +18,10 @@ class MeshtasticDebugSheet extends StatefulWidget {
 class _MeshtasticDebugSheetState extends State<MeshtasticDebugSheet> {
   final TextEditingController _bodyController = TextEditingController(
     text: 'offbeat meshtastic debug probe',
+  );
+  final TextEditingController _groupIdController = TextEditingController();
+  final TextEditingController _groupTextController = TextEditingController(
+    text: 'mesh hello',
   );
 
   bool _busy = false;
@@ -26,6 +33,8 @@ class _MeshtasticDebugSheetState extends State<MeshtasticDebugSheet> {
   @override
   void dispose() {
     _bodyController.dispose();
+    _groupIdController.dispose();
+    _groupTextController.dispose();
     super.dispose();
   }
 
@@ -71,6 +80,54 @@ class _MeshtasticDebugSheetState extends State<MeshtasticDebugSheet> {
     }
   }
 
+  Future<void> _sendGroupChat() async {
+    final selected = _selected;
+    final node = widget.node;
+    final groupId = _groupIdController.text.trim();
+    if (selected == null || node == null || groupId.isEmpty) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+      _report = null;
+    });
+    try {
+      final report = await node.meshtasticSendGroupChat(
+        deviceId: selected.deviceId,
+        groupId: groupId,
+        text: _groupTextController.text,
+      );
+      setState(() => _report = report);
+    } catch (error) {
+      setState(() => _error = error.toString());
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _listenApplyGroupChats() async {
+    final selected = _selected;
+    final node = widget.node;
+    final festivalId = widget.festivalId;
+    if (selected == null || node == null || festivalId == null) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+      _report = null;
+    });
+    try {
+      final report = await node.meshtasticListenApplyGroupChats(
+        deviceId: selected.deviceId,
+        festivalId: festivalId,
+        listenMs: 30000,
+      );
+      setState(() => _report = report);
+    } catch (error) {
+      setState(() => _error = error.toString());
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return DraggableScrollableSheet(
@@ -84,9 +141,7 @@ class _MeshtasticDebugSheetState extends State<MeshtasticDebugSheet> {
         child: ListView(
           controller: scrollController,
           children: [
-            Center(
-              child: Container(width: 32, height: 3, color: colorFg4),
-            ),
+            Center(child: Container(width: 32, height: 3, color: colorFg4)),
             const SizedBox(height: 20),
             const Text(
               'MESHTASTIC TEST RIG',
@@ -159,6 +214,80 @@ class _MeshtasticDebugSheetState extends State<MeshtasticDebugSheet> {
                   ),
                 ],
               ),
+              if (widget.node != null) ...[
+                const SizedBox(height: 24),
+                const _SectionLabel('DOMAIN E2E: GROUP CHAT'),
+                const SizedBox(height: 8),
+                const Text(
+                  'Use the group ID from Social. Receiver must be inside the same festival so it can match the hidden group topic tag.',
+                  style: TextStyle(
+                    fontFamily: 'JetBrainsMono',
+                    fontSize: 9,
+                    color: colorFg4,
+                    height: 1.4,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                DottedBorder(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: TextField(
+                      controller: _groupIdController,
+                      style: const TextStyle(
+                        fontFamily: 'JetBrainsMono',
+                        fontSize: 11,
+                        color: colorFg,
+                      ),
+                      decoration: const InputDecoration(
+                        border: InputBorder.none,
+                        hintText: 'group id',
+                        hintStyle: TextStyle(color: colorFg4),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                DottedBorder(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: TextField(
+                      controller: _groupTextController,
+                      maxLength: 96,
+                      style: const TextStyle(
+                        fontFamily: 'JetBrainsMono',
+                        fontSize: 11,
+                        color: colorFg,
+                      ),
+                      decoration: const InputDecoration(
+                        border: InputBorder.none,
+                        counterStyle: TextStyle(color: colorFg4),
+                        hintText: 'message',
+                        hintStyle: TextStyle(color: colorFg4),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _ActionButton(
+                        label: 'LISTEN + APPLY',
+                        onTap: _busy || widget.festivalId == null
+                            ? null
+                            : _listenApplyGroupChats,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: _ActionButton(
+                        label: 'SEND GROUP CHAT',
+                        onTap: _busy ? null : _sendGroupChat,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ],
             if (_error != null) ...[
               const SizedBox(height: 20),
@@ -189,7 +318,9 @@ class _MeshtasticDebugSheetState extends State<MeshtasticDebugSheet> {
               child: Row(
                 children: [
                   Icon(
-                    selected ? Icons.radio_button_checked : Icons.radio_button_off,
+                    selected
+                        ? Icons.radio_button_checked
+                        : Icons.radio_button_off,
                     color: selected ? colorAccent : colorFg4,
                     size: 16,
                   ),
@@ -242,6 +373,7 @@ class _ReportView extends StatelessWidget {
       'sent_fragments=${report.sentFragments}',
       'raw_from_radio=${report.rawFromRadioCount}',
       'private_app=${report.privateAppCount}',
+      'applied_group_chats=${report.appliedGroupChats}',
       'decoded_frames=${report.receivedFrames.length}',
     ];
     return Column(
@@ -256,7 +388,8 @@ class _ReportView extends StatelessWidget {
             title: 'DECODED FRAMES',
             lines: report.receivedFrames
                 .map(
-                  (frame) => '${frame.kind} ${frame.messageIdHex}: ${frame.bodyText ?? frame.bodyHex}',
+                  (frame) =>
+                      '${frame.kind} ${frame.messageIdHex}: ${frame.bodyText ?? frame.bodyHex}',
                 )
                 .toList(),
             color: colorAccent,
@@ -308,7 +441,11 @@ class _LogBlock extends StatelessWidget {
   final List<String> lines;
   final Color color;
 
-  const _LogBlock({required this.title, required this.lines, required this.color});
+  const _LogBlock({
+    required this.title,
+    required this.lines,
+    required this.color,
+  });
 
   @override
   Widget build(BuildContext context) {

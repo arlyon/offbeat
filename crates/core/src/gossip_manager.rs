@@ -22,6 +22,8 @@ use crate::types::{ChatMessage, SignedUpdate};
 pub enum GossipMessage {
     FestivalUpdate {
         doc_id: String,
+        kind: i32,
+        authority_seq: u64,
         signed_update: SignedUpdate,
     },
     GroupUpdate {
@@ -85,9 +87,17 @@ pub fn dispatch_message(
     match msg {
         GossipMessage::FestivalUpdate {
             doc_id,
+            kind,
+            authority_seq,
             signed_update,
         } => {
-            doc_manager.apply_signed_update(&doc_id, &signed_update, festival_public_key)?;
+            doc_manager.apply_signed_festival_update(
+                &doc_id,
+                kind,
+                authority_seq,
+                &signed_update,
+                festival_public_key,
+            )?;
         }
 
         GossipMessage::GroupUpdate {
@@ -133,7 +143,9 @@ pub fn dispatch_message(
         // SyncRequest is handled at a higher level (requires sending a response).
         // If it somehow ends up here, log a warning and skip.
         GossipMessage::SyncRequest { doc_id, .. } => {
-            tracing::warn!("dispatch_message: unhandled sync_request for doc {doc_id}; handle at gossip layer");
+            tracing::warn!(
+                "dispatch_message: unhandled sync_request for doc {doc_id}; handle at gossip layer"
+            );
         }
     }
 
@@ -346,6 +358,8 @@ pub async fn decode_envelope_to_message(
                 .ok_or_else(|| anyhow::anyhow!("festival_update missing signed_update"))?;
             Ok(Some(GossipMessage::FestivalUpdate {
                 doc_id: fu.doc_id.clone(),
+                kind: fu.kind,
+                authority_seq: fu.authority_seq,
                 signed_update: SignedUpdate {
                     update: signed.update.clone(),
                     author: signed.author.clone(),
@@ -354,18 +368,16 @@ pub async fn decode_envelope_to_message(
             }))
         }
 
-        Payload::Chat(chat) => {
-            Ok(Some(GossipMessage::Chat(chat.clone().into())))
-        }
+        Payload::Chat(chat) => Ok(Some(GossipMessage::Chat(chat.clone().into()))),
 
         Payload::GroupUpdate(gu) => {
             let db_clone = Arc::clone(db);
             let key_id = gu.group_key_id.clone();
-            let group_key = tokio::task::spawn_blocking(move || {
-                db_clone.load_group_key(&key_id)
-            })
-            .await??
-            .ok_or_else(|| anyhow::anyhow!("group_update: unknown group key {}", gu.group_key_id))?;
+            let group_key = tokio::task::spawn_blocking(move || db_clone.load_group_key(&key_id))
+                .await??
+                .ok_or_else(|| {
+                    anyhow::anyhow!("group_update: unknown group key {}", gu.group_key_id)
+                })?;
 
             Ok(Some(GossipMessage::GroupUpdate {
                 doc_id: gu.doc_id.clone(),
@@ -377,11 +389,11 @@ pub async fn decode_envelope_to_message(
         Payload::EncryptedChat(ec) => {
             let db_clone = Arc::clone(db);
             let key_id = ec.group_key_id.clone();
-            let group_key = tokio::task::spawn_blocking(move || {
-                db_clone.load_group_key(&key_id)
-            })
-            .await??
-            .ok_or_else(|| anyhow::anyhow!("encrypted_chat: unknown group key {}", ec.group_key_id))?;
+            let group_key = tokio::task::spawn_blocking(move || db_clone.load_group_key(&key_id))
+                .await??
+                .ok_or_else(|| {
+                    anyhow::anyhow!("encrypted_chat: unknown group key {}", ec.group_key_id)
+                })?;
 
             Ok(Some(GossipMessage::EncryptedChat {
                 group_key,
@@ -397,11 +409,11 @@ pub async fn decode_envelope_to_message(
         Payload::SyncResponse(sr) => {
             let db_clone = Arc::clone(db);
             let key_id = sr.group_key_id.clone();
-            let group_key = tokio::task::spawn_blocking(move || {
-                db_clone.load_group_key(&key_id)
-            })
-            .await??
-            .ok_or_else(|| anyhow::anyhow!("sync_response: unknown group key {}", sr.group_key_id))?;
+            let group_key = tokio::task::spawn_blocking(move || db_clone.load_group_key(&key_id))
+                .await??
+                .ok_or_else(|| {
+                    anyhow::anyhow!("sync_response: unknown group key {}", sr.group_key_id)
+                })?;
 
             Ok(Some(GossipMessage::SyncResponse {
                 doc_id: sr.doc_id.clone(),
@@ -413,11 +425,11 @@ pub async fn decode_envelope_to_message(
         Payload::SyncUpdate(su) => {
             let db_clone = Arc::clone(db);
             let key_id = su.group_key_id.clone();
-            let group_key = tokio::task::spawn_blocking(move || {
-                db_clone.load_group_key(&key_id)
-            })
-            .await??
-            .ok_or_else(|| anyhow::anyhow!("sync_update: unknown group key {}", su.group_key_id))?;
+            let group_key = tokio::task::spawn_blocking(move || db_clone.load_group_key(&key_id))
+                .await??
+                .ok_or_else(|| {
+                    anyhow::anyhow!("sync_update: unknown group key {}", su.group_key_id)
+                })?;
 
             Ok(Some(GossipMessage::SyncUpdate {
                 doc_id: su.doc_id.clone(),
@@ -491,7 +503,8 @@ mod tests {
             .transact()
             .encode_state_as_update_v1(&StateVector::default());
 
-        let sig = signing::sign(&signing_key, &update_bytes);
+        let sig =
+            signing::sign_festival_update(&signing_key, "fest-doc", 2, 1, &update_bytes).unwrap();
         let signed = SignedUpdate {
             update: update_bytes,
             author: "organiser".to_string(),
@@ -503,6 +516,8 @@ mod tests {
             &db_arc,
             GossipMessage::FestivalUpdate {
                 doc_id: "fest-doc".to_string(),
+                kind: 2,
+                authority_seq: 1,
                 signed_update: signed,
             },
             &public_key,
@@ -584,12 +599,16 @@ mod tests {
         };
         let bytes = encode_gossip_message(&GossipMessage::FestivalUpdate {
             doc_id: "doc-1".to_string(),
+            kind: 1,
+            authority_seq: 7,
             signed_update: signed.clone(),
         });
         let envelope = proto::decode_envelope(&bytes).unwrap();
         match &envelope.payload {
             Some(proto::gossip_envelope::Payload::FestivalUpdate(fu)) => {
                 assert_eq!(fu.doc_id, "doc-1");
+                assert_eq!(fu.kind, 1);
+                assert_eq!(fu.authority_seq, 7);
                 let su = fu.signed_update.as_ref().unwrap();
                 assert_eq!(su.author, signed.author);
                 assert_eq!(su.update, signed.update);

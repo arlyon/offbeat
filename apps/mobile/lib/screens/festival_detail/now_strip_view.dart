@@ -68,9 +68,8 @@ class _NowStripViewState extends State<NowStripView> {
     final liveStage = live != null ? stageById[live.stage] : null;
 
     // Next 4 hours of sets
-    final upcoming =
-        sets.where((s) => s.t > nowT && s.t < nowT + 240).toList()
-          ..sort((a, b) => a.t.compareTo(b.t));
+    final upcoming = sets.where((s) => s.t > nowT && s.t < nowT + 240).toList()
+      ..sort((a, b) => a.t.compareTo(b.t));
 
     // Next starred set
     final nextStarred = sets.where((s) => s.starred && s.t > nowT).toList()

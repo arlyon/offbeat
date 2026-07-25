@@ -19,8 +19,7 @@ mod init_android {
 
     /// Keep the global ref alive for the process lifetime.
     /// Stores the raw jobject returned by NewGlobalRef.
-    static GLOBAL_CTX: AtomicPtr<jni::sys::_jobject> =
-        AtomicPtr::new(std::ptr::null_mut());
+    static GLOBAL_CTX: AtomicPtr<jni::sys::_jobject> = AtomicPtr::new(std::ptr::null_mut());
 
     fn logcat(msg: &str) {
         use std::ffi::CString;

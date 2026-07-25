@@ -37,11 +37,31 @@ function getMainDO(env: Env["Bindings"]) {
 	return env.MAIN_DO.get(id);
 }
 
-function forwardToMainDO(env: Env["Bindings"], path: string, request: Request): Promise<Response> {
+function requireUrl(value: string): URL {
+	try {
+		return new URL(value);
+	} catch (error) {
+		throw new Error(`Invalid URL: ${value}`, { cause: error });
+	}
+}
+
+async function forwardToMainDO(
+	env: Env["Bindings"],
+	path: string,
+	request: Request,
+): Promise<Response> {
 	const stub = getMainDO(env);
-	const url = new URL(request.url);
+	const url = requireUrl(request.url);
 	url.pathname = path;
-	return stub.fetch(new Request(url.toString(), request));
+	const body =
+		request.method === "GET" || request.method === "HEAD" ? undefined : await request.arrayBuffer();
+	return stub.fetch(
+		new Request(url.toString(), {
+			method: request.method,
+			headers: request.headers,
+			body,
+		}),
+	);
 }
 
 // GET /festivals
@@ -137,7 +157,7 @@ app.get("/festivals/:id/public-key", (c) => {
 	const id = c.req.param("id");
 	const doId = c.env.FESTIVAL_DO.idFromName(id);
 	const stub = c.env.FESTIVAL_DO.get(doId);
-	const url = new URL(c.req.url);
+	const url = requireUrl(c.req.url);
 	url.pathname = "/public-key";
 	return stub.fetch(new Request(url.toString(), { method: "GET" }));
 });
@@ -147,7 +167,7 @@ app.put("/festivals/:id/config", async (c) => {
 	const id = c.req.param("id");
 	const doId = c.env.FESTIVAL_DO.idFromName(id);
 	const stub = c.env.FESTIVAL_DO.get(doId);
-	const url = new URL(c.req.url);
+	const url = requireUrl(c.req.url);
 	url.pathname = "/config";
 	return stub.fetch(
 		new Request(url.toString(), {
@@ -163,7 +183,7 @@ app.get("/festivals/:id/config", (c) => {
 	const id = c.req.param("id");
 	const doId = c.env.FESTIVAL_DO.idFromName(id);
 	const stub = c.env.FESTIVAL_DO.get(doId);
-	const url = new URL(c.req.url);
+	const url = requireUrl(c.req.url);
 	url.pathname = "/config";
 	return stub.fetch(new Request(url.toString(), { method: "GET" }));
 });
@@ -205,7 +225,7 @@ app.put("/festivals/:id/admins", async (c) => {
 	const id = c.req.param("id");
 	const doId = c.env.FESTIVAL_DO.idFromName(id);
 	const stub = c.env.FESTIVAL_DO.get(doId);
-	const url = new URL(c.req.url);
+	const url = requireUrl(c.req.url);
 	url.pathname = "/admins";
 	return stub.fetch(
 		new Request(url.toString(), {
@@ -224,7 +244,7 @@ app.post("/festivals/:id/signing-key", async (c) => {
 	const id = c.req.param("id");
 	const doId = c.env.FESTIVAL_DO.idFromName(id);
 	const stub = c.env.FESTIVAL_DO.get(doId);
-	const url = new URL(c.req.url);
+	const url = requireUrl(c.req.url);
 	url.pathname = "/signing-key";
 	return stub.fetch(
 		new Request(url.toString(), {
@@ -244,7 +264,7 @@ app.delete("/festivals/:id/reset", async (c) => {
 
 	const doId = c.env.FESTIVAL_DO.idFromName(id);
 	const stub = c.env.FESTIVAL_DO.get(doId);
-	const url = new URL(c.req.url);
+	const url = requireUrl(c.req.url);
 	url.pathname = "/reset";
 	return stub.fetch(new Request(url.toString(), { method: "DELETE" }));
 });
@@ -258,7 +278,7 @@ app.post("/festivals/:id/checkin", async (c) => {
 
 	const doId = c.env.FESTIVAL_DO.idFromName(id);
 	const stub = c.env.FESTIVAL_DO.get(doId);
-	const url = new URL(c.req.url);
+	const url = requireUrl(c.req.url);
 	url.pathname = "/checkin";
 	return stub.fetch(
 		new Request(url.toString(), {
@@ -282,7 +302,7 @@ app.post("/festivals/:id/sign-update", async (c) => {
 	const id = c.req.param("id");
 	const doId = c.env.FESTIVAL_DO.idFromName(id);
 	const stub = c.env.FESTIVAL_DO.get(doId);
-	const url = new URL(c.req.url);
+	const url = requireUrl(c.req.url);
 	url.pathname = "/sign-update";
 	return stub.fetch(
 		new Request(url.toString(), {
@@ -300,7 +320,7 @@ async function ensureFestivalConfig(env: Env["Bindings"], festivalId: string) {
 	const stub = env.FESTIVAL_DO.get(doId);
 
 	// Check if already configured
-	const configUrl = new URL("http://internal/config");
+	const configUrl = requireUrl("http://internal/config");
 	const existing = await stub.fetch(new Request(configUrl.toString(), { method: "GET" }));
 	const config = (await existing.json()) as { opensAt: string | null; closesAt: string | null };
 	if (config.opensAt && config.closesAt) {
@@ -311,7 +331,7 @@ async function ensureFestivalConfig(env: Env["Bindings"], festivalId: string) {
 
 	// Fetch festival metadata from MainDO
 	const mainStub = getMainDO(env);
-	const festUrl = new URL(`http://internal/festivals/${festivalId}`);
+	const festUrl = requireUrl(`http://internal/festivals/${festivalId}`);
 	const festResp = await mainStub.fetch(new Request(festUrl.toString()));
 	if (!festResp.ok) return;
 
@@ -348,7 +368,7 @@ async function ensureFestivalConfig(env: Env["Bindings"], festivalId: string) {
 	await syncAdminsToFestival(env, festivalId);
 
 	// Seed the Festival DO with the lineup as a genesis Yrs document
-	const lineupUrl = new URL(`http://internal/festivals/${festivalId}/lineup`);
+	const lineupUrl = requireUrl(`http://internal/festivals/${festivalId}/lineup`);
 	const lineupResp = await mainStub.fetch(new Request(lineupUrl.toString()));
 	if (lineupResp.ok) {
 		const lineup = await lineupResp.json();

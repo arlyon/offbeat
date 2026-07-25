@@ -58,9 +58,13 @@ impl GossipEnvelope {
         let payload = match msg {
             GossipMessage::FestivalUpdate {
                 doc_id,
+                kind,
+                authority_seq,
                 signed_update,
             } => Payload::FestivalUpdate(FestivalUpdate {
                 doc_id: doc_id.clone(),
+                kind: *kind,
+                authority_seq: *authority_seq,
                 signed_update: Some(SignedUpdate {
                     update: signed_update.update.clone(),
                     author: signed_update.author.clone(),
@@ -189,6 +193,8 @@ mod tests {
     fn test_gossip_envelope_festival_update_roundtrip() {
         let msg = GossipMessage::FestivalUpdate {
             doc_id: "festival/test/state".to_string(),
+            kind: 2,
+            authority_seq: 4,
             signed_update: types::SignedUpdate {
                 update: b"yrs-update".to_vec(),
                 author: "organiser".to_string(),

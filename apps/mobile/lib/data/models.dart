@@ -102,8 +102,18 @@ class Festival {
 
   static String _formatDateRange(DateTime start, DateTime end) {
     const months = [
-      'JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
-      'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC',
+      'JAN',
+      'FEB',
+      'MAR',
+      'APR',
+      'MAY',
+      'JUN',
+      'JUL',
+      'AUG',
+      'SEP',
+      'OCT',
+      'NOV',
+      'DEC',
     ];
     if (start.month == end.month) {
       return '${start.day}–${end.day} ${months[start.month - 1]} ${start.year}';

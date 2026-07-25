@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import '../../src/rust/api.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/dotted_border.dart';
 import 'meshtastic_debug_sheet.dart';
@@ -19,6 +20,8 @@ class YouScreen extends StatelessWidget {
   final ValueChanged<String> onDisplayNameChanged;
   final VoidCallback? onRequestAdmin;
   final VoidCallback? onLogout;
+  final AppNode? node;
+  final String? currentFestivalId;
 
   const YouScreen({
     super.key,
@@ -33,6 +36,8 @@ class YouScreen extends StatelessWidget {
     required this.onDisplayNameChanged,
     this.onRequestAdmin,
     this.onLogout,
+    this.node,
+    this.currentFestivalId,
   });
 
   @override
@@ -40,155 +45,62 @@ class YouScreen extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 24),
       child: ListView(
-              children: [
-                const SizedBox(height: 32),
-                // Identity header
-                Center(
-                  child: Container(
-                    width: 48,
-                    height: 48,
-                    decoration: BoxDecoration(
-                      border: Border.all(color: colorAccent, width: 1.5),
-                    ),
-                    child: const Center(
-                      child: Icon(
-                        Icons.fingerprint,
-                        color: colorAccent,
-                        size: 28,
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Center(
-                  child: Text(
-                    displayName?.toUpperCase() ?? 'ANONYMOUS',
-                    style: const TextStyle(
-                      fontFamily: 'JetBrainsMono',
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 0.1 * 13,
-                      color: colorFg,
-                      height: 1,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 32),
-                // Info rows
-                GestureDetector(
-                  onTap: () => _showIdDialog(context),
-                  child: _InfoRow(label: 'USER ID', value: userId),
-                ),
-                const SizedBox(height: 12),
-                _InfoRow(
-                  label: 'PUBLIC KEY',
-                  value: '${publicKeyHex.substring(0, 16)}...',
-                ),
-                const SizedBox(height: 12),
-                _InfoRow(
-                  label: 'AUTH STATUS',
-                  value: _authStatusText(),
-                  valueColor: _authStatusColor(),
-                ),
-                const SizedBox(height: 32),
-                // Display name editor
-                DottedBorder(
-                  child: Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'DISPLAY NAME',
-                          style: TextStyle(
-                            fontFamily: 'JetBrainsMono',
-                            fontSize: 9,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 0.08 * 9,
-                            color: colorFg3,
-                            height: 1,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        _DisplayNameField(
-                          initial: displayName ?? '',
-                          onChanged: onDisplayNameChanged,
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 32),
-                // Admin section
-                if (isAdmin) ...[
-                  _InfoRow(
-                    label: 'ROLE',
-                    value: 'ADMIN',
-                    valueColor: colorAccent,
-                  ),
-                ] else if (adminRequestStatus == 'pending') ...[
-                  DottedBorder(
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 10,
-                      ),
-                      child: Row(
-                        children: [
-                          const Icon(
-                            Icons.hourglass_top,
-                            color: colorWarn,
-                            size: 14,
-                          ),
-                          const SizedBox(width: 8),
-                          const Expanded(
-                            child: Text(
-                              'ADMIN REQUEST PENDING',
-                              style: TextStyle(
-                                fontFamily: 'JetBrainsMono',
-                                fontSize: 9,
-                                fontWeight: FontWeight.w700,
-                                letterSpacing: 0.08 * 9,
-                                color: colorWarn,
-                                height: 1,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ] else if (onRequestAdmin != null) ...[
-                  SizedBox(
-                    width: double.infinity,
-                    height: 44,
-                    child: DottedBorder(
-                      child: Material(
-                        color: colorSurface2,
-                        child: InkWell(
-                          onTap: onRequestAdmin,
-                          child: const Center(
-                            child: Text(
-                              'REQUEST ADMIN ACCESS',
-                              style: TextStyle(
-                                fontFamily: 'JetBrainsMono',
-                                fontSize: 9,
-                                fontWeight: FontWeight.w700,
-                                letterSpacing: 0.08 * 9,
-                                color: colorFg2,
-                                height: 1,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-                if (adminKeys.isNotEmpty) ...[
-                  const SizedBox(height: 32),
+        children: [
+          const SizedBox(height: 32),
+          // Identity header
+          Center(
+            child: Container(
+              width: 48,
+              height: 48,
+              decoration: BoxDecoration(
+                border: Border.all(color: colorAccent, width: 1.5),
+              ),
+              child: const Center(
+                child: Icon(Icons.fingerprint, color: colorAccent, size: 28),
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Center(
+            child: Text(
+              displayName?.toUpperCase() ?? 'ANONYMOUS',
+              style: const TextStyle(
+                fontFamily: 'JetBrainsMono',
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.1 * 13,
+                color: colorFg,
+                height: 1,
+              ),
+            ),
+          ),
+          const SizedBox(height: 32),
+          // Info rows
+          GestureDetector(
+            onTap: () => _showIdDialog(context),
+            child: _InfoRow(label: 'USER ID', value: userId),
+          ),
+          const SizedBox(height: 12),
+          _InfoRow(
+            label: 'PUBLIC KEY',
+            value: '${publicKeyHex.substring(0, 16)}...',
+          ),
+          const SizedBox(height: 12),
+          _InfoRow(
+            label: 'AUTH STATUS',
+            value: _authStatusText(),
+            valueColor: _authStatusColor(),
+          ),
+          const SizedBox(height: 32),
+          // Display name editor
+          DottedBorder(
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
                   const Text(
-                    'ADMINS',
+                    'DISPLAY NAME',
                     style: TextStyle(
                       fontFamily: 'JetBrainsMono',
                       fontSize: 9,
@@ -199,119 +111,192 @@ class YouScreen extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 8),
-                  ...adminKeys.map(
-                    (key) => Padding(
-                      padding: const EdgeInsets.only(bottom: 6),
-                      child: Row(
-                        children: [
-                          Icon(
-                            key == publicKeyHex
-                                ? Icons.person
-                                : Icons.person_outline,
-                            color:
-                                key == publicKeyHex ? colorAccent : colorFg4,
-                            size: 14,
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              '${key.substring(0, 16)}...',
-                              style: TextStyle(
-                                fontFamily: 'JetBrainsMono',
-                                fontSize: 9,
-                                color: key == publicKeyHex
-                                    ? colorFg
-                                    : colorFg3,
-                                height: 1.3,
-                              ),
-                            ),
-                          ),
-                          if (key == publicKeyHex)
-                            const Text(
-                              'YOU',
-                              style: TextStyle(
-                                fontFamily: 'JetBrainsMono',
-                                fontSize: 8,
-                                fontWeight: FontWeight.w700,
-                                letterSpacing: 0.1 * 8,
-                                color: colorAccent,
-                                height: 1,
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
+                  _DisplayNameField(
+                    initial: displayName ?? '',
+                    onChanged: onDisplayNameChanged,
                   ),
                 ],
-                const SizedBox(height: 32),
-                SizedBox(
-                  width: double.infinity,
-                  height: 44,
-                  child: DottedBorder(
-                    color: colorAccent,
-                    child: Material(
-                      color: colorSurface2,
-                      child: InkWell(
-                        onTap: () => _showMeshtasticDebug(context),
-                        child: const Center(
-                          child: Text(
-                            'MESHTASTIC TEST RIG',
-                            style: TextStyle(
-                              fontFamily: 'JetBrainsMono',
-                              fontSize: 9,
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: 0.08 * 9,
-                              color: colorFg,
-                              height: 1,
-                            ),
-                          ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 32),
+          // Admin section
+          if (isAdmin) ...[
+            _InfoRow(label: 'ROLE', value: 'ADMIN', valueColor: colorAccent),
+          ] else if (adminRequestStatus == 'pending') ...[
+            DottedBorder(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.hourglass_top, color: colorWarn, size: 14),
+                    const SizedBox(width: 8),
+                    const Expanded(
+                      child: Text(
+                        'ADMIN REQUEST PENDING',
+                        style: TextStyle(
+                          fontFamily: 'JetBrainsMono',
+                          fontSize: 9,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.08 * 9,
+                          color: colorWarn,
+                          height: 1,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ] else if (onRequestAdmin != null) ...[
+            SizedBox(
+              width: double.infinity,
+              height: 44,
+              child: DottedBorder(
+                child: Material(
+                  color: colorSurface2,
+                  child: InkWell(
+                    onTap: onRequestAdmin,
+                    child: const Center(
+                      child: Text(
+                        'REQUEST ADMIN ACCESS',
+                        style: TextStyle(
+                          fontFamily: 'JetBrainsMono',
+                          fontSize: 9,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.08 * 9,
+                          color: colorFg2,
+                          height: 1,
                         ),
                       ),
                     ),
                   ),
                 ),
-                // Logout button
-                if (onLogout != null) ...[
-                  const SizedBox(height: 48),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 44,
-                    child: DottedBorder(
-                      color: colorErr,
-                      child: Material(
-                        color: Colors.transparent,
-                        child: InkWell(
-                          onTap: onLogout,
-                          child: const Center(
-                            child: Text(
-                              'LOG OUT',
-                              style: TextStyle(
-                                fontFamily: 'JetBrainsMono',
-                                fontSize: 9,
-                                fontWeight: FontWeight.w700,
-                                letterSpacing: 0.08 * 9,
-                                color: colorErr,
-                                height: 1,
-                              ),
-                            ),
-                          ),
+              ),
+            ),
+          ],
+          if (adminKeys.isNotEmpty) ...[
+            const SizedBox(height: 32),
+            const Text(
+              'ADMINS',
+              style: TextStyle(
+                fontFamily: 'JetBrainsMono',
+                fontSize: 9,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.08 * 9,
+                color: colorFg3,
+                height: 1,
+              ),
+            ),
+            const SizedBox(height: 8),
+            ...adminKeys.map(
+              (key) => Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Row(
+                  children: [
+                    Icon(
+                      key == publicKeyHex ? Icons.person : Icons.person_outline,
+                      color: key == publicKeyHex ? colorAccent : colorFg4,
+                      size: 14,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '${key.substring(0, 16)}...',
+                        style: TextStyle(
+                          fontFamily: 'JetBrainsMono',
+                          fontSize: 9,
+                          color: key == publicKeyHex ? colorFg : colorFg3,
+                          height: 1.3,
+                        ),
+                      ),
+                    ),
+                    if (key == publicKeyHex)
+                      const Text(
+                        'YOU',
+                        style: TextStyle(
+                          fontFamily: 'JetBrainsMono',
+                          fontSize: 8,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.1 * 8,
+                          color: colorAccent,
+                          height: 1,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+          const SizedBox(height: 32),
+          SizedBox(
+            width: double.infinity,
+            height: 44,
+            child: DottedBorder(
+              color: colorAccent,
+              child: Material(
+                color: colorSurface2,
+                child: InkWell(
+                  onTap: () => _showMeshtasticDebug(context),
+                  child: const Center(
+                    child: Text(
+                      'MESHTASTIC TEST RIG',
+                      style: TextStyle(
+                        fontFamily: 'JetBrainsMono',
+                        fontSize: 9,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.08 * 9,
+                        color: colorFg,
+                        height: 1,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          // Logout button
+          if (onLogout != null) ...[
+            const SizedBox(height: 48),
+            SizedBox(
+              width: double.infinity,
+              height: 44,
+              child: DottedBorder(
+                color: colorErr,
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: onLogout,
+                    child: const Center(
+                      child: Text(
+                        'LOG OUT',
+                        style: TextStyle(
+                          fontFamily: 'JetBrainsMono',
+                          fontSize: 9,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.08 * 9,
+                          color: colorErr,
+                          height: 1,
                         ),
                       ),
                     ),
                   ),
-                ],
-              ],
+                ),
+              ),
             ),
+          ],
+        ],
+      ),
     );
   }
 
   void _showIdDialog(BuildContext context) {
     showDialog(
       context: context,
-      builder: (_) => _IdQrDialog(
-        userId: userId,
-        publicKeyHex: publicKeyHex,
-      ),
+      builder: (_) => _IdQrDialog(userId: userId, publicKeyHex: publicKeyHex),
     );
   }
 
@@ -320,7 +305,8 @@ class YouScreen extends StatelessWidget {
       context: context,
       backgroundColor: colorBg,
       isScrollControlled: true,
-      builder: (_) => const MeshtasticDebugSheet(),
+      builder: (_) =>
+          MeshtasticDebugSheet(node: node, festivalId: currentFestivalId),
     );
   }
 

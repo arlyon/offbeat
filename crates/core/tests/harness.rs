@@ -117,9 +117,7 @@ impl DevServer {
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                     if std::time::Instant::now() > deadline {
                         child.kill().ok();
-                        panic!(
-                            "wrangler dev did not become ready within 30s on port {port}"
-                        );
+                        panic!("wrangler dev did not become ready within 30s on port {port}");
                     }
                 }
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {

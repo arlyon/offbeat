@@ -74,7 +74,7 @@ impl TransportProfile {
         match self {
             Self::Full => 8 * 1024 * 1024,
             Self::LowBandwidth => 1200,
-            Self::Constrained => 200,
+            Self::Constrained => 600,
         }
     }
 
@@ -134,19 +134,19 @@ mod tests {
         let profile = TransportProfile::Constrained;
         assert_eq!(
             profile.decide(SyncPayloadKind::FestivalUpdate).encoding,
-            SyncEncoding::CompactFrame { max_bytes: 200 }
+            SyncEncoding::CompactFrame { max_bytes: 600 }
         );
         assert_eq!(
             profile.decide(SyncPayloadKind::GroupUpdate).encoding,
-            SyncEncoding::CompactFrame { max_bytes: 200 }
+            SyncEncoding::CompactFrame { max_bytes: 600 }
         );
         assert_eq!(
             profile.decide(SyncPayloadKind::GroupChat).encoding,
-            SyncEncoding::CompactFrame { max_bytes: 200 }
+            SyncEncoding::CompactFrame { max_bytes: 600 }
         );
         assert_eq!(
             profile.decide(SyncPayloadKind::FestivalChat).encoding,
-            SyncEncoding::CompactFrame { max_bytes: 200 }
+            SyncEncoding::CompactFrame { max_bytes: 600 }
         );
     }
 

@@ -2,13 +2,14 @@ import { DurableObject } from "cloudflare:workers";
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
 import {
 	ErrorCode,
+	FestivalUpdateKind,
 	GossipEnvelopeSchema,
 	type RelayClientMessage,
 	RelayClientMessageSchema,
 	RelayServerMessageSchema,
 } from "@offbeat/protocol";
 import * as Y from "yjs";
-import { generateKeypair, sign, verify } from "./signing";
+import { generateKeypair, sign, signFestivalUpdate, verify } from "./signing";
 
 interface Session {
 	topics: Set<string>;
@@ -87,6 +88,19 @@ export class FestivalDO extends DurableObject {
 				updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 			);
 
+			CREATE TABLE IF NOT EXISTS festival_signed_updates (
+				doc_id TEXT NOT NULL,
+				authority_seq INTEGER NOT NULL,
+				kind INTEGER NOT NULL,
+				update_data BLOB NOT NULL,
+				signature BLOB NOT NULL,
+				created_at TEXT NOT NULL DEFAULT (datetime('now')),
+				PRIMARY KEY (doc_id, authority_seq, kind)
+			);
+
+			CREATE INDEX IF NOT EXISTS idx_festival_signed_checkpoint
+				ON festival_signed_updates(doc_id, kind, authority_seq DESC);
+
 			DROP TABLE IF EXISTS gossip_log;
 		`);
 	}
@@ -109,7 +123,7 @@ export class FestivalDO extends DurableObject {
 	 * Mutate the in-memory public state doc, sign the delta, persist, and broadcast.
 	 * Shared helper for all festival state mutations (lineup, checkin, weather, prune).
 	 */
-	async #mutatePublicDoc(mutate: (doc: Y.Doc) => void): Promise<void> {
+	async #mutatePublicDoc(mutate: (doc: Y.Doc) => void) {
 		if (!this.#secretKey || !this.#publicKey || !this.#festivalId) {
 			throw new Error("Not configured for public doc mutation");
 		}
@@ -135,38 +149,36 @@ export class FestivalDO extends DurableObject {
 		mutate(doc);
 
 		const update = Y.encodeStateAsUpdate(doc, prevSV);
-		const signature = await sign(this.#secretKey, update);
-
-		const envelope = create(GossipEnvelopeSchema, {
-			payload: {
-				case: "festivalUpdate",
-				value: {
-					docId,
-					signedUpdate: {
-						update,
-						author: "festival-do",
-						signature,
-					},
-				},
-			},
-		});
-
-		// Persist squashed snapshot to yrs_docs (no log table for festival state)
 		const fullState = Y.encodeStateAsUpdate(doc);
+		const authoritySeq = this.#nextAuthoritySeq(docId);
+		const deltaEnvelope = await this.#persistSignedFestivalUpdate(
+			docId,
+			FestivalUpdateKind.DELTA,
+			authoritySeq,
+			update,
+		);
+		await this.#persistSignedFestivalUpdate(
+			docId,
+			FestivalUpdateKind.CHECKPOINT,
+			authoritySeq,
+			fullState,
+		);
+
 		this.sql.exec(
 			"INSERT OR REPLACE INTO yrs_docs (doc_id, data, updated_at) VALUES (?, ?, datetime('now'))",
 			docId,
 			fullState,
 		);
 
-		// Broadcast to subscribed WS clients
+		// Live subscribers receive the small signed delta. Late joiners request
+		// the signed checkpoint through svExchange.
 		const broadcastMsg = create(RelayServerMessageSchema, {
 			msg: {
 				case: "gossip",
 				value: {
 					topic,
 					seq: 0n,
-					message: envelope,
+					message: deltaEnvelope,
 				},
 			},
 		});
@@ -176,6 +188,114 @@ export class FestivalDO extends DurableObject {
 				ws.send(broadcastBytes);
 			}
 		}
+		return deltaEnvelope;
+	}
+
+	#nextAuthoritySeq(docId: string): bigint {
+		const row = this.sql
+			.exec(
+				"SELECT COALESCE(MAX(authority_seq), 0) AS seq FROM festival_signed_updates WHERE doc_id = ?",
+				docId,
+			)
+			.one() as { seq: number };
+		return BigInt(row.seq) + 1n;
+	}
+
+	async #persistSignedFestivalUpdate(
+		docId: string,
+		kind: FestivalUpdateKind,
+		authoritySeq: bigint,
+		update: Uint8Array,
+	) {
+		if (!this.#secretKey) throw new Error("Festival signing key is unavailable");
+		if (authoritySeq > BigInt(Number.MAX_SAFE_INTEGER)) {
+			throw new Error("Festival authority sequence exceeds SQLite integer precision");
+		}
+		const signature = await signFestivalUpdate(this.#secretKey, docId, kind, authoritySeq, update);
+		this.sql.exec(
+			`INSERT OR REPLACE INTO festival_signed_updates
+				(doc_id, authority_seq, kind, update_data, signature)
+			 VALUES (?, ?, ?, ?, ?)`,
+			docId,
+			Number(authoritySeq),
+			kind,
+			update,
+			signature,
+		);
+
+		if (kind === FestivalUpdateKind.CHECKPOINT) {
+			this.sql.exec(
+				"DELETE FROM festival_signed_updates WHERE doc_id = ? AND kind = ? AND authority_seq < ?",
+				docId,
+				FestivalUpdateKind.CHECKPOINT,
+				Number(authoritySeq),
+			);
+		} else {
+			const retainAfter = Math.max(0, Number(authoritySeq) - 256);
+			this.sql.exec(
+				"DELETE FROM festival_signed_updates WHERE doc_id = ? AND kind = ? AND authority_seq < ?",
+				docId,
+				FestivalUpdateKind.DELTA,
+				retainAfter,
+			);
+		}
+
+		return create(GossipEnvelopeSchema, {
+			payload: {
+				case: "festivalUpdate",
+				value: {
+					docId,
+					kind,
+					authoritySeq,
+					signedUpdate: {
+						update,
+						author: "festival-do",
+						signature,
+					},
+				},
+			},
+		});
+	}
+
+	async #ensureSignedCheckpoint(docId: string) {
+		const rows = this.sql
+			.exec(
+				`SELECT authority_seq, update_data, signature
+				 FROM festival_signed_updates
+				 WHERE doc_id = ? AND kind = ?
+				 ORDER BY authority_seq DESC LIMIT 1`,
+				docId,
+				FestivalUpdateKind.CHECKPOINT,
+			)
+			.toArray() as { authority_seq: number; update_data: ArrayBuffer; signature: ArrayBuffer }[];
+		const latest = rows[0];
+		if (latest) {
+			return create(GossipEnvelopeSchema, {
+				payload: {
+					case: "festivalUpdate",
+					value: {
+						docId,
+						kind: FestivalUpdateKind.CHECKPOINT,
+						authoritySeq: BigInt(latest.authority_seq),
+						signedUpdate: {
+							update: new Uint8Array(latest.update_data),
+							author: "festival-do",
+							signature: new Uint8Array(latest.signature),
+						},
+					},
+				},
+			});
+		}
+
+		if (!this.#publicStateDoc) this.#loadPublicStateDoc();
+		const doc = this.#publicStateDoc ?? new Y.Doc();
+		const fullState = Y.encodeStateAsUpdate(doc);
+		return this.#persistSignedFestivalUpdate(
+			docId,
+			FestivalUpdateKind.CHECKPOINT,
+			this.#nextAuthoritySeq(docId),
+			fullState,
+		);
 	}
 
 	async #initKeypair() {
@@ -209,6 +329,74 @@ export class FestivalDO extends DurableObject {
 		if (!this.#opensAt || !this.#closesAt) return true;
 		const now = new Date().toISOString();
 		return now >= this.#opensAt && now <= this.#closesAt;
+	}
+
+	#sendCatchup(ws: WebSocket, topic: string, sinceSeq: bigint) {
+		const rows = (
+			topic.startsWith("festival/")
+				? this.sql.exec(
+						"SELECT seq, message, timestamp FROM public_gossip_log WHERE topic = ? AND seq > ? ORDER BY seq",
+						topic,
+						Number(sinceSeq),
+					)
+				: this.sql.exec(
+						"SELECT seq, message, timestamp FROM group_gossip_log WHERE group_id = ? AND seq > ? ORDER BY seq",
+						topic,
+						Number(sinceSeq),
+					)
+		).toArray() as { seq: number; message: ArrayBuffer; timestamp: string }[];
+		const messages = rows.map((row) => ({
+			seq: BigInt(row.seq),
+			message: fromBinary(GossipEnvelopeSchema, new Uint8Array(row.message)),
+			timestamp: row.timestamp,
+		}));
+
+		console.log(
+			`[ws] catchup: topic=${topic} sinceSeq=${sinceSeq} sending ${messages.length} messages`,
+		);
+		this.#sendServerMsg(ws, {
+			msg: { case: "catchup", value: { topic, messages } },
+		});
+	}
+
+	#sendChatCatchup(ws: WebSocket, topic: string, chatSv: Record<string, bigint>, limit: number) {
+		if (!topic.startsWith("festival/")) {
+			const rows = this.sql
+				.exec(
+					"SELECT message FROM group_gossip_log WHERE group_id = ? ORDER BY seq DESC LIMIT ?",
+					topic,
+					limit,
+				)
+				.toArray() as { message: ArrayBuffer }[];
+			const messages = rows.map((row) =>
+				fromBinary(GossipEnvelopeSchema, new Uint8Array(row.message)),
+			);
+			this.#sendServerMsg(ws, {
+				msg: { case: "chatDiff", value: { topic, messages } },
+			});
+			return;
+		}
+
+		const rows = this.sql
+			.exec(
+				"SELECT message FROM public_gossip_log WHERE topic = ? ORDER BY seq DESC LIMIT ?",
+				topic,
+				limit * 10,
+			)
+			.toArray() as { message: ArrayBuffer }[];
+		const messages = [];
+		for (const row of rows) {
+			const envelope = fromBinary(GossipEnvelopeSchema, new Uint8Array(row.message));
+			if (envelope.payload.case === "chat") {
+				const chat = envelope.payload.value;
+				const knownSeq = chatSv[chat.userId];
+				if (knownSeq === undefined || chat.writerSeq > knownSeq) messages.push(envelope);
+			}
+			if (messages.length >= limit) break;
+		}
+		this.#sendServerMsg(ws, {
+			msg: { case: "chatDiff", value: { topic, messages } },
+		});
 	}
 
 	/** Send a binary RelayServerMessage to a WebSocket. */
@@ -295,7 +483,12 @@ export class FestivalDO extends DurableObject {
 	}
 
 	async fetch(request: Request): Promise<Response> {
-		const url = new URL(request.url);
+		let url: URL;
+		try {
+			url = new URL(request.url);
+		} catch {
+			return new Response("Invalid request URL", { status: 400 });
+		}
 
 		// Non-WS HTTP path: GET /public-key
 		if (request.method === "GET" && url.pathname === "/public-key") {
@@ -499,21 +692,34 @@ export class FestivalDO extends DurableObject {
 				return new Response("Keypair not initialized", { status: 500 });
 			}
 
-			// Apply the update to the in-memory public state doc via mutatePublicDoc
+			const expectedDocId = `festival/${this.#festivalId}/state`;
+			if (body.docId !== expectedDocId || body.topic !== expectedDocId) {
+				return new Response("docId/topic must match the configured festival state", {
+					status: 400,
+				});
+			}
+
 			const updateBytes = base64ToBytes(body.update);
-			await this.#mutatePublicDoc((doc) => {
+			const envelope = await this.#mutatePublicDoc((doc) => {
 				Y.applyUpdate(doc, updateBytes);
 			});
-
-			// Compute the DO's signature over the raw update for the response
-			const doSignature = await sign(this.#secretKey, updateBytes);
+			if (envelope.payload.case !== "festivalUpdate") {
+				return new Response("Failed to create signed festival update", { status: 500 });
+			}
+			const festival = envelope.payload.value;
+			const signedUpdate = festival.signedUpdate;
+			if (!signedUpdate) {
+				return new Response("Signed festival update is missing", { status: 500 });
+			}
 
 			return Response.json({
 				signedUpdate: {
-					update: body.update,
-					author: "festival-do",
-					signature: bytesToBase64(doSignature),
+					update: bytesToBase64(signedUpdate.update),
+					author: signedUpdate.author,
+					signature: bytesToBase64(signedUpdate.signature),
 				},
+				kind: festival.kind,
+				authoritySeq: festival.authoritySeq.toString(),
 				publicKey: bytesToHex(this.#publicKey),
 			});
 		}
@@ -592,15 +798,21 @@ export class FestivalDO extends DurableObject {
 
 		let sess = this.#sessions.get(ws);
 		if (!sess) {
-			// Session not in memory — happens after hibernation, restore from attachment
+			// Session not in memory — happens after hibernation, restore from attachment.
 			const rawAtt = ws.deserializeAttachment() as string | null;
-			const attachment = rawAtt
-				? (JSON.parse(rawAtt) as {
-						topics?: string[];
-						authenticated?: boolean;
-						publicKey?: string | null;
-					})
-				: {};
+			let attachment: {
+				topics?: string[];
+				authenticated?: boolean;
+				publicKey?: string | null;
+			} = {};
+			if (rawAtt) {
+				try {
+					attachment = JSON.parse(rawAtt) as typeof attachment;
+				} catch {
+					this.#sendError(ws, "Invalid session attachment", ErrorCode.MALFORMED);
+					return;
+				}
+			}
 			sess = {
 				topics: new Set<string>(attachment.topics ?? []),
 				authenticated: attachment.authenticated ?? false,
@@ -751,32 +963,38 @@ export class FestivalDO extends DurableObject {
 						break;
 
 					case "encryptedChat": {
-						this.sql.exec(
-							"INSERT INTO group_gossip_log (group_id, message) VALUES (?, ?)",
-							topic,
-							envelopeBytes,
-						);
+						seq = (
+							this.sql
+								.exec(
+									"INSERT INTO group_gossip_log (group_id, message) VALUES (?, ?) RETURNING seq",
+									topic,
+									envelopeBytes,
+								)
+								.one() as { seq: number }
+						).seq;
 						break;
 					}
 
-					case "groupUpdate": {
-						this.sql.exec(
-							"INSERT INTO group_yrs_updates (group_id, update_data) VALUES (?, ?)",
-							topic,
-							envelopeBytes,
-						);
-						break;
-					}
-
+					case "groupUpdate":
 					case "syncRequest":
 					case "syncResponse":
 					case "syncUpdate": {
-						// Group sync messages — store as group yrs updates keyed by topic
+						// Keep the legacy Yrs mailbox while also assigning the envelope a
+						// durable per-topic sequence for reconnect catch-up.
 						this.sql.exec(
 							"INSERT INTO group_yrs_updates (group_id, update_data) VALUES (?, ?)",
 							topic,
 							envelopeBytes,
 						);
+						seq = (
+							this.sql
+								.exec(
+									"INSERT INTO group_gossip_log (group_id, message) VALUES (?, ?) RETURNING seq",
+									topic,
+									envelopeBytes,
+								)
+								.one() as { seq: number }
+						).seq;
 						break;
 					}
 
@@ -817,53 +1035,7 @@ export class FestivalDO extends DurableObject {
 
 			case "catchup": {
 				const { topic, sinceSeq } = msg.value;
-				if (!topic) break;
-
-				// Route by topic prefix: festival/ → public_gossip_log, else → group_gossip_log
-				if (topic.startsWith("festival/")) {
-					const rows = this.sql
-						.exec(
-							"SELECT seq, message, timestamp FROM public_gossip_log WHERE topic = ? AND seq > ? ORDER BY seq",
-							topic,
-							Number(sinceSeq),
-						)
-						.toArray() as { seq: number; message: ArrayBuffer; timestamp: string }[];
-
-					const messages = rows.map((r) => ({
-						seq: BigInt(r.seq),
-						message: fromBinary(GossipEnvelopeSchema, new Uint8Array(r.message)),
-						timestamp: r.timestamp,
-					}));
-
-					console.log(
-						`[ws] catchup: topic=${topic} sinceSeq=${sinceSeq} sending ${messages.length} messages`,
-					);
-					this.#sendServerMsg(ws, {
-						msg: { case: "catchup", value: { topic, messages } },
-					});
-				} else {
-					// Group topic — query group_gossip_log by group_id (use topic as group_id)
-					const rows = this.sql
-						.exec(
-							"SELECT seq, message, timestamp FROM group_gossip_log WHERE group_id = ? AND seq > ? ORDER BY seq",
-							topic,
-							Number(sinceSeq),
-						)
-						.toArray() as { seq: number; message: ArrayBuffer; timestamp: string }[];
-
-					const messages = rows.map((r) => ({
-						seq: BigInt(r.seq),
-						message: fromBinary(GossipEnvelopeSchema, new Uint8Array(r.message)),
-						timestamp: r.timestamp,
-					}));
-
-					console.log(
-						`[ws] catchup (group): topic=${topic} sinceSeq=${sinceSeq} sending ${messages.length} messages`,
-					);
-					this.#sendServerMsg(ws, {
-						msg: { case: "catchup", value: { topic, messages } },
-					});
-				}
+				if (topic) this.#sendCatchup(ws, topic, sinceSeq);
 				break;
 			}
 
@@ -873,17 +1045,24 @@ export class FestivalDO extends DurableObject {
 					this.#sendError(ws, "sv_exchange requires docId and sv", ErrorCode.MALFORMED);
 					break;
 				}
-
-				// Use in-memory public state doc — 0 disk reads
-				if (!this.#publicStateDoc) {
-					this.#publicStateDoc = new Y.Doc();
+				if (docId !== `festival/${this.#festivalId}/state`) {
+					this.#sendError(ws, "unknown festival document", ErrorCode.UNAUTHORIZED);
+					break;
 				}
 
-				// Compute diff from client's state vector
-				const diff = Y.encodeStateAsUpdate(this.#publicStateDoc, clientSV);
-
+				// A peer-computed Yrs diff cannot carry festival authority. Return the
+				// latest authority-signed full checkpoint through the normal gossip
+				// envelope so every client uses the same verification path.
+				const checkpoint = await this.#ensureSignedCheckpoint(docId);
 				this.#sendServerMsg(ws, {
-					msg: { case: "svDiff", value: { docId, diff } },
+					msg: {
+						case: "gossip",
+						value: {
+							topic: docId,
+							seq: 0n,
+							message: checkpoint,
+						},
+					},
 				});
 				break;
 			}
@@ -894,64 +1073,7 @@ export class FestivalDO extends DurableObject {
 					this.#sendError(ws, "chat_catchup requires topic", ErrorCode.MALFORMED);
 					break;
 				}
-
-				const maxLimit = chatLimit || 50;
-
-				if (chatTopic.startsWith("festival/")) {
-					// Public chat — query public_gossip_log with writer SV filtering
-					const chatRows = this.sql
-						.exec(
-							"SELECT message FROM public_gossip_log WHERE topic = ? ORDER BY seq DESC LIMIT ?",
-							chatTopic,
-							maxLimit * 10,
-						)
-						.toArray() as { message: ArrayBuffer }[];
-
-					const chatMessages = [];
-					for (const row of chatRows) {
-						const envelope = fromBinary(GossipEnvelopeSchema, new Uint8Array(row.message));
-						if (envelope.payload.case === "chat") {
-							const chatPayload = envelope.payload.value;
-							const userId = chatPayload.userId;
-							const writerSeq = chatPayload.writerSeq ?? 0n;
-							if (userId && userId in chatSv) {
-								if (writerSeq > chatSv[userId]) {
-									chatMessages.push(envelope);
-								}
-							} else {
-								chatMessages.push(envelope);
-							}
-						}
-						if (chatMessages.length >= maxLimit) break;
-					}
-
-					this.#sendServerMsg(ws, {
-						msg: {
-							case: "chatDiff",
-							value: { topic: chatTopic, messages: chatMessages },
-						},
-					});
-				} else {
-					// Group chat — query group_gossip_log (return all, can't filter encrypted)
-					const chatRows = this.sql
-						.exec(
-							"SELECT message FROM group_gossip_log WHERE group_id = ? ORDER BY seq DESC LIMIT ?",
-							chatTopic,
-							maxLimit,
-						)
-						.toArray() as { message: ArrayBuffer }[];
-
-					const chatMessages = chatRows.map((row) =>
-						fromBinary(GossipEnvelopeSchema, new Uint8Array(row.message)),
-					);
-
-					this.#sendServerMsg(ws, {
-						msg: {
-							case: "chatDiff",
-							value: { topic: chatTopic, messages: chatMessages },
-						},
-					});
-				}
+				this.#sendChatCatchup(ws, chatTopic, chatSv, chatLimit || 50);
 				break;
 			}
 
@@ -1129,6 +1251,13 @@ export class FestivalDO extends DurableObject {
 		this.sql.exec(
 			"INSERT OR REPLACE INTO yrs_docs (doc_id, data, updated_at) VALUES (?, ?, datetime('now'))",
 			docId,
+			fullState,
+		);
+		const authoritySeq = this.#nextAuthoritySeq(docId);
+		await this.#persistSignedFestivalUpdate(
+			docId,
+			FestivalUpdateKind.CHECKPOINT,
+			authoritySeq,
 			fullState,
 		);
 
@@ -1377,7 +1506,7 @@ export class FestivalDO extends DurableObject {
 		}
 
 		// Fetch weather every 6 hours (check last weather update time)
-		if (this.#lat && this.#lon && this.#festivalId) {
+		if (this.#lat !== null && this.#lon !== null && this.#festivalId) {
 			const lastWeather = (await this.ctx.storage.get("last_weather_alarm")) as number | undefined;
 			const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
 			if (!lastWeather || now.getTime() - lastWeather >= SIX_HOURS_MS) {
@@ -1403,12 +1532,17 @@ export class FestivalDO extends DurableObject {
 
 	/** Fetch hourly weather from Open-Meteo, capped to 1 day after festival closes. */
 	async #fetchWeather(): Promise<WeatherData> {
+		const lat = this.#lat;
+		const lon = this.#lon;
+		if (lat === null || lon === null) {
+			throw new Error("Festival coordinates are not configured");
+		}
 		let forecastDays = 7;
 		if (this.#closesAt) {
 			const msLeft = new Date(this.#closesAt).getTime() - Date.now();
 			forecastDays = Math.max(1, Math.min(7, Math.ceil(msLeft / 86_400_000)));
 		}
-		const url = `https://api.open-meteo.com/v1/forecast?latitude=${this.#lat}&longitude=${this.#lon}&hourly=temperature_2m,precipitation_probability,weather_code,wind_speed_10m&forecast_days=${forecastDays}&timezone=auto`;
+		const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=temperature_2m,precipitation_probability,weather_code,wind_speed_10m&forecast_days=${forecastDays}&timezone=auto`;
 		const resp = await fetch(url);
 		if (!resp.ok) {
 			throw new Error(`Open-Meteo error: ${resp.status} ${resp.statusText}`);
@@ -1425,8 +1559,8 @@ export class FestivalDO extends DurableObject {
 		};
 		return {
 			updatedAt: new Date().toISOString(),
-			lat: this.#lat!,
-			lon: this.#lon!,
+			lat,
+			lon,
 			timezone: data.timezone,
 			hourly: data.hourly,
 		};

@@ -1,6 +1,6 @@
 use aes_gcm::{
-    aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
+    aead::{Aead, KeyInit},
 };
 use chacha20poly1305::XChaCha20Poly1305;
 
@@ -31,8 +31,8 @@ pub fn generate_group_key() -> [u8; 32] {
 /// Encrypt plaintext with XChaCha20-Poly1305.
 /// Output format: `[version(1) || nonce(24) || ciphertext]`.
 pub fn encrypt(key: &[u8; 32], plaintext: &[u8]) -> anyhow::Result<Vec<u8>> {
-    let cipher = XChaCha20Poly1305::new_from_slice(key)
-        .map_err(|e| anyhow::anyhow!("invalid key: {e}"))?;
+    let cipher =
+        XChaCha20Poly1305::new_from_slice(key).map_err(|e| anyhow::anyhow!("invalid key: {e}"))?;
     let mut nonce_bytes = [0u8; 24];
     getrandom::getrandom(&mut nonce_bytes).map_err(|e| anyhow::anyhow!("rng error: {e}"))?;
     let nonce = chacha20poly1305::XNonce::from_slice(&nonce_bytes);
@@ -77,8 +77,7 @@ fn decrypt_v1(key: &[u8; 32], data: &[u8]) -> anyhow::Result<Vec<u8>> {
         anyhow::bail!("V1 ciphertext too short");
     }
     let (nonce_bytes, ct) = data.split_at(12);
-    let cipher = Aes256Gcm::new_from_slice(key)
-        .map_err(|e| anyhow::anyhow!("invalid key: {e}"))?;
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| anyhow::anyhow!("invalid key: {e}"))?;
     let nonce = Nonce::from_slice(nonce_bytes);
     cipher
         .decrypt(nonce, ct)
@@ -91,8 +90,8 @@ fn decrypt_v2(key: &[u8; 32], data: &[u8]) -> anyhow::Result<Vec<u8>> {
         anyhow::bail!("V2 ciphertext too short");
     }
     let (nonce_bytes, ct) = data.split_at(24);
-    let cipher = XChaCha20Poly1305::new_from_slice(key)
-        .map_err(|e| anyhow::anyhow!("invalid key: {e}"))?;
+    let cipher =
+        XChaCha20Poly1305::new_from_slice(key).map_err(|e| anyhow::anyhow!("invalid key: {e}"))?;
     let nonce = chacha20poly1305::XNonce::from_slice(nonce_bytes);
     cipher
         .decrypt(nonce, ct)
@@ -108,10 +107,7 @@ fn decrypt_v2(key: &[u8; 32], data: &[u8]) -> anyhow::Result<Vec<u8>> {
 pub fn group_id_from_key(key: &[u8; 32]) -> String {
     let hash = blake3::hash(key);
     let bytes = hash.as_bytes();
-    bytes[..16]
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    bytes[..16].iter().map(|b| format!("{b:02x}")).collect()
 }
 
 // ---------------------------------------------------------------------------

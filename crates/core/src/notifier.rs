@@ -343,7 +343,7 @@ mod tests {
         use crate::db::Database;
         use crate::doc_manager::DocManager;
         use std::sync::Arc;
-        use yrs::{Doc, Map, ReadTxn, Transact, StateVector};
+        use yrs::{Doc, Map, ReadTxn, StateVector, Transact};
 
         let db = Arc::new(Database::new_in_memory().unwrap());
         let dm = DocManager::new(db);

@@ -20,7 +20,7 @@ use std::sync::Arc;
 use futures_util::{SinkExt, StreamExt};
 use prost::Message;
 use tokio::sync::Mutex;
-use tokio_tungstenite::{connect_async, tungstenite, MaybeTlsStream, WebSocketStream};
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungstenite};
 
 use crate::auth::Attestation;
 use crate::connection_manager::ConnectionManager;
@@ -36,9 +36,8 @@ type WsSink = futures_util::stream::SplitSink<
     WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
     tungstenite::Message,
 >;
-type WsStream = futures_util::stream::SplitStream<
-    WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
->;
+type WsStream =
+    futures_util::stream::SplitStream<WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>>;
 
 /// Cloneable handle for sending messages to the Festival DO over WebSocket.
 #[derive(Clone)]
@@ -91,7 +90,8 @@ impl WsRelaySink {
 
     /// Whether the session has been authenticated.
     pub fn is_authenticated(&self) -> bool {
-        self.authenticated.load(std::sync::atomic::Ordering::Relaxed)
+        self.authenticated
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Whether the WebSocket is currently connected.
@@ -142,9 +142,7 @@ impl WsRelaySink {
         }
         self.send_client_msg(&proto::RelayClientMessage {
             msg: Some(proto::relay_client_message::Msg::Subscribe(
-                proto::SubscribeRequest {
-                    topics,
-                },
+                proto::SubscribeRequest { topics },
             )),
         })
         .await
@@ -160,9 +158,7 @@ impl WsRelaySink {
         }
         self.send_client_msg(&proto::RelayClientMessage {
             msg: Some(proto::relay_client_message::Msg::Unsubscribe(
-                proto::UnsubscribeRequest {
-                    topics,
-                },
+                proto::UnsubscribeRequest { topics },
             )),
         })
         .await
@@ -219,7 +215,8 @@ impl WsRelaySink {
             .send(tungstenite::Message::Binary(bytes.into()))
             .await
             .map_err(|e| anyhow::anyhow!("ws send error: {e}"))?;
-        self.tx_bytes.fetch_add(len, std::sync::atomic::Ordering::Relaxed);
+        self.tx_bytes
+            .fetch_add(len, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
 
@@ -298,12 +295,10 @@ pub async fn connect(
     std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>>,
 )> {
     tracing::info!("ws_relay: connecting to {url}");
-    let (ws_stream, _response) = tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        connect_async(url),
-    )
-    .await
-    .map_err(|_| anyhow::anyhow!("ws connect timed out after 10s"))??;
+    let (ws_stream, _response) =
+        tokio::time::timeout(std::time::Duration::from_secs(10), connect_async(url))
+            .await
+            .map_err(|_| anyhow::anyhow!("ws connect timed out after 10s"))??;
     tracing::info!("ws_relay: connected, splitting stream");
     let (sink, stream) = ws_stream.split();
 
@@ -402,7 +397,8 @@ async fn run_receive_loop_with_reconnect(
         )
         .await;
 
-        sink.connected.store(false, std::sync::atomic::Ordering::Relaxed);
+        sink.connected
+            .store(false, std::sync::atomic::Ordering::Relaxed);
 
         match result {
             Ok(()) => {
@@ -424,20 +420,25 @@ async fn run_receive_loop_with_reconnect(
             );
             tokio::time::sleep(std::time::Duration::from_millis(jitter)).await;
 
-            match tokio::time::timeout(
-                std::time::Duration::from_secs(10),
-                connect_async(&url),
-            ).await {
+            match tokio::time::timeout(std::time::Duration::from_secs(10), connect_async(&url))
+                .await
+            {
                 Ok(Ok((ws_stream, _))) => {
                     let (new_sink, new_stream) = ws_stream.split();
                     sink.swap_sink(new_sink).await;
                     stream = new_stream;
                     reconnect_attempt = 0;
-                    sink.connected.store(true, std::sync::atomic::Ordering::Relaxed);
+                    sink.connected
+                        .store(true, std::sync::atomic::Ordering::Relaxed);
 
                     // Re-subscribe to all previously subscribed topics
-                    let topics: Vec<String> =
-                        sink.subscribed_topics.lock().await.iter().cloned().collect();
+                    let topics: Vec<String> = sink
+                        .subscribed_topics
+                        .lock()
+                        .await
+                        .iter()
+                        .cloned()
+                        .collect();
                     if !topics.is_empty()
                         && let Err(e) = sink.subscribe(topics).await
                     {
@@ -485,7 +486,8 @@ async fn run_receive_loop(
     while let Some(msg) = stream.next().await {
         match msg {
             Ok(tungstenite::Message::Binary(data)) => {
-                sink.rx_bytes.fetch_add(data.len() as u64, std::sync::atomic::Ordering::Relaxed);
+                sink.rx_bytes
+                    .fetch_add(data.len() as u64, std::sync::atomic::Ordering::Relaxed);
                 tracing::debug!("ws_relay: recv {} binary bytes", data.len());
                 match proto::decode_server_msg(&data) {
                     Ok(server_msg) => {
@@ -529,7 +531,7 @@ async fn handle_server_message(
     msg: proto::RelayServerMessage,
     sink: &WsRelaySink,
     sync_orchestrator: &Arc<SyncOrchestrator>,
-    doc_manager: &Arc<DocManager>,
+    _doc_manager: &Arc<DocManager>,
     notifier: &Arc<crate::notifier::ResourceNotifier>,
     connection_manager: &Option<Arc<ConnectionManager>>,
 ) -> anyhow::Result<()> {
@@ -629,14 +631,10 @@ async fn handle_server_message(
         }
 
         Msg::SvDiff(sv_diff) => {
-            doc_manager.apply_update(&sv_diff.doc_id, &sv_diff.diff)?;
-            tracing::info!(
-                "ws_relay: applied sv_diff for {} ({} bytes)",
-                sv_diff.doc_id,
-                sv_diff.diff.len(),
-            );
-            notifier.notify_doc(&sv_diff.doc_id);
-            Ok(())
+            anyhow::bail!(
+                "rejected unsigned sv_diff for {}; festival catch-up requires a signed checkpoint",
+                sv_diff.doc_id
+            )
         }
 
         Msg::ChatDiff(chat_diff) => {
@@ -659,7 +657,11 @@ async fn handle_server_message(
         }
 
         Msg::Error(err) => {
-            tracing::warn!("ws_relay: server error: {} (code {:?})", err.error, err.code);
+            tracing::warn!(
+                "ws_relay: server error: {} (code {:?})",
+                err.error,
+                err.code
+            );
             Ok(())
         }
     }
@@ -673,8 +675,7 @@ fn hex_to_bytes(hex: &str) -> anyhow::Result<Vec<u8>> {
     (0..hex.len())
         .step_by(2)
         .map(|i| {
-            u8::from_str_radix(&hex[i..i + 2], 16)
-                .map_err(|e| anyhow::anyhow!("invalid hex: {e}"))
+            u8::from_str_radix(&hex[i..i + 2], 16).map_err(|e| anyhow::anyhow!("invalid hex: {e}"))
         })
         .collect()
 }
@@ -703,7 +704,10 @@ mod tests {
             assert!(capped >= prev_cap, "cap should not decrease");
             assert!(jitter <= capped, "jitter {jitter} exceeded cap {capped}");
             if attempt >= 5 {
-                assert_eq!(capped, MAX_DELAY_MS, "should be capped at 30s by attempt {attempt}");
+                assert_eq!(
+                    capped, MAX_DELAY_MS,
+                    "should be capped at 30s by attempt {attempt}"
+                );
             }
             prev_cap = capped;
         }
@@ -726,18 +730,16 @@ mod tests {
     #[test]
     fn test_protobuf_gossip_roundtrip() {
         let envelope = proto::GossipEnvelope {
-            payload: Some(proto::gossip_envelope::Payload::Chat(
-                proto::ChatMessage {
-                    id: "c1".to_string(),
-                    user_id: "u1".to_string(),
-                    display_name: "Alice".to_string(),
-                    text: "hi".to_string(),
-                    topic: "t".to_string(),
-                    stage_id: None,
-                    timestamp: "now".to_string(),
-                    writer_seq: 0,
-                },
-            )),
+            payload: Some(proto::gossip_envelope::Payload::Chat(proto::ChatMessage {
+                id: "c1".to_string(),
+                user_id: "u1".to_string(),
+                display_name: "Alice".to_string(),
+                text: "hi".to_string(),
+                topic: "t".to_string(),
+                stage_id: None,
+                timestamp: "now".to_string(),
+                writer_seq: 0,
+            })),
         };
         let msg = proto::RelayClientMessage {
             msg: Some(proto::relay_client_message::Msg::Gossip(
@@ -775,18 +777,16 @@ mod tests {
                     topic: "festival/test/chat".to_string(),
                     seq: 42,
                     message: Some(proto::GossipEnvelope {
-                        payload: Some(proto::gossip_envelope::Payload::Chat(
-                            proto::ChatMessage {
-                                id: "m1".to_string(),
-                                user_id: "u1".to_string(),
-                                display_name: "A".to_string(),
-                                text: "t".to_string(),
-                                topic: "t".to_string(),
-                                stage_id: None,
-                                timestamp: "now".to_string(),
-                                writer_seq: 0,
-                            },
-                        )),
+                        payload: Some(proto::gossip_envelope::Payload::Chat(proto::ChatMessage {
+                            id: "m1".to_string(),
+                            user_id: "u1".to_string(),
+                            display_name: "A".to_string(),
+                            text: "t".to_string(),
+                            topic: "t".to_string(),
+                            stage_id: None,
+                            timestamp: "now".to_string(),
+                            writer_seq: 0,
+                        })),
                     }),
                 },
             )),

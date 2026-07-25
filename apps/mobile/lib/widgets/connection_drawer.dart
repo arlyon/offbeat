@@ -153,7 +153,8 @@ class _ConnectionContentState extends State<_ConnectionContent> {
                 ),
                 const SizedBox(height: 10),
                 ...widget.syncStatus!.resources.map(
-                    (r) => _SubscriptionRow(resource: r)),
+                  (r) => _SubscriptionRow(resource: r),
+                ),
               ],
             ],
           ),
@@ -204,7 +205,8 @@ class _ConnectionContentState extends State<_ConnectionContent> {
       return _BlePromptCard(
         statusLabel: 'NO PERMISSION',
         statusColor: colorErr,
-        message: 'Bluetooth permissions are required to sync with nearby peers.',
+        message:
+            'Bluetooth permissions are required to sync with nearby peers.',
         actionLabel: 'GRANT',
         onAction: () async {
           await BluetoothService.requestPermissions();
@@ -506,11 +508,7 @@ class _ChannelCard extends StatelessWidget {
                 padding: const EdgeInsets.only(bottom: 8),
                 child: Row(
                   children: [
-                    Icon(
-                      Icons.circle,
-                      size: 5,
-                      color: dotColor,
-                    ),
+                    Icon(Icons.circle, size: 5, color: dotColor),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Column(
@@ -551,7 +549,8 @@ class _ChannelCard extends StatelessWidget {
                               ),
                             ),
                           ],
-                          if (p.connectPath != null && p.phase == 'Connected') ...[
+                          if (p.connectPath != null &&
+                              p.phase == 'Connected') ...[
                             const SizedBox(height: 3),
                             Text(
                               p.connectPath!.toUpperCase(),
@@ -574,10 +573,14 @@ class _ChannelCard extends StatelessWidget {
                             onTap: () => onConnect!(p.deviceId),
                             child: Container(
                               padding: const EdgeInsets.symmetric(
-                                  horizontal: 6, vertical: 2),
+                                horizontal: 6,
+                                vertical: 2,
+                              ),
                               decoration: BoxDecoration(
                                 border: Border.all(
-                                    color: colorCoAccent, width: 1),
+                                  color: colorCoAccent,
+                                  width: 1,
+                                ),
                                 borderRadius: BorderRadius.circular(2),
                               ),
                               child: const Text(
@@ -739,17 +742,17 @@ class _SubscriptionRow extends StatelessWidget {
                   ),
                 ),
               Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: Text(
-                    '${resource.peerCount}P',
-                    style: const TextStyle(
-                      fontFamily: 'JetBrainsMono',
-                      fontSize: 9,
-                      color: colorFg3,
-                      height: 1,
-                    ),
+                padding: const EdgeInsets.only(right: 8),
+                child: Text(
+                  '${resource.peerCount}P',
+                  style: const TextStyle(
+                    fontFamily: 'JetBrainsMono',
+                    fontSize: 9,
+                    color: colorFg3,
+                    height: 1,
                   ),
                 ),
+              ),
               Text(
                 '${resource.messagesReceived}\u2193 ${resource.messagesSent}\u2191',
                 style: const TextStyle(

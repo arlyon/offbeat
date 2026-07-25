@@ -156,10 +156,7 @@ class _SocialScreenState extends State<SocialScreen> {
     if (text.isEmpty || _activeGroupId == null) return;
     _composerController.clear();
     try {
-      await widget.node.sendGroupChat(
-        groupId: _activeGroupId!,
-        text: text,
-      );
+      await widget.node.sendGroupChat(groupId: _activeGroupId!, text: text);
     } catch (_) {}
   }
 
@@ -388,7 +385,14 @@ class _SocialScreenState extends State<SocialScreen> {
 
   Widget _buildGroupHeader() {
     final state = _groupState;
-    final name = state?.name ?? _groups.firstWhere((g) => g.id == _activeGroupId, orElse: () => _groups.first).name;
+    final name =
+        state?.name ??
+        _groups
+            .firstWhere(
+              (g) => g.id == _activeGroupId,
+              orElse: () => _groups.first,
+            )
+            .name;
     final memberCount = state?.members.length ?? 0;
 
     return Padding(
@@ -420,20 +424,11 @@ class _SocialScreenState extends State<SocialScreen> {
           // Meta line
           Row(
             children: [
-              Text(
-                '$memberCount MEMBERS',
-                style: _metaStyle,
-              ),
+              Text('$memberCount MEMBERS', style: _metaStyle),
               _metaSep(),
-              Text(
-                '$_directPeerCount DIRECT PEERS',
-                style: _metaStyle,
-              ),
+              Text('$_directPeerCount DIRECT PEERS', style: _metaStyle),
               _metaSep(),
-              Text(
-                widget.festivalName.toUpperCase(),
-                style: _metaStyle,
-              ),
+              Text(widget.festivalName.toUpperCase(), style: _metaStyle),
             ],
           ),
           const SizedBox(height: 14),
@@ -473,19 +468,21 @@ class _SocialScreenState extends State<SocialScreen> {
       shape: const RoundedRectangleBorder(),
       offset: const Offset(0, 36),
       itemBuilder: (_) => [
-        ..._groups.map((g) => PopupMenuItem<String>(
-          value: g.id,
-          child: Text(
-            g.name.toUpperCase(),
-            style: TextStyle(
-              fontFamily: 'Helvetica',
-              fontWeight: FontWeight.w700,
-              fontSize: 14,
-              letterSpacing: -0.01 * 14,
-              color: g.id == _activeGroupId ? colorAccent : colorFg,
+        ..._groups.map(
+          (g) => PopupMenuItem<String>(
+            value: g.id,
+            child: Text(
+              g.name.toUpperCase(),
+              style: TextStyle(
+                fontFamily: 'Helvetica',
+                fontWeight: FontWeight.w700,
+                fontSize: 14,
+                letterSpacing: -0.01 * 14,
+                color: g.id == _activeGroupId ? colorAccent : colorFg,
+              ),
             ),
           ),
-        )),
+        ),
         PopupMenuItem<String>(
           value: '__create__',
           child: const Text(
@@ -509,7 +506,13 @@ class _SocialScreenState extends State<SocialScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(
-              _groups.firstWhere((g) => g.id == _activeGroupId, orElse: () => _groups.first).name.toUpperCase(),
+              _groups
+                  .firstWhere(
+                    (g) => g.id == _activeGroupId,
+                    orElse: () => _groups.first,
+                  )
+                  .name
+                  .toUpperCase(),
               style: const TextStyle(
                 fontFamily: 'JetBrainsMono',
                 fontSize: 10,
@@ -771,14 +774,18 @@ class _SocialScreenState extends State<SocialScreen> {
       ..sort((a, b) => b.value.length.compareTo(a.value.length));
 
     final now = DateTime.now();
-    final timeStr = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+    final timeStr =
+        '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
 
     return DottedBorder.bottom(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(18, 14, 18, 16),
         child: Column(
           children: [
-            _buildEyebrowInline('GROUP PULSE // $timeStr', '${members.length} MEMBERS'),
+            _buildEyebrowInline(
+              'GROUP PULSE // $timeStr',
+              '${members.length} MEMBERS',
+            ),
             ...sortedBuckets.map((entry) {
               final count = entry.value.length;
               final pct = totalOthers > 0
@@ -815,7 +822,9 @@ class _SocialScreenState extends State<SocialScreen> {
                         style: TextStyle(
                           fontFamily: 'JetBrainsMono',
                           fontSize: 10,
-                          fontWeight: isOffline ? FontWeight.w500 : FontWeight.w700,
+                          fontWeight: isOffline
+                              ? FontWeight.w500
+                              : FontWeight.w700,
                           letterSpacing: 0.08 * 10,
                           color: isOffline ? colorFg3 : colorFg,
                         ),
@@ -885,7 +894,8 @@ class _SocialScreenState extends State<SocialScreen> {
 
   Widget _buildChatMsg(ChatMessageDto msg, bool isMe, bool consecutive) {
     final ts = _parseTimestamp(msg.timestamp);
-    final timeStr = '${ts.hour.toString().padLeft(2, '0')}:${ts.minute.toString().padLeft(2, '0')}';
+    final timeStr =
+        '${ts.hour.toString().padLeft(2, '0')}:${ts.minute.toString().padLeft(2, '0')}';
 
     return Padding(
       padding: EdgeInsets.fromLTRB(18, consecutive ? 2 : 8, 18, 6),
@@ -917,8 +927,9 @@ class _SocialScreenState extends State<SocialScreen> {
           ],
           Expanded(
             child: Column(
-              crossAxisAlignment:
-                  isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+              crossAxisAlignment: isMe
+                  ? CrossAxisAlignment.end
+                  : CrossAxisAlignment.start,
               children: [
                 if (!consecutive)
                   Padding(
@@ -1033,7 +1044,10 @@ class _SocialScreenState extends State<SocialScreen> {
                     fontSize: 14,
                     color: colorFg4,
                   ),
-                  contentPadding: EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+                  contentPadding: EdgeInsets.symmetric(
+                    horizontal: 4,
+                    vertical: 8,
+                  ),
                   isDense: true,
                 ),
                 onSubmitted: (_) => _sendMessage(),
@@ -1105,19 +1119,25 @@ class _SocialScreenState extends State<SocialScreen> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(label, style: const TextStyle(
-            fontFamily: 'JetBrainsMono',
-            fontSize: 11,
-            fontWeight: FontWeight.w500,
-            letterSpacing: 0.08 * 11,
-            color: colorFg3,
-          )),
-          Text(meta, style: const TextStyle(
-            fontFamily: 'JetBrainsMono',
-            fontSize: 10,
-            letterSpacing: 0.08 * 10,
-            color: colorFg4,
-          )),
+          Text(
+            label,
+            style: const TextStyle(
+              fontFamily: 'JetBrainsMono',
+              fontSize: 11,
+              fontWeight: FontWeight.w500,
+              letterSpacing: 0.08 * 11,
+              color: colorFg3,
+            ),
+          ),
+          Text(
+            meta,
+            style: const TextStyle(
+              fontFamily: 'JetBrainsMono',
+              fontSize: 10,
+              letterSpacing: 0.08 * 10,
+              color: colorFg4,
+            ),
+          ),
         ],
       ),
     );

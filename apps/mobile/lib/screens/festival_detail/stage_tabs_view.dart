@@ -45,7 +45,9 @@ class _StageTabsViewState extends State<StageTabsView> {
   Stage get _currentStage => widget.stages.firstWhere((s) => s.id == _stageId);
 
   List<FestSet> get _dayStageSets {
-    final s = widget.sets.where((s) => s.day == _day && s.stage == _stageId).toList();
+    final s = widget.sets
+        .where((s) => s.day == _day && s.stage == _stageId)
+        .toList();
     s.sort((a, b) => a.t.compareTo(b.t));
     return s;
   }

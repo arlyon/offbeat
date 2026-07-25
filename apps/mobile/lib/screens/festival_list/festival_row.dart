@@ -42,13 +42,10 @@ class FestivalRow extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 // Live accent bar
-                if (_isLive)
-                  Container(width: 3, color: colorAccent),
+                if (_isLive) Container(width: 3, color: colorAccent),
                 Expanded(
                   child: Padding(
-                    padding: EdgeInsets.fromLTRB(
-                      _isLive ? 15 : 18, 14, 18, 14,
-                    ),
+                    padding: EdgeInsets.fromLTRB(_isLive ? 15 : 18, 14, 18, 14),
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -116,9 +113,7 @@ class FestivalRow extends StatelessWidget {
                                 spacing: 6,
                                 children: [
                                   _MetaText(
-                                    fest.dates
-                                        .replaceAll('· 2025', '')
-                                        .trim(),
+                                    fest.dates.replaceAll('· 2025', '').trim(),
                                   ),
                                   const _MetaDot(),
                                   _MetaText(fest.city),
@@ -129,10 +124,7 @@ class FestivalRow extends StatelessWidget {
                               Wrap(
                                 spacing: 6,
                                 children: [
-                                  _MetaText(
-                                    '${fest.stages} STAGES',
-                                    dim: true,
-                                  ),
+                                  _MetaText('${fest.stages} STAGES', dim: true),
                                   _MetaDot(dim: true),
                                   _MetaText(
                                     '${fest.sets > 0 ? fest.sets : '—'} SETS',

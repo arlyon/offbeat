@@ -1,4 +1,5 @@
 #!/usr/bin/env npx tsx
+
 /**
  * Submit an announcement to a festival.
  *
@@ -17,8 +18,8 @@
  *   ADMIN_SECRET_KEY=abc... npx tsx scripts/announce.ts glastonbury-2026 "Main stage delayed 30 min" --priority warning --title "Schedule Change"
  */
 
-import * as Y from "yjs";
 import { ed25519 } from "@noble/curves/ed25519.js";
+import * as Y from "yjs";
 
 function hexToBytes(hex: string): Uint8Array {
 	const bytes = new Uint8Array(hex.length / 2);
@@ -102,7 +103,9 @@ Example:
 	const apiUrl = apiUrlIdx !== -1 ? args[apiUrlIdx + 1] : "http://localhost:8787";
 
 	const priorityIdx = args.indexOf("--priority");
-	const priority = (priorityIdx !== -1 ? args[priorityIdx + 1] : "info") as Announcement["priority"];
+	const priority = (
+		priorityIdx !== -1 ? args[priorityIdx + 1] : "info"
+	) as Announcement["priority"];
 	if (!["info", "warning", "urgent"].includes(priority)) {
 		console.error(`Error: invalid priority "${priority}" — must be info, warning, or urgent`);
 		process.exit(1);

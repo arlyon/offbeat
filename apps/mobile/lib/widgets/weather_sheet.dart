@@ -72,7 +72,8 @@ class WeatherSheet extends StatelessWidget {
         ),
         const SizedBox(height: 12),
         // Current conditions hero
-        if (startIdx < hourly.time.length) _HeroCard(hourly: hourly, index: startIdx),
+        if (startIdx < hourly.time.length)
+          _HeroCard(hourly: hourly, index: startIdx),
         const SizedBox(height: 4),
         // Hourly strip
         Expanded(
@@ -330,9 +331,7 @@ class _HourRow extends StatelessWidget {
               ),
               const SizedBox(width: 8),
               // Precip bar
-              Expanded(
-                child: _PrecipBar(percent: precip),
-              ),
+              Expanded(child: _PrecipBar(percent: precip)),
               const SizedBox(width: 8),
               // Precip %
               SizedBox(
@@ -389,8 +388,8 @@ class _PrecipBar extends StatelessWidget {
             color: percent > 70
                 ? colorCoAccent
                 : percent > 40
-                    ? colorCoAccent.withValues(alpha: 0.6)
-                    : colorFg4.withValues(alpha: 0.4),
+                ? colorCoAccent.withValues(alpha: 0.6)
+                : colorFg4.withValues(alpha: 0.4),
           ),
         );
       },
@@ -430,8 +429,18 @@ String _formatTimestamp(String iso) {
   try {
     final dt = DateTime.parse(iso);
     const months = [
-      'JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
-      'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'
+      'JAN',
+      'FEB',
+      'MAR',
+      'APR',
+      'MAY',
+      'JUN',
+      'JUL',
+      'AUG',
+      'SEP',
+      'OCT',
+      'NOV',
+      'DEC',
     ];
     return '${dt.day} ${months[dt.month - 1]} ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
   } catch (_) {
@@ -445,8 +454,18 @@ String _formatDate(String date) {
     final dt = DateTime.parse(date);
     const days = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
     const months = [
-      'JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
-      'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'
+      'JAN',
+      'FEB',
+      'MAR',
+      'APR',
+      'MAY',
+      'JUN',
+      'JUL',
+      'AUG',
+      'SEP',
+      'OCT',
+      'NOV',
+      'DEC',
     ];
     return '${days[dt.weekday - 1]} ${dt.day} ${months[dt.month - 1]}';
   } catch (_) {
@@ -456,7 +475,8 @@ String _formatDate(String date) {
 
 /// Find the index of the first hour at or after now.
 int _findStartIndex(List<String> times, DateTime now) {
-  final nowHour = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}T${now.hour.toString().padLeft(2, '0')}:00';
+  final nowHour =
+      '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}T${now.hour.toString().padLeft(2, '0')}:00';
 
   for (int i = 0; i < times.length; i++) {
     if (times[i].compareTo(nowHour) >= 0) return i;

@@ -92,8 +92,17 @@ class _GanttViewState extends State<GanttView> {
       _startMin = 0;
       _endMin = 24 * 60;
     } else {
-      _startMin = (_absoluteSets.map((s) => s.t).reduce((a, b) => a < b ? a : b) ~/ 60) * 60;
-      _endMin = ((_absoluteSets.map((s) => s.t + s.dur).reduce((a, b) => a > b ? a : b) + 59) ~/ 60) * 60;
+      _startMin =
+          (_absoluteSets.map((s) => s.t).reduce((a, b) => a < b ? a : b) ~/
+              60) *
+          60;
+      _endMin =
+          ((_absoluteSets
+                      .map((s) => s.t + s.dur)
+                      .reduce((a, b) => a > b ? a : b) +
+                  59) ~/
+              60) *
+          60;
     }
 
     _contentW = (_endMin - _startMin) * ganttPxPerMin;
@@ -130,7 +139,9 @@ class _GanttViewState extends State<GanttView> {
       events.add((s.t, 1));
       events.add((s.t + s.dur, -1));
     }
-    events.sort((a, b) => a.$1 != b.$1 ? a.$1.compareTo(b.$1) : a.$2.compareTo(b.$2));
+    events.sort(
+      (a, b) => a.$1 != b.$1 ? a.$1.compareTo(b.$1) : a.$2.compareTo(b.$2),
+    );
 
     // Walk events to build step function
     final steps = <(int, int, int)>[]; // (startMin, endMin, count)
@@ -164,13 +175,13 @@ class _GanttViewState extends State<GanttView> {
 
   double get _maxTx =>
       (_contentW - _viewportInnerW).clamp(0.0, double.infinity);
-  double get _tx =>
-      _hScrollController.hasClients ? _hScrollController.offset.clamp(0.0, _maxTx) : 0.0;
+  double get _tx => _hScrollController.hasClients
+      ? _hScrollController.offset.clamp(0.0, _maxTx)
+      : 0.0;
   double get _progress => _maxTx > 0 ? _tx / _maxTx : 0.0;
 
   String get _activeDay {
-    final centerMin =
-        _startMin + (_tx + _viewportInnerW / 2) / ganttPxPerMin;
+    final centerMin = _startMin + (_tx + _viewportInnerW / 2) / ganttPxPerMin;
     String active = widget.days.first.id;
     for (final day in widget.days) {
       if (centerMin >= _dayOffsets[day.id]!) active = day.id;
@@ -206,7 +217,9 @@ class _GanttViewState extends State<GanttView> {
   @override
   void didUpdateWidget(GanttView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (_setsChanged(oldWidget) || _daysChanged(oldWidget) || oldWidget.now != widget.now) {
+    if (_setsChanged(oldWidget) ||
+        _daysChanged(oldWidget) ||
+        oldWidget.now != widget.now) {
       _recomputeData();
     }
   }
@@ -215,8 +228,13 @@ class _GanttViewState extends State<GanttView> {
     if (old.sets.length != widget.sets.length) return true;
     for (int i = 0; i < widget.sets.length; i++) {
       final a = old.sets[i], b = widget.sets[i];
-      if (a.id != b.id || a.t != b.t || a.dur != b.dur || a.stage != b.stage ||
-          a.day != b.day || a.starred != b.starred || a.live != b.live) {
+      if (a.id != b.id ||
+          a.t != b.t ||
+          a.dur != b.dur ||
+          a.stage != b.stage ||
+          a.day != b.day ||
+          a.starred != b.starred ||
+          a.live != b.live) {
         return true;
       }
     }
@@ -227,7 +245,11 @@ class _GanttViewState extends State<GanttView> {
     if (old.days.length != widget.days.length) return true;
     for (int i = 0; i < widget.days.length; i++) {
       final a = old.days[i], b = widget.days[i];
-      if (a.id != b.id || a.label != b.label || a.dayNum != b.dayNum || a.month != b.month || a.year != b.year) {
+      if (a.id != b.id ||
+          a.label != b.label ||
+          a.dayNum != b.dayNum ||
+          a.month != b.month ||
+          a.year != b.year) {
         return true;
       }
     }
@@ -246,8 +268,7 @@ class _GanttViewState extends State<GanttView> {
   void _onHScroll() {
     // No setState — ListenableBuilder on _hScrollController handles repaints.
     // Just fire haptics.
-    final centerMin =
-        _startMin + (_tx + _viewportInnerW / 2) / ganttPxPerMin;
+    final centerMin = _startMin + (_tx + _viewportInnerW / 2) / ganttPxPerMin;
     final bucket = (centerMin / 15).floor();
     if (bucket != _lastHapticBucket && _lastHapticBucket != -1) {
       bool crossedDay = false;
@@ -304,8 +325,7 @@ class _GanttViewState extends State<GanttView> {
         ? dayOffset
         : daySets.map((s) => s.t).reduce((a, b) => a < b ? a : b);
 
-    final target =
-        ((dayStart - _startMin) * ganttPxPerMin).clamp(0.0, _maxTx);
+    final target = ((dayStart - _startMin) * ganttPxPerMin).clamp(0.0, _maxTx);
     _hScrollController.animateTo(
       target,
       duration: const Duration(milliseconds: 300),
@@ -367,32 +387,35 @@ class _GanttViewState extends State<GanttView> {
                 children: [
                   // Gantt content
                   Positioned.fill(
-                      child: IgnorePointer(
-                        child: RepaintBoundary(
-                          child: ListenableBuilder(
-                            listenable: Listenable.merge([_hScrollController, _vScrollController]),
-                            builder: (context, _) => _GanttContent(
-                              tx: _tx,
-                              progress: _progress,
-                              viewportInnerW: _viewportInnerW,
-                              allSets: allSets,
-                              stages: widget.stages,
-                              days: widget.days,
-                              dayOffsets: _dayOffsets,
-                              axisHours: _axisHours,
-                              nowX: _nowX,
-                              nowInRange: _nowInRange,
-                              startMin: _startMin,
-                              vertOffset: _vScrollController.hasClients
-                                  ? _vScrollController.offset
-                                  : 0.0,
-                              rowHeight: rh,
-                              onStar: widget.onStar,
-                            ),
+                    child: IgnorePointer(
+                      child: RepaintBoundary(
+                        child: ListenableBuilder(
+                          listenable: Listenable.merge([
+                            _hScrollController,
+                            _vScrollController,
+                          ]),
+                          builder: (context, _) => _GanttContent(
+                            tx: _tx,
+                            progress: _progress,
+                            viewportInnerW: _viewportInnerW,
+                            allSets: allSets,
+                            stages: widget.stages,
+                            days: widget.days,
+                            dayOffsets: _dayOffsets,
+                            axisHours: _axisHours,
+                            nowX: _nowX,
+                            nowInRange: _nowInRange,
+                            startMin: _startMin,
+                            vertOffset: _vScrollController.hasClients
+                                ? _vScrollController.offset
+                                : 0.0,
+                            rowHeight: rh,
+                            onStar: widget.onStar,
                           ),
                         ),
                       ),
                     ),
+                  ),
                   // Horizontal scroll sentinel (always present so controller attaches)
                   Positioned.fill(
                     child: SingleChildScrollView(
@@ -426,25 +449,25 @@ class _GanttViewState extends State<GanttView> {
                     ),
                   // Bottom HUD
                   Positioned(
-                      left: 0,
-                      right: 0,
-                      bottom: 0,
-                      child: ListenableBuilder(
-                        listenable: _hScrollController,
-                        builder: (context, _) => _GanttHUD(
-                          progress: _progress,
-                          tx: _tx,
-                          viewportInnerW: _viewportInnerW,
-                          startMin: _startMin,
-                          maxTx: _maxTx,
-                          activitySteps: _activitySteps,
-                          onScrub: (p) {
-                            final target = (p * _maxTx).clamp(0.0, _maxTx);
-                            _hScrollController.jumpTo(target);
-                          },
-                        ),
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    child: ListenableBuilder(
+                      listenable: _hScrollController,
+                      builder: (context, _) => _GanttHUD(
+                        progress: _progress,
+                        tx: _tx,
+                        viewportInnerW: _viewportInnerW,
+                        startMin: _startMin,
+                        maxTx: _maxTx,
+                        activitySteps: _activitySteps,
+                        onScrub: (p) {
+                          final target = (p * _maxTx).clamp(0.0, _maxTx);
+                          _hScrollController.jumpTo(target);
+                        },
                       ),
                     ),
+                  ),
                 ],
               );
             },
@@ -486,7 +509,9 @@ class _MetaStrip extends StatelessWidget {
       final diff = startMin - absoluteNowMin;
       final h = diff ~/ 60;
       final m = diff % 60;
-      return h > 0 ? '// STARTS IN ${h}H${m > 0 ? ' ${m}M' : ''}' : '// STARTS IN ${m}M';
+      return h > 0
+          ? '// STARTS IN ${h}H${m > 0 ? ' ${m}M' : ''}'
+          : '// STARTS IN ${m}M';
     }
     return '// ENDED';
   }
@@ -555,8 +580,7 @@ class _MetaStrip extends StatelessWidget {
                                 vertical: 6,
                               ),
                               decoration: BoxDecoration(
-                                color:
-                                    isActive ? colorFg : Colors.transparent,
+                                color: isActive ? colorFg : Colors.transparent,
                                 border: Border.all(
                                   color: isActive ? colorFg : colorDotted,
                                   width: 1.5,
@@ -713,7 +737,8 @@ class _TimeAxis extends StatelessWidget {
             // Only render visible hour ticks, absolutely positioned
             for (final m in visibleHours)
               () {
-                final x = (m - startMin) * ganttPxPerMin + ganttStageLabelW - tx;
+                final x =
+                    (m - startMin) * ganttPxPerMin + ganttStageLabelW - tx;
                 final isDayStart = dayBounds.contains(m);
                 return Positioned(
                   left: x,
@@ -886,8 +911,7 @@ class _SingleStageRow extends StatelessWidget {
       clipBehavior: Clip.hardEdge,
       children: [
         if (!isLast)
-          Positioned(
-              bottom: 0, left: 0, right: 0, child: const DottedRule()),
+          Positioned(bottom: 0, left: 0, right: 0, child: const DottedRule()),
         // Stage label (sticky left)
         Positioned(
           left: 0,
@@ -985,8 +1009,7 @@ class _SetBlock extends StatelessWidget {
               if (set.starred)
                 const Text(
                   '★ ',
-                  style:
-                      TextStyle(color: colorAccent, fontSize: 10, height: 1),
+                  style: TextStyle(color: colorAccent, fontSize: 10, height: 1),
                 ),
               if (set.live)
                 const Padding(
@@ -1063,9 +1086,10 @@ class _GanttHUDState extends State<_GanttHUD>
       vsync: this,
       duration: const Duration(milliseconds: 1600),
     )..repeat(reverse: true);
-    _bobAnim = Tween<double>(begin: 0.0, end: 3.0).animate(
-      CurvedAnimation(parent: _bobController, curve: Curves.easeInOut),
-    );
+    _bobAnim = Tween<double>(
+      begin: 0.0,
+      end: 3.0,
+    ).animate(CurvedAnimation(parent: _bobController, curve: Curves.easeInOut));
   }
 
   @override
@@ -1078,8 +1102,7 @@ class _GanttHUDState extends State<_GanttHUD>
   Widget build(BuildContext context) {
     final startMin = (widget.startMin + widget.tx / ganttPxPerMin).round();
     final endMin =
-        (widget.startMin +
-                (widget.tx + widget.viewportInnerW) / ganttPxPerMin)
+        (widget.startMin + (widget.tx + widget.viewportInnerW) / ganttPxPerMin)
             .round();
 
     return Container(
@@ -1099,10 +1122,12 @@ class _GanttHUDState extends State<_GanttHUD>
               builder: (context, constraints) {
                 final scrubberW = constraints.maxWidth;
                 return GestureDetector(
-                  onTapDown: (d) =>
-                      widget.onScrub((d.localPosition.dx / scrubberW).clamp(0.0, 1.0)),
-                  onHorizontalDragUpdate: (d) =>
-                      widget.onScrub((d.localPosition.dx / scrubberW).clamp(0.0, 1.0)),
+                  onTapDown: (d) => widget.onScrub(
+                    (d.localPosition.dx / scrubberW).clamp(0.0, 1.0),
+                  ),
+                  onHorizontalDragUpdate: (d) => widget.onScrub(
+                    (d.localPosition.dx / scrubberW).clamp(0.0, 1.0),
+                  ),
                   child: Container(
                     height: 22,
                     decoration: BoxDecoration(
@@ -1194,12 +1219,38 @@ class _GanttHUDState extends State<_GanttHUD>
 /// after the last day depending on the calendar date.
 /// Parse a [Day] into a [DateTime] (midnight on that day).
 DateTime _dayToDate(Day d) {
-  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const months = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ];
   return DateTime(d.year, months.indexOf(d.month) + 1, int.parse(d.dayNum));
 }
 
 int _resolveNowMin(DateTime now, List<Day> days, Map<String, int> dayOffsets) {
-  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const months = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ];
   final nowMonth = months[now.month - 1];
   final nowDay = now.day.toString();
   final nowMinOfDay = now.hour * 60 + now.minute;
@@ -1219,7 +1270,9 @@ int _resolveNowMin(DateTime now, List<Day> days, Map<String, int> dayOffsets) {
 
   if (nowDate.isBefore(firstDayDate)) {
     final daysBefore = firstDayDate.difference(nowDate).inDays;
-    return (dayOffsets[days.first.id] ?? 0) - daysBefore * 24 * 60 + nowMinOfDay;
+    return (dayOffsets[days.first.id] ?? 0) -
+        daysBefore * 24 * 60 +
+        nowMinOfDay;
   }
 
   final lastDayDate = _dayToDate(days.last);

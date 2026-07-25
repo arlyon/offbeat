@@ -47,7 +47,10 @@ class _FestivalDetailScreenState extends State<FestivalDetailScreen> {
   Widget build(BuildContext context) {
     if (widget.loading) {
       return const Center(
-        child: CircularProgressIndicator(color: Color(0xFFFF2D8F), strokeWidth: 1.5),
+        child: CircularProgressIndicator(
+          color: Color(0xFFFF2D8F),
+          strokeWidth: 1.5,
+        ),
       );
     }
 
@@ -55,10 +58,16 @@ class _FestivalDetailScreenState extends State<FestivalDetailScreen> {
     final days = widget.days;
     final sets = widget.sets;
 
-    if (stages == null || days == null || sets == null ||
-        stages.isEmpty || days.isEmpty || sets.isEmpty) {
-      debugPrint('[FestivalDetail] guard tripped: '
-          'stages=${stages?.length}, days=${days?.length}, sets=${sets?.length}');
+    if (stages == null ||
+        days == null ||
+        sets == null ||
+        stages.isEmpty ||
+        days.isEmpty ||
+        sets.isEmpty) {
+      debugPrint(
+        '[FestivalDetail] guard tripped: '
+        'stages=${stages?.length}, days=${days?.length}, sets=${sets?.length}',
+      );
       return const Center(
         child: Text(
           'NO LINEUP DATA',
@@ -90,7 +99,13 @@ class _FestivalDetailScreenState extends State<FestivalDetailScreen> {
   Widget _buildView(List<Stage> stages, List<Day> days, List<FestSet> sets) {
     switch (_view) {
       case FestDetailView.gantt:
-        return GanttView(sets: sets, stages: stages, days: days, now: widget.now, onStar: widget.onStar);
+        return GanttView(
+          sets: sets,
+          stages: stages,
+          days: days,
+          now: widget.now,
+          onStar: widget.onStar,
+        );
       case FestDetailView.dayTabs:
         return DayTabsView(
           sets: sets,
@@ -100,7 +115,12 @@ class _FestivalDetailScreenState extends State<FestivalDetailScreen> {
           onStar: widget.onStar,
         );
       case FestDetailView.stageTabs:
-        return StageTabsView(sets: sets, stages: stages, days: days, onStar: widget.onStar);
+        return StageTabsView(
+          sets: sets,
+          stages: stages,
+          days: days,
+          onStar: widget.onStar,
+        );
       case FestDetailView.filters:
         return FilterView(sets: sets, stages: stages, days: days);
       case FestDetailView.clashRadar:

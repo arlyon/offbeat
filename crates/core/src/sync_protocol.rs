@@ -6,10 +6,11 @@
 //! so we can't reuse gossip's), exchange a Yrs state vector, apply the diff, and
 //! close. Live updates keep flowing over gossip.
 //!
-//! The exchange mirrors the Festival DO's `sv_exchange` (a raw Yrs diff via
-//! [`DocManager::encode_diff`]). Peer-trust hardening — verifying that a
-//! relayed festival diff descends from the signed origin — is Phase 5 (cert
-//! chain); today, like the DO path, the diff is applied directly.
+//! Group resources exchange raw Yrs state-vector diffs. Festival resources are
+//! different: a peer can only serve the latest festival-authority-signed full
+//! checkpoint it has verified and persisted. The receiver dispatches that
+//! envelope through [`crate::sync::SyncOrchestrator`], so direct peer catch-up
+//! enforces the same signature and monotonic-sequence checks as gossip/DO sync.
 
 use std::sync::Arc;
 
@@ -51,6 +52,19 @@ impl std::fmt::Debug for SyncProtocol {
 impl SyncProtocol {
     pub fn new(doc_manager: Arc<DocManager>, db: Arc<Database>) -> Self {
         Self { doc_manager, db }
+    }
+
+    fn build_festival_checkpoint(&self, doc_id: &str) -> Vec<u8> {
+        let Ok(Some(checkpoint)) = self.db.load_latest_festival_checkpoint(doc_id, 2) else {
+            return Vec::new();
+        };
+        proto::GossipEnvelope::from_gossip_message(&GossipMessage::FestivalUpdate {
+            doc_id: checkpoint.doc_id,
+            kind: checkpoint.kind,
+            authority_seq: checkpoint.authority_seq,
+            signed_update: checkpoint.signed_update,
+        })
+        .encode_to_vec()
     }
 
     /// Serve a chat-history request: messages on `topic` that the requester is
@@ -97,6 +111,9 @@ impl ProtocolHandler for SyncProtocol {
         // the connection — the requester simply learns nothing new.
         use proto::relay_client_message::Msg;
         let response: Vec<u8> = match req.msg {
+            Some(Msg::SvExchange(sv_req)) if sv_req.doc_id.starts_with("festival/") => {
+                self.build_festival_checkpoint(&sv_req.doc_id)
+            }
             Some(Msg::SvExchange(sv_req)) => self
                 .doc_manager
                 .encode_diff(&sv_req.doc_id, &sv_req.sv)
@@ -124,6 +141,7 @@ pub struct IrohSyncPeer {
     endpoint: iroh::Endpoint,
     peer: iroh::EndpointAddr,
     doc_manager: Arc<DocManager>,
+    sync_orchestrator: Option<Arc<crate::sync::SyncOrchestrator>>,
 }
 
 impl IrohSyncPeer {
@@ -134,11 +152,13 @@ impl IrohSyncPeer {
         endpoint: iroh::Endpoint,
         peer: impl Into<iroh::EndpointAddr>,
         doc_manager: Arc<DocManager>,
+        sync_orchestrator: Option<Arc<crate::sync::SyncOrchestrator>>,
     ) -> Self {
         Self {
             endpoint,
             peer: peer.into(),
             doc_manager,
+            sync_orchestrator,
         }
     }
 }
@@ -165,7 +185,17 @@ impl crate::sync::PeerConnection for IrohSyncPeer {
 
         let diff = recv.read_to_end(MAX_RESPONSE_BYTES).await?;
         if !diff.is_empty() {
-            self.doc_manager.apply_update(doc_id, &diff)?;
+            if doc_id.starts_with("festival/") {
+                let envelope = proto::GossipEnvelope::decode(diff.as_slice())?;
+                let orchestrator = self.sync_orchestrator.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!("festival peer sync requires a sync orchestrator")
+                })?;
+                orchestrator
+                    .handle_incoming_envelope(doc_id, &envelope)
+                    .await?;
+            } else {
+                self.doc_manager.apply_update(doc_id, &diff)?;
+            }
         }
         conn.close(0u32.into(), b"done");
         Ok(())
@@ -210,7 +240,10 @@ impl crate::sync::PeerConnection for IrohSyncPeer {
 mod tests {
     use super::*;
     use crate::db::Database;
-    use crate::sync::PeerConnection;
+    use crate::notifier::ResourceNotifier;
+    use crate::resource::ResourceRegistry;
+    use crate::sync::{PeerConnection, SyncOrchestrator};
+    use std::sync::RwLock;
     use yrs::{Doc, Map, ReadTxn, StateVector, Transact};
 
     /// A relay-disabled, discovery-free endpoint bound on loopback. Peers reach
@@ -242,7 +275,13 @@ mod tests {
         (dm, db)
     }
 
-    fn chat_msg(id: &str, user: &str, text: &str, topic: &str, seq: u64) -> crate::types::ChatMessage {
+    fn chat_msg(
+        id: &str,
+        user: &str,
+        text: &str,
+        topic: &str,
+        seq: u64,
+    ) -> crate::types::ChatMessage {
         crate::types::ChatMessage {
             id: id.to_string(),
             user_id: user.to_string(),
@@ -260,7 +299,7 @@ mod tests {
     /// IrohSyncPeer sv_exchange and converging to the server's CRDT state.
     #[tokio::test]
     async fn two_node_sv_exchange_over_alpn_converges() {
-        let doc_id = "festival/fest1/state";
+        let doc_id = "group/group1/state";
 
         // Server: populated doc behind the sync protocol.
         let (server_doc, server_db) = populated_doc(doc_id);
@@ -279,7 +318,7 @@ mod tests {
         assert_eq!(client_doc.read_map_value(doc_id, "stage"), None);
 
         let sv = client_doc.get_state_vector(doc_id).unwrap();
-        let peer = IrohSyncPeer::new(client_ep.clone(), server_addr, client_doc.clone());
+        let peer = IrohSyncPeer::new(client_ep.clone(), server_addr, client_doc.clone(), None);
         peer.sv_exchange(doc_id, &sv).await.unwrap();
 
         // Converged over the actual ALPN round-trip.
@@ -287,6 +326,74 @@ mod tests {
             client_doc.read_map_value(doc_id, "stage"),
             Some("main".to_string())
         );
+
+        client_ep.close().await;
+        server_ep.close().await;
+    }
+
+    #[tokio::test]
+    async fn two_node_festival_catchup_verifies_signed_checkpoint() {
+        let doc_id = "festival/fest1/state";
+        let signing_key = crate::signing::generate_signing_key();
+        let public_key = signing_key.verifying_key().to_bytes();
+
+        let source = Doc::new();
+        let map = source.get_or_insert_map("root");
+        map.insert(&mut source.transact_mut(), "stage", "main");
+        let update = source
+            .transact()
+            .encode_state_as_update_v1(&StateVector::default());
+        let signature =
+            crate::signing::sign_festival_update(&signing_key, doc_id, 2, 7, &update).unwrap();
+
+        let server_db = Arc::new(Database::new_in_memory().unwrap());
+        server_db
+            .save_verified_festival_update(&crate::types::VerifiedFestivalUpdate {
+                doc_id: doc_id.to_string(),
+                kind: 2,
+                authority_seq: 7,
+                signed_update: crate::types::SignedUpdate {
+                    update: update.clone(),
+                    author: "festival-do".to_string(),
+                    signature,
+                },
+            })
+            .unwrap();
+        let server_doc = Arc::new(DocManager::new(server_db.clone()));
+        let server_ep = local_endpoint(vec![SYNC_ALPN.to_vec()]).await;
+        let _router = iroh::protocol::Router::builder(server_ep.clone())
+            .accept(SYNC_ALPN, SyncProtocol::new(server_doc, server_db))
+            .spawn();
+
+        let client_db = Arc::new(Database::new_in_memory().unwrap());
+        let client_doc = Arc::new(DocManager::new(client_db.clone()));
+        let chat_manager = Arc::new(crate::chat::ChatManager::new(
+            client_db.clone(),
+            client_doc.clone(),
+        ));
+        let orchestrator = Arc::new(SyncOrchestrator::new(
+            Arc::new(RwLock::new(ResourceRegistry::new())),
+            client_doc.clone(),
+            chat_manager,
+            client_db.clone(),
+            Arc::new(ResourceNotifier::new()),
+        ));
+        orchestrator.set_festival_public_key("fest1", public_key);
+        let client_ep = local_endpoint(vec![]).await;
+        let peer = IrohSyncPeer::new(
+            client_ep.clone(),
+            server_ep.addr(),
+            client_doc.clone(),
+            Some(orchestrator),
+        );
+
+        let sv = client_doc.get_state_vector(doc_id).unwrap();
+        peer.sv_exchange(doc_id, &sv).await.unwrap();
+        assert_eq!(
+            client_doc.read_map_value(doc_id, "stage").as_deref(),
+            Some("main")
+        );
+        assert_eq!(client_db.highest_verified_festival_seq(doc_id).unwrap(), 7);
 
         client_ep.close().await;
         server_ep.close().await;
@@ -303,9 +410,15 @@ mod tests {
         // Server: a DB with pre-existing chat history behind the sync protocol.
         let server_db = Arc::new(Database::new_in_memory().unwrap());
         let server_doc = Arc::new(DocManager::new(server_db.clone()));
-        server_db.save_chat_message(&chat_msg("m1", "alice", "hello", topic, 1)).unwrap();
-        server_db.save_chat_message(&chat_msg("m2", "alice", "world", topic, 2)).unwrap();
-        server_db.save_chat_message(&chat_msg("m3", "bob", "hi all", topic, 1)).unwrap();
+        server_db
+            .save_chat_message(&chat_msg("m1", "alice", "hello", topic, 1))
+            .unwrap();
+        server_db
+            .save_chat_message(&chat_msg("m2", "alice", "world", topic, 2))
+            .unwrap();
+        server_db
+            .save_chat_message(&chat_msg("m3", "bob", "hi all", topic, 1))
+            .unwrap();
 
         let server_ep = local_endpoint(vec![SYNC_ALPN.to_vec()]).await;
         let _router = iroh::protocol::Router::builder(server_ep.clone())
@@ -321,9 +434,13 @@ mod tests {
 
         // Catch up from an empty state vector — we are missing everything.
         let sv = crate::sync::ChatStateVector::new();
-        let peer = IrohSyncPeer::new(client_ep.clone(), server_addr, client_doc);
+        let peer = IrohSyncPeer::new(client_ep.clone(), server_addr, client_doc, None);
         let envelopes = peer.chat_catchup(topic, &sv, 100).await.unwrap();
-        assert_eq!(envelopes.len(), 3, "server should serve all 3 history messages");
+        assert_eq!(
+            envelopes.len(),
+            3,
+            "server should serve all 3 history messages"
+        );
 
         // The caller (orchestrator) persists the served envelopes; do that here
         // and confirm the history landed verbatim.

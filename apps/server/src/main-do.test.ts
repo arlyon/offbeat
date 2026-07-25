@@ -26,39 +26,20 @@ afterAll(async () => {
 
 describe("MainDO API", () => {
 	describe("festivals", () => {
-		it("GET /festivals returns seeded data", async () => {
+		it("GET /festivals returns the server-authoritative registry", async () => {
 			const resp = await worker.fetch("/festivals");
 			expect(resp.status).toBe(200);
-			const data = (await resp.json()) as { id: string; name: string }[];
-			expect(data.length).toBeGreaterThanOrEqual(1);
-			const fieldday = data.find((f) => f.id === "fieldday26");
-			expect(fieldday).toBeDefined();
-			expect(fieldday?.name).toBe("Field Day 2026");
+			const data = (await resp.json()) as unknown;
+			expect(Array.isArray(data)).toBe(true);
 		});
 
-		it("GET /festivals/:id returns a single festival", async () => {
-			const resp = await worker.fetch("/festivals/fieldday26");
-			expect(resp.status).toBe(200);
-			const data = (await resp.json()) as { id: string; stages: unknown[] };
-			expect(data.id).toBe("fieldday26");
-			expect(data.stages.length).toBeGreaterThan(0);
-		});
-
-		it("GET /festivals/:id/lineup returns lineup data", async () => {
-			const resp = await worker.fetch("/festivals/fieldday26/lineup");
-			expect(resp.status).toBe(200);
-			const data = (await resp.json()) as {
-				festival: { id: string };
-				stages: unknown[];
-				days: unknown[];
-				sets: unknown[];
-			};
-			expect(data.festival.id).toBe("fieldday26");
-			expect(data.stages.length).toBeGreaterThan(0);
-		});
-
-		it("GET /festivals/nonexistent returns 404", async () => {
+		it("GET /festivals/:id returns 404 for an unknown festival", async () => {
 			const resp = await worker.fetch("/festivals/nonexistent");
+			expect(resp.status).toBe(404);
+		});
+
+		it("GET /festivals/:id/lineup returns 404 for an unknown festival", async () => {
+			const resp = await worker.fetch("/festivals/nonexistent/lineup");
 			expect(resp.status).toBe(404);
 		});
 	});
@@ -149,8 +130,8 @@ describe("MainDO API", () => {
 					ed25519PublicKey: "a".repeat(64),
 				}),
 			});
-			// Will fail at WebAuthn verification, but challenge was consumed
-			expect(firstResp.status).toBe(400);
+			// DEV_BYPASS_WEBAUTHN accepts the first registration in integration tests.
+			expect(firstResp.status).toBe(200);
 
 			// Second attempt with same challenge should fail as expired
 			const secondResp = await worker.fetch("/auth/register/complete", {

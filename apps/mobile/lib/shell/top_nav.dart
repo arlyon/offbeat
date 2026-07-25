@@ -36,7 +36,8 @@ class TopNav extends StatelessWidget {
   static const _curve = Cubic(0.2, 0.7, 0.2, 1.0);
 
   /// Total connected peers: relay counts as 1, plus BLE peers.
-  int get _peerCount => (relayConnected ? 1 : 0) + (blePeerCount > 0 ? blePeerCount : 0);
+  int get _peerCount =>
+      (relayConnected ? 1 : 0) + (blePeerCount > 0 ? blePeerCount : 0);
 
   @override
   Widget build(BuildContext context) {
@@ -189,10 +190,10 @@ class TopNav extends StatelessWidget {
                                 color: syncing
                                     ? colorOk
                                     : relayConnected
-                                        ? const Color(0xFFC77DFF)
-                                        : blePeerCount > 0
-                                            ? colorCoAccent
-                                            : colorFg4,
+                                    ? const Color(0xFFC77DFF)
+                                    : blePeerCount > 0
+                                    ? colorCoAccent
+                                    : colorFg4,
                               ),
                               if (_peerCount > 0) ...[
                                 const SizedBox(width: 3),
@@ -278,4 +279,3 @@ class NavIconButton extends StatelessWidget {
     );
   }
 }
-

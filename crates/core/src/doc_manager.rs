@@ -103,7 +103,9 @@ impl DocManager {
     /// Apply a raw Yrs update to a doc and append to the update log.
     pub fn apply_update(&self, doc_id: &str, update_bytes: &[u8]) -> anyhow::Result<()> {
         let doc_arc = self.get_or_create(doc_id);
-        let doc = doc_arc.write().map_err(|_| anyhow::anyhow!("doc lock poisoned"))?;
+        let doc = doc_arc
+            .write()
+            .map_err(|_| anyhow::anyhow!("doc lock poisoned"))?;
         let update = Update::decode_v1(update_bytes)?;
         {
             let mut txn = doc.transact_mut();
@@ -124,7 +126,9 @@ impl DocManager {
     /// Encode the state vector of the given doc.
     pub fn get_state_vector(&self, doc_id: &str) -> anyhow::Result<Vec<u8>> {
         let doc_arc = self.get_or_create(doc_id);
-        let doc = doc_arc.read().map_err(|_| anyhow::anyhow!("doc lock poisoned"))?;
+        let doc = doc_arc
+            .read()
+            .map_err(|_| anyhow::anyhow!("doc lock poisoned"))?;
         let txn = doc.transact();
         Ok(txn.state_vector().encode_v1())
     }
@@ -132,7 +136,9 @@ impl DocManager {
     /// Encode a diff from the remote's state vector to this doc's current state.
     pub fn encode_diff(&self, doc_id: &str, remote_sv_bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
         let doc_arc = self.get_or_create(doc_id);
-        let doc = doc_arc.read().map_err(|_| anyhow::anyhow!("doc lock poisoned"))?;
+        let doc = doc_arc
+            .read()
+            .map_err(|_| anyhow::anyhow!("doc lock poisoned"))?;
         let remote_sv = StateVector::decode_v1(remote_sv_bytes)?;
         let txn = doc.transact();
         Ok(txn.encode_state_as_update_v1(&remote_sv))
@@ -141,7 +147,9 @@ impl DocManager {
     /// Encode the full doc state as a single update (from empty state vector).
     pub fn encode_full_state(&self, doc_id: &str) -> anyhow::Result<Vec<u8>> {
         let doc_arc = self.get_or_create(doc_id);
-        let doc = doc_arc.read().map_err(|_| anyhow::anyhow!("doc lock poisoned"))?;
+        let doc = doc_arc
+            .read()
+            .map_err(|_| anyhow::anyhow!("doc lock poisoned"))?;
         let txn = doc.transact();
         Ok(txn.encode_state_as_update_v1(&StateVector::default()))
     }
@@ -149,7 +157,9 @@ impl DocManager {
     /// Compact all updates for a doc into a single blob.
     pub fn compact(&self, doc_id: &str) -> anyhow::Result<()> {
         let doc_arc = self.get_or_create(doc_id);
-        let doc = doc_arc.read().map_err(|_| anyhow::anyhow!("doc lock poisoned"))?;
+        let doc = doc_arc
+            .read()
+            .map_err(|_| anyhow::anyhow!("doc lock poisoned"))?;
         let txn = doc.transact();
         let full_state = txn.encode_state_as_update_v1(&StateVector::default());
         drop(txn);
@@ -162,7 +172,9 @@ impl DocManager {
     /// Persist the full doc state to the `docs` table (for fast boot loading).
     pub fn persist(&self, doc_id: &str) -> anyhow::Result<()> {
         let doc_arc = self.get_or_create(doc_id);
-        let doc = doc_arc.read().map_err(|_| anyhow::anyhow!("doc lock poisoned"))?;
+        let doc = doc_arc
+            .read()
+            .map_err(|_| anyhow::anyhow!("doc lock poisoned"))?;
         let txn = doc.transact();
         let full_update = txn.encode_state_as_update_v1(&StateVector::default());
         self.db.save_doc(doc_id, "yrs", &full_update)?;
@@ -268,6 +280,49 @@ impl DocManager {
             anyhow::bail!("invalid signature on update from author {}", signed.author);
         }
         self.apply_update(doc_id, &signed.update)
+    }
+
+    /// Verify, apply, and retain an authority-signed festival checkpoint or delta.
+    pub fn apply_signed_festival_update(
+        &self,
+        doc_id: &str,
+        kind: i32,
+        authority_seq: u64,
+        signed: &SignedUpdate,
+        public_key: &[u8; 32],
+    ) -> anyhow::Result<()> {
+        if !matches!(kind, 1 | 2) {
+            anyhow::bail!("invalid festival update kind {kind}");
+        }
+        if authority_seq == 0 {
+            anyhow::bail!("festival authority sequence must be positive");
+        }
+        let highest = self.db.highest_verified_festival_seq(doc_id)?;
+        if authority_seq < highest {
+            anyhow::bail!(
+                "festival authority sequence rollback for {doc_id}: {authority_seq} < {highest}"
+            );
+        }
+        if !signing::verify_festival_update(
+            public_key,
+            doc_id,
+            kind,
+            authority_seq,
+            &signed.update,
+            &signed.signature,
+        ) {
+            anyhow::bail!("invalid festival authority signature for doc {doc_id}");
+        }
+
+        self.apply_update(doc_id, &signed.update)?;
+        self.db
+            .save_verified_festival_update(&crate::types::VerifiedFestivalUpdate {
+                doc_id: doc_id.to_string(),
+                kind,
+                authority_seq,
+                signed_update: signed.clone(),
+            })?;
+        Ok(())
     }
 
     /// Read a string value from the doc's root map.
@@ -398,11 +453,7 @@ impl DocManager {
     }
 
     /// Encrypt a raw update with the group key.
-    pub fn encrypt_update(
-        &self,
-        update: &[u8],
-        group_key: &[u8; 32],
-    ) -> anyhow::Result<Vec<u8>> {
+    pub fn encrypt_update(&self, update: &[u8], group_key: &[u8; 32]) -> anyhow::Result<Vec<u8>> {
         crypto::encrypt(group_key, update)
     }
 
@@ -486,10 +537,7 @@ pub fn read_map_entries(
 }
 
 /// Read all fields from a YMap entry, collecting Any values into a HashMap.
-pub fn read_map_entry_fields(
-    map: &MapRef,
-    txn: &yrs::Transaction,
-) -> Option<HashMap<String, Any>> {
+pub fn read_map_entry_fields(map: &MapRef, txn: &yrs::Transaction) -> Option<HashMap<String, Any>> {
     let mut fields = HashMap::new();
     for (k, v) in map.iter(txn) {
         if let Out::Any(a) = v {
@@ -582,7 +630,8 @@ mod tests {
         let mgr = DocManager::new(db.clone());
 
         for i in 0..5 {
-            mgr.set_map_value("doc1", &format!("k{i}"), &format!("v{i}")).unwrap();
+            mgr.set_map_value("doc1", &format!("k{i}"), &format!("v{i}"))
+                .unwrap();
         }
 
         assert_eq!(db.count_doc_updates("doc1").unwrap(), 5);
@@ -623,7 +672,8 @@ mod tests {
             signature: sig_bytes,
         };
 
-        mgr.apply_signed_update("doc1", &signed, &public_key).unwrap();
+        mgr.apply_signed_update("doc1", &signed, &public_key)
+            .unwrap();
         let val = mgr.read_map_value("doc1", "event");
         assert_eq!(val, Some("main stage".to_string()));
     }
@@ -658,6 +708,53 @@ mod tests {
     }
 
     #[test]
+    fn signed_festival_checkpoint_persists_and_rejects_rollback() {
+        let db = test_db();
+        let mgr = DocManager::new(db.clone());
+        let signing_key = signing::generate_signing_key();
+        let public_key = signing_key.verifying_key().to_bytes();
+        let doc_id = "festival/test/state";
+
+        let source = Doc::new();
+        let map = source.get_or_insert_map("root");
+        map.insert(&mut source.transact_mut(), "artist", "Autechre");
+        let update = source
+            .transact()
+            .encode_state_as_update_v1(&StateVector::default());
+        let signature = signing::sign_festival_update(&signing_key, doc_id, 2, 4, &update).unwrap();
+        let signed = SignedUpdate {
+            update,
+            author: "festival-do".to_string(),
+            signature,
+        };
+
+        mgr.apply_signed_festival_update(doc_id, 2, 4, &signed, &public_key)
+            .unwrap();
+        assert_eq!(
+            mgr.read_map_value(doc_id, "artist").as_deref(),
+            Some("Autechre")
+        );
+        assert_eq!(db.highest_verified_festival_seq(doc_id).unwrap(), 4);
+        let checkpoint = db
+            .load_latest_festival_checkpoint(doc_id, 2)
+            .unwrap()
+            .unwrap();
+        assert_eq!(checkpoint.authority_seq, 4);
+
+        let rollback_signature =
+            signing::sign_festival_update(&signing_key, doc_id, 1, 3, &signed.update).unwrap();
+        let rollback = SignedUpdate {
+            update: signed.update.clone(),
+            author: "festival-do".to_string(),
+            signature: rollback_signature,
+        };
+        assert!(
+            mgr.apply_signed_festival_update(doc_id, 1, 3, &rollback, &public_key)
+                .is_err()
+        );
+    }
+
+    #[test]
     fn test_encrypt_decrypt_update_roundtrip() {
         let db = test_db();
         let mgr_a = DocManager::new(db.clone());
@@ -665,10 +762,14 @@ mod tests {
 
         let group_key = crypto::generate_group_key();
 
-        let update = mgr_a.set_map_value("shared-doc", "campsite", "field-B").unwrap();
+        let update = mgr_a
+            .set_map_value("shared-doc", "campsite", "field-B")
+            .unwrap();
         let encrypted = mgr_a.encrypt_update(&update, &group_key).unwrap();
 
-        mgr_b.apply_encrypted_update("shared-doc", &encrypted, &group_key).unwrap();
+        mgr_b
+            .apply_encrypted_update("shared-doc", &encrypted, &group_key)
+            .unwrap();
 
         let val = mgr_b.read_map_value("shared-doc", "campsite");
         assert_eq!(val, Some("field-B".to_string()));
@@ -701,8 +802,14 @@ mod tests {
         let diff = mgr_a.encode_diff("sync-doc", &sv_b).unwrap();
         mgr_b.apply_update("sync-doc", &diff).unwrap();
 
-        assert_eq!(mgr_b.read_map_value("sync-doc", "key1"), Some("val1".to_string()));
-        assert_eq!(mgr_b.read_map_value("sync-doc", "key2"), Some("val2".to_string()));
+        assert_eq!(
+            mgr_b.read_map_value("sync-doc", "key1"),
+            Some("val1".to_string())
+        );
+        assert_eq!(
+            mgr_b.read_map_value("sync-doc", "key2"),
+            Some("val2".to_string())
+        );
     }
 
     #[test]
@@ -863,10 +970,7 @@ mod tests {
             .unwrap();
         assert_eq!(any_str(&alice, "displayName"), Some("Alice".to_string()));
         assert_eq!(any_str(&alice, "status"), Some("active".to_string()));
-        assert_eq!(
-            any_str(&alice, "stageId"),
-            Some("main-stage".to_string())
-        );
+        assert_eq!(any_str(&alice, "stageId"), Some("main-stage".to_string()));
     }
 
     #[test]
@@ -881,7 +985,8 @@ mod tests {
                 let mgr = mgr.clone();
                 thread::spawn(move || {
                     let doc_id = format!("doc-{i}");
-                    mgr.set_map_value(&doc_id, "key", &format!("val-{i}")).unwrap();
+                    mgr.set_map_value(&doc_id, "key", &format!("val-{i}"))
+                        .unwrap();
                     let val = mgr.read_map_value(&doc_id, "key");
                     assert_eq!(val, Some(format!("val-{i}")));
                 })
@@ -910,11 +1015,7 @@ mod tests {
             _ => {
                 // Insert a new empty map via MapPrelim.
                 let empty: [(&str, &str); 0] = [];
-                root.insert(
-                    &mut txn,
-                    "peers",
-                    yrs::MapPrelim::from(empty),
-                );
+                root.insert(&mut txn, "peers", yrs::MapPrelim::from(empty));
                 match root.get(&txn, "peers") {
                     Some(Out::YMap(map_ref)) => map_ref,
                     _ => panic!("failed to create peers map"),
@@ -933,8 +1034,7 @@ mod tests {
         let mgr = DocManager::new(db);
 
         let peer_json_a = r#"{"relay_url":"https://relay.example.com","last_seen":1700000000,"user_id":"user-a"}"#;
-        let peer_json_b =
-            r#"{"relay_url":null,"last_seen":1700001000,"user_id":"user-b"}"#;
+        let peer_json_b = r#"{"relay_url":null,"last_seen":1700001000,"user_id":"user-b"}"#;
 
         insert_peer_entries(
             &mgr,
@@ -979,8 +1079,7 @@ mod tests {
         let db = test_db();
         let mgr = DocManager::new(db);
 
-        let good_json =
-            r#"{"relay_url":null,"last_seen":1700000000,"user_id":"good-user"}"#;
+        let good_json = r#"{"relay_url":null,"last_seen":1700000000,"user_id":"good-user"}"#;
         let bad_json = r#"{"not_valid": true}"#; // missing required fields
 
         let good_id: &str = &"ee".repeat(32);

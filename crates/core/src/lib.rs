@@ -40,7 +40,7 @@ use gossip_manager::GossipManager;
 use groups::GroupManager;
 use iroh::endpoint::presets;
 use iroh_ble_transport::BleTransport;
-use iroh_gossip::net::{Gossip, GOSSIP_ALPN};
+use iroh_gossip::net::{GOSSIP_ALPN, Gossip};
 use notifier::ResourceNotifier;
 use resource::ResourceRegistry;
 use sync::SyncOrchestrator;
@@ -209,7 +209,10 @@ impl OffbeatNode {
 
         let mut builder = iroh::Endpoint::builder(presets::N0)
             .secret_key(secret_key)
-            .alpns(vec![GOSSIP_ALPN.to_vec(), sync_protocol::SYNC_ALPN.to_vec()]);
+            .alpns(vec![
+                GOSSIP_ALPN.to_vec(),
+                sync_protocol::SYNC_ALPN.to_vec(),
+            ]);
 
         if let Some(ref ble) = ble_transport {
             builder = builder
@@ -259,7 +262,8 @@ impl OffbeatNode {
         let gossip_manager = Arc::new(Mutex::new(GossipManager::new(gossip.clone())));
 
         // Wire gossip manager into sync orchestrator for neighbor counts
-        let so_mut = Arc::get_mut(&mut sync_orchestrator).expect("sync_orchestrator not yet shared");
+        let so_mut =
+            Arc::get_mut(&mut sync_orchestrator).expect("sync_orchestrator not yet shared");
         so_mut.set_gossip_manager(gossip_manager.clone());
         so_mut.set_connection_manager(connection_manager.clone());
 
@@ -301,8 +305,10 @@ impl OffbeatNode {
         let so = self.sync_orchestrator.clone();
         let endpoint = self.endpoint.clone();
         let dm = self.doc_manager.clone();
-        handles.extend(ble_sync::spawn_ble_connection_tasks(ble, gm, cm, so, endpoint, dm));
-        
+        handles.extend(ble_sync::spawn_ble_connection_tasks(
+            ble, gm, cm, so, endpoint, dm,
+        ));
+
         handles
     }
 }

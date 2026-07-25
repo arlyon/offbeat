@@ -33,7 +33,10 @@ pub fn generate_or_load_identity(db: &Database) -> anyhow::Result<SigningKey> {
 /// Uses HKDF-SHA256 to derive a 32-byte Ed25519 seed from the PRF output.
 /// Same PRF output always produces the same key — deterministic identity
 /// recovery across devices.
-pub fn derive_identity_from_prf(db: &Database, prf_output: &[u8; 32]) -> anyhow::Result<SigningKey> {
+pub fn derive_identity_from_prf(
+    db: &Database,
+    prf_output: &[u8; 32],
+) -> anyhow::Result<SigningKey> {
     let hk = Hkdf::<Sha256>::new(Some(b"offbeat"), prf_output);
     let mut seed = [0u8; 32];
     hk.expand(b"ed25519-identity", &mut seed)
@@ -65,10 +68,7 @@ pub fn get_device_id(db: &Database) -> anyhow::Result<String> {
 /// prefix that is unique enough for local use.
 pub fn get_user_id(signing_key: &SigningKey) -> String {
     let vk_bytes = signing_key.verifying_key().to_bytes();
-    vk_bytes[..8]
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    vk_bytes[..8].iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Return the full hex-encoded Ed25519 public key (64 chars).
@@ -255,10 +255,7 @@ mod tests {
         assert_eq!(get_display_name(&db).unwrap(), Some("Alice".to_string()));
 
         set_display_name(&db, "Alice B.").unwrap();
-        assert_eq!(
-            get_display_name(&db).unwrap(),
-            Some("Alice B.".to_string())
-        );
+        assert_eq!(get_display_name(&db).unwrap(), Some("Alice B.".to_string()));
     }
 
     #[test]
@@ -344,7 +341,10 @@ mod tests {
             issuer: "bb".to_string(),
         };
         store_attestation(&db, &att).unwrap();
-        assert!(matches!(attestation_state(&db).unwrap(), AuthState::Expiring(3)));
+        assert!(matches!(
+            attestation_state(&db).unwrap(),
+            AuthState::Expiring(3)
+        ));
     }
 
     #[test]

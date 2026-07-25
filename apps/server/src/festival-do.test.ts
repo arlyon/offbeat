@@ -1,6 +1,7 @@
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
 import { ed25519 } from "@noble/curves/ed25519.js";
 import {
+	FestivalUpdateKind,
 	GossipEnvelopeSchema,
 	RelayClientMessageSchema,
 	RelayServerMessageSchema,
@@ -8,6 +9,7 @@ import {
 import { type Unstable_DevWorker, unstable_dev } from "wrangler";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import * as Y from "yjs";
+import { festivalUpdateSigningPayload } from "./signing";
 
 let worker: Unstable_DevWorker;
 let workerUrl: string;
@@ -425,29 +427,42 @@ describe("FestivalDO lane split", () => {
 		});
 	});
 
-	describe("svExchange with in-memory doc", () => {
-		it("returns svDiff from in-memory doc without disk reads", async () => {
+	describe("svExchange with signed checkpoints", () => {
+		it("returns an authority-signed checkpoint through the gossip path", async () => {
 			const ws = await connectWS(FESTIVAL_ID);
 			await drainMessages(ws);
+			const docId = `festival/${FESTIVAL_ID}/state`;
+			const sv = Y.encodeStateVector(new Y.Doc());
+			const publicKeyHex = await (await worker.fetch(`/festivals/${FESTIVAL_ID}/public-key`)).text();
 
-			// Create an empty Yrs doc and get its state vector
-			const clientDoc = new Y.Doc();
-			const sv = Y.encodeStateVector(clientDoc);
-
-			const diffPromise = waitForMsg(ws, "svDiff");
+			const checkpointPromise = waitForMsg(ws, "gossip");
 			sendClientMsg(ws, {
-				msg: {
-					case: "svExchange",
-					value: { docId: `festival/${FESTIVAL_ID}/state`, sv },
-				},
+				msg: { case: "svExchange", value: { docId, sv } },
 			});
 
-			const diff = await diffPromise;
-			expect(diff.msg.case).toBe("svDiff");
-			if (diff.msg.case === "svDiff") {
-				expect(diff.msg.value.docId).toBe(`festival/${FESTIVAL_ID}/state`);
-				// diff should be valid Yrs update bytes (may be empty if no server doc)
-				expect(diff.msg.value.diff).toBeInstanceOf(Uint8Array);
+			const response = await checkpointPromise;
+			expect(response.msg.case).toBe("gossip");
+			if (response.msg.case === "gossip") {
+				const festival = response.msg.value.message?.payload;
+				expect(festival?.case).toBe("festivalUpdate");
+				if (festival?.case === "festivalUpdate") {
+					expect(festival.value.docId).toBe(docId);
+					expect(festival.value.kind).toBe(FestivalUpdateKind.CHECKPOINT);
+					expect(festival.value.authoritySeq).toBeGreaterThan(0n);
+					const signed = festival.value.signedUpdate;
+					expect(signed).toBeDefined();
+					if (signed) {
+						const payload = festivalUpdateSigningPayload(
+							docId,
+							festival.value.kind,
+							festival.value.authoritySeq,
+							signed.update,
+						);
+						expect(ed25519.verify(signed.signature, payload, hexToBytes(publicKeyHex))).toBe(
+							true,
+						);
+					}
+				}
 			}
 
 			ws.close();

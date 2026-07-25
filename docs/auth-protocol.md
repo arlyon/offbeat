@@ -1,8 +1,10 @@
 # Auth & Identity Protocol
 
-This document describes the identity, authentication, and message signing
-protocol used across all offbeat transports. It supersedes the "Future
-work" section of `admin-protocol.md`.
+> **Status: proposed.** Passkey/session behaviour and group-key possession are the intended model. The exact offline MainDO-attestation policy for public chat remains an explicit decision in `execution-plan.md`.
+
+This document describes the identity, authentication, and message-signing
+protocol proposed across Offbeat transports. It supersedes the "Future
+work" section of `admin-protocol.md` where the implementation adopts it.
 
 ---
 
@@ -15,29 +17,42 @@ work" section of `admin-protocol.md`.
 4. **Group trust = key possession** — all group traffic (chat, CRDTs,
    check-ins) is authenticated by AES-256-GCM encryption alone. If you
    have the group key, you're trusted. No per-message signatures.
-5. **Public channel signing** — Ed25519 per-message signatures on
-   public/festival traffic only (stage chat, festival updates)
-6. **Session-level access control** — expensive auth checks happen once
+5. **Public-chat signing** — attendee Ed25519 signatures prove authorship
+   for public stage/general/campsite messages
+6. **Festival authority** — festival state has a separate organiser/DO
+   signing key and is never authorised by an attendee attestation
+7. **Session-level access control** — expensive auth checks happen once
    per connection, not per message
 
 ---
 
 ## Trust Layers
 
-Two trust domains with different guarantees:
+Three trust domains have different guarantees:
 
-### Public traffic (festival/stage chat, festival updates)
+### Public attendee chat
 
 | Layer | Question it answers | Cost | Where checked |
 |-------|---------------------|------|---------------|
-| WebAuthn attestation | "Is this a real person?" | Once, on registration | MainDO |
+| WebAuthn/MainDO attestation | "Was this key registered?" | Once per attestation lifetime | MainDO and peers with trusted MainDO keys |
 | Session authentication | "Can this connection write?" | Once per session | DO or peer handshake |
-| Ed25519 per-message signature | "Who authored this message?" | Per message (~60μs sign, ~200μs verify) | Every receiver |
+| Ed25519 message signature | "Which key authored this message?" | Per message | Every receiver |
 
-Per-message signatures prevent a compromised relay or malicious peer
-from forging messages. Ed25519 sign/verify is fast enough that the
-overhead is negligible. The 64-byte signature is the minimum viable
-size — Ed25519 signatures cannot be meaningfully truncated.
+A valid Ed25519 signature proves authorship, not registration or organiser
+authority. The accepted offline policy must define how missing/expired
+attestations affect trust display and relay behaviour. The 64-byte
+signature cannot be meaningfully truncated.
+
+### Festival state
+
+| Layer | Question it answers | Where checked |
+|-------|---------------------|---------------|
+| Festival authority certificate/key | "Which key may update this festival?" | Trusted festival metadata |
+| Ed25519 update signature | "Did that authority author these bytes?" | Every receiver before apply |
+
+Attendee identity and MainDO registration never authorise a lineup,
+cancellation, or festival announcement. Relays may transport signed
+festival state but cannot create it.
 
 ### Group traffic (chat, CRDTs, check-ins, presence)
 
@@ -115,17 +130,21 @@ App                              MainDO
 2. `POST /auth/register/complete` — verify the attestation response.
    The client also sends the Ed25519 public key it derived from PRF.
    Store in the `credentials` table:
+
    ```sql
    INSERT INTO credentials (id, user_id, public_key, credential_data, created_at)
    VALUES (?, ?, ?, ?, datetime('now'));
    ```
+
    The `public_key` column stores the Ed25519 public key (hex).
 
 3. Issue a signed **attestation** — proof that this Ed25519 public key
    was registered via WebAuthn:
+
    ```
    MainDO signs: "attestation:v1:<pubkey_hex>:<issued_at_unix>:<expires_at_unix>"
    ```
+
    The attestation is a portable certificate. The client stores it
    locally and presents it when connecting to any Festival DO or peer.
 
@@ -219,6 +238,7 @@ The existing WS protocol adds an `auth` message type:
 ```
 
 The DO:
+
 1. Verifies the attestation signature against MainDO's well-known
    public key
 2. Checks expiry (with grace period)
@@ -226,10 +246,12 @@ The DO:
 4. Sets `session.authenticated = true` and `session.publicKey = ...`
 
 **After auth:**
+
 - `subscribe`, `catchup` — always allowed (no auth needed)
 - `gossip` (write) — requires `session.authenticated == true`
 
 Unauthenticated clients can read freely. Writes without auth return:
+
 ```json
 { "type": "error", "message": "auth required for writes" }
 ```
@@ -328,6 +350,7 @@ Per-message overhead: **65B** (1B index + 64B signature).
 Per-sender overhead: **96B** (32B key + 64B attestation sig), once.
 
 For a batch of 20 messages from 5 senders:
+
 - Tier 1: 20 × 96B = 1,920B
 - Tier 2: 20 × 160B = 3,200B
 - Tier 3: 5 × 96B + 20 × 65B = 480B + 1,300B = **1,780B**
@@ -429,6 +452,7 @@ CREATE TABLE friends (
 ```
 
 `known_keys` is populated automatically from:
+
 - **Group membership**: when joining a group, all member keys are added
   (source: `group`)
 - **Direct attestation exchange**: P2P handshake or tier 2/3 messages
@@ -519,15 +543,18 @@ fn verify_group_message(msg: &[u8], group_key: &[u8; 32]) -> Option<Vec<u8>> {
 ### System-wide totals (72 hours)
 
 **Stage chat (dominant cost):**
+
 - 1 msg/min × 60 min × 15 hrs/day × 3 days × 10 stages = 27,000 msgs
 - Per message fanned out to 1000 subscribers = 27M deliveries
 - DO egress: 27,000 × 196B × 1,000 = **5.1GB**
 - Auth portion of egress: 27,000 × 96B × 1,000 = **2.5GB** (49%)
 
 **Per-user ingress (subscribed to 2 stages at a time):**
+
 - ~4.4MB over 72 hours — negligible
 
 **Group traffic (per group of 5):**
+
 - ~7KB total over 72 hours — negligible
 - No signature overhead — just GCM encryption
 
@@ -622,6 +649,7 @@ prompts them:
 > "This festival has no admin yet. Would you like to become the admin?"
 
 If accepted:
+
 1. The app calls `PUT /festivals/:id/admins` with the user's Ed25519
    public key
 2. Since the admins table is empty, the first registration is accepted

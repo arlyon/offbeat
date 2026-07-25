@@ -1,5 +1,7 @@
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 
+const FESTIVAL_UPDATE_DOMAIN: &[u8] = b"offbeat/festival-update/v1\0";
+
 /// Generate a new random Ed25519 signing key.
 pub fn generate_signing_key() -> SigningKey {
     let mut seed = [0u8; 32];
@@ -23,6 +25,63 @@ pub fn verify(public_key_bytes: &[u8; 32], data: &[u8], signature_bytes: &[u8]) 
     };
     let signature = Signature::from_bytes(&sig_array);
     verifying_key.verify(data, &signature).is_ok()
+}
+
+/// Canonical bytes signed by the festival authority for a checkpoint or delta.
+///
+/// Binding the document, representation kind, and authority sequence prevents a
+/// valid update from being replayed under another festival or envelope type.
+pub fn festival_update_signing_payload(
+    doc_id: &str,
+    kind: i32,
+    authority_seq: u64,
+    update: &[u8],
+) -> anyhow::Result<Vec<u8>> {
+    if !matches!(kind, 1 | 2) {
+        anyhow::bail!("invalid festival update kind {kind}");
+    }
+    let doc_id = doc_id.as_bytes();
+    let doc_len = u16::try_from(doc_id.len())
+        .map_err(|_| anyhow::anyhow!("festival document ID is too long"))?;
+    let update_len =
+        u32::try_from(update.len()).map_err(|_| anyhow::anyhow!("festival update is too large"))?;
+
+    let mut payload = Vec::with_capacity(
+        FESTIVAL_UPDATE_DOMAIN.len() + 2 + doc_id.len() + 1 + 8 + 4 + update.len(),
+    );
+    payload.extend_from_slice(FESTIVAL_UPDATE_DOMAIN);
+    payload.extend_from_slice(&doc_len.to_be_bytes());
+    payload.extend_from_slice(doc_id);
+    payload.push(kind as u8);
+    payload.extend_from_slice(&authority_seq.to_be_bytes());
+    payload.extend_from_slice(&update_len.to_be_bytes());
+    payload.extend_from_slice(update);
+    Ok(payload)
+}
+
+pub fn sign_festival_update(
+    signing_key: &SigningKey,
+    doc_id: &str,
+    kind: i32,
+    authority_seq: u64,
+    update: &[u8],
+) -> anyhow::Result<Vec<u8>> {
+    Ok(sign(
+        signing_key,
+        &festival_update_signing_payload(doc_id, kind, authority_seq, update)?,
+    ))
+}
+
+pub fn verify_festival_update(
+    public_key_bytes: &[u8; 32],
+    doc_id: &str,
+    kind: i32,
+    authority_seq: u64,
+    update: &[u8],
+    signature_bytes: &[u8],
+) -> bool {
+    festival_update_signing_payload(doc_id, kind, authority_seq, update)
+        .is_ok_and(|payload| verify(public_key_bytes, &payload, signature_bytes))
 }
 
 #[cfg(test)]
@@ -54,5 +113,46 @@ mod tests {
         let data = b"test message";
         let sig = sign(&key, data);
         assert!(!verify(&wrong_public, data, &sig));
+    }
+
+    #[test]
+    fn festival_signature_binds_context() {
+        let key = generate_signing_key();
+        let public_key = key.verifying_key().to_bytes();
+        let update = b"yrs-update";
+        let signature = sign_festival_update(&key, "festival/a/state", 2, 7, update).unwrap();
+
+        assert!(verify_festival_update(
+            &public_key,
+            "festival/a/state",
+            2,
+            7,
+            update,
+            &signature,
+        ));
+        assert!(!verify_festival_update(
+            &public_key,
+            "festival/b/state",
+            2,
+            7,
+            update,
+            &signature,
+        ));
+        assert!(!verify_festival_update(
+            &public_key,
+            "festival/a/state",
+            1,
+            7,
+            update,
+            &signature,
+        ));
+        assert!(!verify_festival_update(
+            &public_key,
+            "festival/a/state",
+            2,
+            8,
+            update,
+            &signature,
+        ));
     }
 }

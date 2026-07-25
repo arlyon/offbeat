@@ -30,6 +30,7 @@ Ed25519 key pairs for identity and request signing.
 ```
 
 Two levels of admin:
+
 - **Global admins** (MainDO) -- can create festivals, manage lineup data
 - **Festival admins** (FestivalDO) -- can export signing keys, push signed
   updates. Global admins are automatically synced here.
@@ -66,6 +67,7 @@ Festival DO endpoints use **fixed challenge strings** instead of the
 path (see section 5).
 
 **Verification flow:**
+
 1. Look up `X-Admin-Key` in the `admins` table
 2. If not found: **403 Forbidden**
 3. Verify the signature: `ed25519.verify(sig, message, pubkey)`
@@ -224,69 +226,23 @@ Replaces the entire lineup (stages, days, sets).
 
 ---
 
-## 6. Exporting the Festival Signing Key
+## 6. Festival Authority Key
 
-Each Festival DO generates a stable Ed25519 keypair on first boot. The
-public key is available to anyone:
+Each Festival DO generates a stable Ed25519 authority keypair on first boot. The public key is available to clients and must be pinned through trusted festival metadata:
 
 ```
 GET /festivals/:id/public-key
 ```
 
-**Response:** 64-char hex public key (plain text).
+**Response:** 64-character hex public key (plain text).
 
-An admin can export the **secret** key to sign updates offline:
-
-```
-POST /festivals/:id/signing-key
-Content-Type: application/json
-
-{
-  "publicKey": "<admin pubkey hex>",
-  "signature": "<hex sig over the string 'export-signing-key'>"
-}
-```
-
-**Response:** 64-char hex secret key (plain text, 200).
-
-The exported key allows an admin to sign updates locally and gossip them
-through any channel (WS relay, P2P, BLE). Any peer can verify against
-the public key from `GET /public-key`.
+The current protocol treats the Festival DO as the sequence authority. Administrative clients authenticate mutation requests; they do not send `FestivalUpdate` envelopes through gossip. The legacy `POST /festivals/:id/signing-key` export endpoint still exists, but it is not part of the supported sync path: an offline signer cannot safely allocate the DO's monotonic authority sequence or update its canonical checkpoint. Do not build new clients around exported authority secrets.
 
 ---
 
-## 7. Submitting Signed Updates
+## 7. Submitting Authoritative Updates
 
-### Option A: Admin signs locally (offline-capable)
-
-1. Export the signing key (section 6)
-2. Create a Yrs CRDT update
-3. Sign the raw update bytes with the exported key
-4. Construct a `festival_update` gossip wire message:
-   ```json
-   {
-     "kind": "festival_update",
-     "doc_id": "festival/<id>",
-     "payload": "<JSON string of SignedUpdate>",
-     "group_key_id": null
-   }
-   ```
-   where `SignedUpdate` is:
-   ```json
-   {
-     "update": "<base64 Yrs update bytes>",
-     "author": "festival-organiser",
-     "signature": "<base64 Ed25519 signature>"
-   }
-   ```
-5. Send via WebSocket gossip:
-   ```json
-   { "type": "gossip", "topic": "festival/<id>/state", "message": <wire> }
-   ```
-
-Peers verify the signature against the DO's public key before applying.
-
-### Option B: DO signs on behalf of admin (online)
+An admin sends a Yrs mutation to the Festival DO:
 
 ```
 POST /festivals/:id/sign-update
@@ -295,18 +251,23 @@ Content-Type: application/json
 {
   "publicKey": "<admin pubkey hex>",
   "signature": "<hex sig over 'sign-update:<docId>'>",
-  "docId": "festival/<id>",
+  "docId": "festival/<id>/state",
   "topic": "festival/<id>/state",
   "update": "<base64 Yrs update bytes>"
 }
 ```
 
 The DO:
-1. Verifies admin identity
-2. Signs the update with its own key
-3. Stores in `gossip_log` (assigned a sequence number)
-4. Broadcasts to all connected WS subscribers
-5. Returns `{ seq, signedUpdate, publicKey }`
+
+1. verifies the admin identity and requires `docId` to equal the festival state topic;
+2. applies the Yrs mutation to its canonical festival document;
+3. allocates the next monotonic `authoritySeq`;
+4. signs a live delta and the resulting full checkpoint;
+5. persists both verified envelopes, retaining the latest checkpoint and bounded recent deltas;
+6. broadcasts the signed delta to subscribers; and
+7. returns `{ docId, kind, authoritySeq, signedUpdate, publicKey }`.
+
+The signature covers the protocol domain separator, document ID, update kind (`DELTA = 1`, `CHECKPOINT = 2`), authority sequence, and Yrs update bytes. Client-authored `FestivalUpdate` gossip messages are rejected by the Festival DO rather than relayed or stored.
 
 ---
 
@@ -328,18 +289,16 @@ propagate automatically.
 
 ## 9. Verification on the Client
 
-When a client receives a `festival_update` message (via gossip or
-catchup), it:
+When a client receives a protobuf `FestivalUpdate` through the DO, gossip, or direct peer catch-up, it:
 
-1. Fetches the festival's public key (`GET /public-key` or cached)
-2. Extracts the `SignedUpdate` from the wire message payload
-3. Base64-decodes the `update` and `signature` fields
-4. Calls `ed25519.verify(publicKey, updateBytes, signatureBytes)`
-5. If valid: applies the Yrs update to the local document
-6. If invalid: discards silently (the DO is a dumb relay)
+1. resolves the pinned festival authority public key;
+2. requires a known update kind and a positive, non-rollback authority sequence;
+3. reconstructs the canonical signed bytes from the domain separator, document ID, kind, sequence, and update bytes;
+4. verifies the Ed25519 signature before Yrs apply;
+5. applies and persists the verified envelope idempotently; and
+6. retains verified checkpoints so it can later serve the same signed authority envelope to a peer.
 
-The DO does **not** verify signatures on gossip messages it relays. It
-stores and broadcasts everything. Verification is always client-side.
+An unknown authority, malformed envelope, invalid signature, rollback, or legacy unsigned `svDiff` is rejected. A peer may replay a verified envelope, but it may never generate a trusted state-vector diff itself. The DO also rejects client-authored festival envelopes; clients still verify independently because relays are not trust roots.
 
 ---
 

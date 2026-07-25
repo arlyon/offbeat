@@ -17,6 +17,14 @@ message GossipEnvelope {
 message FestivalUpdate {
   string doc_id = 1;
   SignedUpdate signed_update = 2;
+  FestivalUpdateKind kind = 3;
+  uint64 authority_seq = 4;
+}
+
+enum FestivalUpdateKind {
+  FESTIVAL_UPDATE_KIND_UNSPECIFIED = 0;
+  FESTIVAL_UPDATE_KIND_DELTA = 1;
+  FESTIVAL_UPDATE_KIND_CHECKPOINT = 2;
 }
 
 message GroupUpdate {

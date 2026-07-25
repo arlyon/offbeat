@@ -167,7 +167,8 @@ class _ScanSheetState extends State<ScanSheet> {
     const margin = 18.0;
 
     Widget corner(Alignment align) {
-      final isLeft = align == Alignment.topLeft || align == Alignment.bottomLeft;
+      final isLeft =
+          align == Alignment.topLeft || align == Alignment.bottomLeft;
       final isTop = align == Alignment.topLeft || align == Alignment.topRight;
       return Positioned(
         left: isLeft ? margin : null,

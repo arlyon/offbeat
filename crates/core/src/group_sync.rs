@@ -60,7 +60,11 @@ pub fn find_shared_groups(
 
     for (group_id, key) in local_groups {
         let local_token = compute_handshake_token(key, nonce);
-        if remote.tokens.iter().any(|t| t.as_slice() == local_token.as_slice()) {
+        if remote
+            .tokens
+            .iter()
+            .any(|t| t.as_slice() == local_token.as_slice())
+        {
             shared.push((group_id.clone(), *key));
         }
     }
@@ -179,9 +183,8 @@ mod tests {
     #[test]
     fn test_no_shared_groups() {
         let a_keys = [test_key(), test_key()];
-        let b_groups: Vec<(String, [u8; 32])> = vec![
-            (crypto::group_id_from_key(&test_key()), test_key()),
-        ];
+        let b_groups: Vec<(String, [u8; 32])> =
+            vec![(crypto::group_id_from_key(&test_key()), test_key())];
 
         let hs = build_handshake(&a_keys);
         let shared = find_shared_groups(&b_groups, &hs);
@@ -252,7 +255,8 @@ mod tests {
 
         // Peer A has data
         dm_a.set_map_value(&doc_id, "name", "Test Group").unwrap();
-        dm_a.set_map_value(&doc_id, "member/alice", r#"{"displayName":"Alice"}"#).unwrap();
+        dm_a.set_map_value(&doc_id, "member/alice", r#"{"displayName":"Alice"}"#)
+            .unwrap();
 
         // Peer B has less data
         dm_b.set_map_value(&doc_id, "name", "Test Group").unwrap();
@@ -292,14 +296,23 @@ mod tests {
         let gm_b = GroupManager::new(db_b.clone(), dm_b.clone());
 
         // A creates group and adds data
-        let create = gm_a.create_group("fest-1", "Crew", "alice", "Alice").await.unwrap();
+        let create = gm_a
+            .create_group("fest-1", "Crew", "alice", "Alice")
+            .await
+            .unwrap();
         let group_id = &create.group_id;
 
-        gm_a.check_in(group_id, "alice", Some("main-stage"), None).await.unwrap();
-        gm_a.add_pin(group_id, "pin-1", "Meeting spot", "0,0", "alice").await.unwrap();
+        gm_a.check_in(group_id, "alice", Some("main-stage"), None)
+            .await
+            .unwrap();
+        gm_a.add_pin(group_id, "pin-1", "Meeting spot", "0,0", "alice")
+            .await
+            .unwrap();
 
         // B joins the group
-        gm_b.join_group(&create.invite_payload, "bob", "Bob").await.unwrap();
+        gm_b.join_group(&create.invite_payload, "bob", "Bob")
+            .await
+            .unwrap();
 
         let key_a = db_a.load_group_key(group_id).unwrap().unwrap();
         let key_b = db_b.load_group_key(group_id).unwrap().unwrap();
@@ -374,13 +387,11 @@ mod tests {
     #[test]
     fn test_protobuf_roundtrip_response() {
         let response = proto::GroupHandshakeResponse {
-            offers: vec![
-                proto::GroupSyncOffer {
-                    group_id: "group-abc".to_string(),
-                    encrypted_sv: vec![1, 2, 3],
-                    group_key_id: "key-id".to_string(),
-                },
-            ],
+            offers: vec![proto::GroupSyncOffer {
+                group_id: "group-abc".to_string(),
+                encrypted_sv: vec![1, 2, 3],
+                group_key_id: "key-id".to_string(),
+            }],
         };
 
         let bytes = response.encode_to_vec();

@@ -13,7 +13,7 @@ use crate::chat::ChatManager;
 use crate::connection_manager::ConnectionManager;
 use crate::db::Database;
 use crate::doc_manager::DocManager;
-use crate::gossip_manager::{DispatchResult, dispatch_message, GossipManager, GossipMessage};
+use crate::gossip_manager::{DispatchResult, GossipManager, GossipMessage, dispatch_message};
 use crate::key_cache::GroupKeyCache;
 use crate::notifier::ResourceNotifier;
 use crate::proto;
@@ -94,7 +94,11 @@ pub trait PeerConnection: Send + Sync {
     fn subscribe(&self, topics: Vec<String>) -> impl Future<Output = anyhow::Result<()>> + Send;
 
     /// Perform state vector exchange for a CRDT doc.
-    fn sv_exchange(&self, doc_id: &str, sv: &[u8]) -> impl Future<Output = anyhow::Result<()>> + Send;
+    fn sv_exchange(
+        &self,
+        doc_id: &str,
+        sv: &[u8],
+    ) -> impl Future<Output = anyhow::Result<()>> + Send;
 
     /// Request chat messages since our state vector. Returns the gossip
     /// envelopes the peer served (newest history we were missing) so the caller
@@ -109,7 +113,11 @@ pub trait PeerConnection: Send + Sync {
     ) -> impl Future<Output = anyhow::Result<Vec<proto::GossipEnvelope>>> + Send;
 
     /// Broadcast data on a topic.
-    fn broadcast(&self, topic: &str, data: &[u8]) -> impl Future<Output = anyhow::Result<()>> + Send;
+    fn broadcast(
+        &self,
+        topic: &str,
+        data: &[u8],
+    ) -> impl Future<Output = anyhow::Result<()>> + Send;
 }
 
 // ---------------------------------------------------------------------------
@@ -136,7 +144,8 @@ pub struct SyncOrchestrator {
     /// the per-subscription peer count can be reported to the UI without taking
     /// the (frequently-contended) gossip manager lock — and refreshed the moment
     /// membership changes rather than only during a sync.
-    topic_neighbors: Arc<RwLock<HashMap<iroh_gossip::proto::TopicId, std::collections::HashSet<String>>>>,
+    topic_neighbors:
+        Arc<RwLock<HashMap<iroh_gossip::proto::TopicId, std::collections::HashSet<String>>>>,
 }
 
 impl SyncOrchestrator {
@@ -194,16 +203,18 @@ impl SyncOrchestrator {
 
     /// Spawn a background task that ensures the GossipManager is subscribed
     /// to all topics present in the ResourceRegistry.
-    pub fn spawn_subscription_manager(
-        self: Arc<Self>,
-    ) -> tokio::task::JoinHandle<()> {
+    pub fn spawn_subscription_manager(self: Arc<Self>) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             let mut known_topics = std::collections::HashSet::new();
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
                 let resources = match self.registry.read() {
-                    Ok(r) => r.by_priority().iter().map(|res| (res.topic(), res.topic_string())).collect::<Vec<_>>(),
+                    Ok(r) => r
+                        .by_priority()
+                        .iter()
+                        .map(|res| (res.topic(), res.topic_string()))
+                        .collect::<Vec<_>>(),
                     Err(_) => continue,
                 };
 
@@ -222,12 +233,13 @@ impl SyncOrchestrator {
                         let is_group = topic_str.starts_with("group/");
 
                         tracing::info!(topic = %topic_str, "auto-subscribing to gossip topic");
-                        if let Err(e) = gm.subscribe(topic_id, festival_id, is_group, vec![]).await {
+                        if let Err(e) = gm.subscribe(topic_id, festival_id, is_group, vec![]).await
+                        {
                             tracing::warn!(topic = %topic_str, error = %e, "auto-subscription failed");
                         } else {
                             known_topics.insert(topic_id);
 
-                            // PROACTIVE SYNC: Now that we've joined a topic, 
+                            // PROACTIVE SYNC: Now that we've joined a topic,
                             // immediately join all currently verified BLE peers into it.
                             if let Some(cm) = &self.connection_manager {
                                 let verified_peers = cm.list_verified_ble_peers();
@@ -284,7 +296,11 @@ impl SyncOrchestrator {
 
     /// Get a festival's public key if cached.
     pub fn get_festival_public_key(&self, festival_id: &str) -> Option<[u8; 32]> {
-        self.festival_public_keys.read().ok()?.get(festival_id).copied()
+        self.festival_public_keys
+            .read()
+            .ok()?
+            .get(festival_id)
+            .copied()
     }
 
     /// Pre-populate the group key cache so incoming messages can be decoded
@@ -336,28 +352,28 @@ impl SyncOrchestrator {
     /// Emit a sync status update with the current resource list.
     fn notify_sync_status(&self, syncing: bool) {
         let resources = self.build_resource_statuses();
-        self.notifier.notify_sync_status(crate::notifier::SyncStatus {
-            syncing,
-            resources,
-            pending_ops: 0,
-        });
+        self.notifier
+            .notify_sync_status(crate::notifier::SyncStatus {
+                syncing,
+                resources,
+                pending_ops: 0,
+            });
     }
 
-    async fn sync_with_peer_inner<P: PeerConnection>(&self, peer: &P) -> anyhow::Result<SyncReport> {
+    async fn sync_with_peer_inner<P: PeerConnection>(
+        &self,
+        peer: &P,
+    ) -> anyhow::Result<SyncReport> {
         let mut report = SyncReport::default();
 
         let resources: Vec<(String, ResourceKind, String, Priority)> = {
-            let reg = self.registry.read().map_err(|_| anyhow::anyhow!("registry lock poisoned"))?;
+            let reg = self
+                .registry
+                .read()
+                .map_err(|_| anyhow::anyhow!("registry lock poisoned"))?;
             reg.by_priority()
                 .iter()
-                .map(|r| {
-                    (
-                        r.id().to_string(),
-                        r.kind(),
-                        r.topic_string(),
-                        r.priority(),
-                    )
-                })
+                .map(|r| (r.id().to_string(), r.kind(), r.topic_string(), r.priority()))
                 .collect()
         };
 
@@ -390,7 +406,10 @@ impl SyncOrchestrator {
         peer: &P,
     ) -> anyhow::Result<()> {
         let (kind, topic) = {
-            let reg = self.registry.read().map_err(|_| anyhow::anyhow!("registry lock poisoned"))?;
+            let reg = self
+                .registry
+                .read()
+                .map_err(|_| anyhow::anyhow!("registry lock poisoned"))?;
             let r = reg
                 .get(resource_id)
                 .ok_or_else(|| anyhow::anyhow!("resource not found: {resource_id}"))?;
@@ -431,7 +450,9 @@ impl SyncOrchestrator {
 
                 let messages = self.db.get_chat_messages(topic, 1000, 0)?;
                 let csv = ChatStateVector::from_messages(&messages);
-                let envelopes = peer.chat_catchup(topic, &csv, profile.chat_catchup_limit()).await?;
+                let envelopes = peer
+                    .chat_catchup(topic, &csv, profile.chat_catchup_limit())
+                    .await?;
                 // Peers that answer synchronously (the iroh ALPN catch-up) hand
                 // back the history we were missing; decode + persist it here,
                 // where the group-key cache lives. INSERT-OR-IGNORE in the DB
@@ -452,11 +473,7 @@ impl SyncOrchestrator {
     }
 
     /// Handle an incoming gossip envelope from the wire (protobuf bytes).
-    pub async fn handle_incoming_bytes(
-        &self,
-        topic: &str,
-        bytes: &[u8],
-    ) -> anyhow::Result<()> {
+    pub async fn handle_incoming_bytes(&self, topic: &str, bytes: &[u8]) -> anyhow::Result<()> {
         let envelope = proto::decode_envelope(bytes)?;
         self.handle_incoming_envelope(topic, &envelope).await
     }
@@ -467,13 +484,23 @@ impl SyncOrchestrator {
         topic: &str,
         envelope: &proto::GossipEnvelope,
     ) -> anyhow::Result<()> {
-        let festival_pk = self.extract_festival_public_key(topic);
-
         let gossip_msg = self.decode_envelope(envelope)?;
         let Some(ref msg) = gossip_msg else {
             return Ok(());
         };
 
+        let festival_pk = match msg {
+            GossipMessage::FestivalUpdate { doc_id, .. } => {
+                if !doc_id.starts_with("festival/") || !doc_id.ends_with("/state") {
+                    anyhow::bail!("invalid festival document ID {doc_id}");
+                }
+                if topic.starts_with("festival/") && topic != doc_id {
+                    anyhow::bail!("festival topic/document mismatch: {topic} != {doc_id}");
+                }
+                self.extract_festival_public_key(doc_id)
+            }
+            _ => None,
+        };
         let pk = festival_pk.unwrap_or([0u8; 32]);
         let result = dispatch_message(&self.doc_manager, &self.db, msg.clone(), &pk)?;
 
@@ -528,6 +555,8 @@ impl SyncOrchestrator {
                     .ok_or_else(|| anyhow::anyhow!("festival_update missing signed_update"))?;
                 Ok(Some(GossipMessage::FestivalUpdate {
                     doc_id: fu.doc_id.clone(),
+                    kind: fu.kind,
+                    authority_seq: fu.authority_seq,
                     signed_update: SignedUpdate {
                         update: signed.update.clone(),
                         author: signed.author.clone(),
@@ -696,7 +725,10 @@ mod tests {
     fn create_orchestrator() -> SyncOrchestrator {
         let db = test_db();
         let doc_manager = Arc::new(crate::doc_manager::DocManager::new(db.clone()));
-        let chat_manager = Arc::new(crate::chat::ChatManager::new(db.clone(), doc_manager.clone()));
+        let chat_manager = Arc::new(crate::chat::ChatManager::new(
+            db.clone(),
+            doc_manager.clone(),
+        ));
         let registry = Arc::new(RwLock::new(ResourceRegistry::new()));
         let notifier = Arc::new(ResourceNotifier::new());
         SyncOrchestrator::new(registry, doc_manager, chat_manager, db, notifier)
@@ -730,41 +762,60 @@ mod tests {
             orch.extract_festival_public_key("offbeat/glastonbury/chat"),
             Some(key)
         );
-        assert!(orch.extract_festival_public_key("festival/unknown/state").is_none());
-        assert!(orch.extract_festival_public_key("group/abc123/state").is_none());
+        assert!(
+            orch.extract_festival_public_key("festival/unknown/state")
+                .is_none()
+        );
+        assert!(
+            orch.extract_festival_public_key("group/abc123/state")
+                .is_none()
+        );
         assert!(orch.extract_festival_public_key("invalid").is_none());
     }
 
     #[tokio::test]
     async fn test_handle_incoming_festival_update() {
+        use yrs::{Doc, Map, ReadTxn, StateVector, Transact};
+
         let orch = create_orchestrator();
+        let signing_key = crate::signing::generate_signing_key();
+        let public_key = signing_key.verifying_key().to_bytes();
+        let doc_id = "festival/test/state";
+        orch.set_festival_public_key("test", public_key);
 
-        let signed = crate::types::SignedUpdate {
-            update: b"update".to_vec(),
-            author: "organizer".to_string(),
-            signature: b"sig".to_vec(),
-        };
-
+        let source = Doc::new();
+        let map = source.get_or_insert_map("root");
+        map.insert(&mut source.transact_mut(), "artist", "Aphex Twin");
+        let update = source
+            .transact()
+            .encode_state_as_update_v1(&StateVector::default());
+        let signature =
+            crate::signing::sign_festival_update(&signing_key, doc_id, 2, 3, &update).unwrap();
         let envelope = proto::GossipEnvelope {
             payload: Some(proto::gossip_envelope::Payload::FestivalUpdate(
                 proto::FestivalUpdate {
-                    doc_id: "festival/test/state".to_string(),
+                    doc_id: doc_id.to_string(),
+                    kind: 2,
+                    authority_seq: 3,
                     signed_update: Some(proto::SignedUpdate {
-                        update: signed.update.clone(),
-                        author: signed.author.clone(),
-                        signature: signed.signature.clone(),
+                        update,
+                        author: "festival-do".to_string(),
+                        signature,
                     }),
                 },
             )),
         };
 
-        let msg = orch.decode_envelope(&envelope).unwrap();
-        assert!(matches!(msg, Some(GossipMessage::FestivalUpdate { .. })));
-
-        if let Some(GossipMessage::FestivalUpdate { doc_id, signed_update }) = msg {
-            assert_eq!(doc_id, "festival/test/state");
-            assert_eq!(signed_update.author, "organizer");
-        }
+        // The iroh-gossip event does not expose the unhashed topic string, so
+        // festival authority lookup must use the signed document ID.
+        orch.handle_incoming_envelope("gossip", &envelope)
+            .await
+            .unwrap();
+        assert_eq!(
+            orch.doc_manager.read_map_value(doc_id, "artist").as_deref(),
+            Some("Aphex Twin")
+        );
+        assert_eq!(orch.db.highest_verified_festival_seq(doc_id).unwrap(), 3);
     }
 
     #[tokio::test]
@@ -772,18 +823,16 @@ mod tests {
         let orch = create_orchestrator();
 
         let envelope = proto::GossipEnvelope {
-            payload: Some(proto::gossip_envelope::Payload::Chat(
-                proto::ChatMessage {
-                    id: "msg1".to_string(),
-                    user_id: "user1".to_string(),
-                    display_name: "User".to_string(),
-                    text: "hello".to_string(),
-                    topic: "test".to_string(),
-                    stage_id: None,
-                    timestamp: "2026-01-01".to_string(),
-                    writer_seq: 1,
-                },
-            )),
+            payload: Some(proto::gossip_envelope::Payload::Chat(proto::ChatMessage {
+                id: "msg1".to_string(),
+                user_id: "user1".to_string(),
+                display_name: "User".to_string(),
+                text: "hello".to_string(),
+                topic: "test".to_string(),
+                stage_id: None,
+                timestamp: "2026-01-01".to_string(),
+                writer_seq: 1,
+            })),
         };
 
         let msg = orch.decode_envelope(&envelope).unwrap();
@@ -1036,7 +1085,10 @@ mod tests {
 
         let db = test_db();
         let doc_manager = Arc::new(crate::doc_manager::DocManager::new(db.clone()));
-        let chat_manager = Arc::new(crate::chat::ChatManager::new(db.clone(), doc_manager.clone()));
+        let chat_manager = Arc::new(crate::chat::ChatManager::new(
+            db.clone(),
+            doc_manager.clone(),
+        ));
         let registry = Arc::new(RwLock::new(ResourceRegistry::new()));
 
         let dummy_key = [0u8; 32];
@@ -1075,9 +1127,13 @@ mod tests {
 
     fn create_orchestrator_with_group_key(group_id: &str, group_key: [u8; 32]) -> SyncOrchestrator {
         let db = test_db();
-        db.save_group(group_id, "test-fest", "Test Group", &group_key).unwrap();
+        db.save_group(group_id, "test-fest", "Test Group", &group_key)
+            .unwrap();
         let doc_manager = Arc::new(crate::doc_manager::DocManager::new(db.clone()));
-        let chat_manager = Arc::new(crate::chat::ChatManager::new(db.clone(), doc_manager.clone()));
+        let chat_manager = Arc::new(crate::chat::ChatManager::new(
+            db.clone(),
+            doc_manager.clone(),
+        ));
         let registry = Arc::new(RwLock::new(ResourceRegistry::new()));
         let notifier = Arc::new(ResourceNotifier::new());
         SyncOrchestrator::new(registry, doc_manager, chat_manager, db, notifier)
@@ -1104,7 +1160,12 @@ mod tests {
         let result = orch.decode_envelope(&envelope).unwrap();
         assert!(matches!(result, Some(GossipMessage::GroupUpdate { .. })));
 
-        if let Some(GossipMessage::GroupUpdate { doc_id, encrypted: enc, group_key: key }) = result {
+        if let Some(GossipMessage::GroupUpdate {
+            doc_id,
+            encrypted: enc,
+            group_key: key,
+        }) = result
+        {
             assert_eq!(doc_id, format!("group/{group_id}"));
             assert_eq!(key, group_key);
             assert_eq!(enc, encrypted);

@@ -173,9 +173,7 @@ class _InviteSheetState extends State<InviteSheet> {
             margin: const EdgeInsets.symmetric(horizontal: 18),
             padding: const EdgeInsets.all(14),
             color: colorFg,
-            child: Center(
-              child: _buildQrPlaceholder(),
-            ),
+            child: Center(child: _buildQrPlaceholder()),
           ),
           // Code block
           Padding(
@@ -323,4 +321,3 @@ class _TearPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
-

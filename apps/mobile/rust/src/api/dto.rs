@@ -1,9 +1,9 @@
 // These types are re-exported from the parent module (mod.rs) and used
 // in function signatures throughout this module.
+use offbeat_core::OffbeatNode;
 use offbeat_core::connection_manager::{GossipStatus, PeerEntry, PeerSource};
 use offbeat_core::doc_manager::DocManager;
 use offbeat_core::notifier::SyncStatus;
-use offbeat_core::OffbeatNode;
 
 // ---------------------------------------------------------------------------
 // DTOs
@@ -210,6 +210,7 @@ pub struct MeshtasticDebugReportDto {
     pub sent_fragments: u32,
     pub raw_from_radio_count: u32,
     pub private_app_count: u32,
+    pub applied_group_chats: u32,
     pub received_frames: Vec<MeshtasticDebugFrameDto>,
     pub events: Vec<String>,
 }

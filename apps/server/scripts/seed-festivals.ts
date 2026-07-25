@@ -142,7 +142,10 @@ Example:
 	try {
 		files = readdirSync(fixturesDir).filter((f) => f.endsWith(".json"));
 	} catch (err) {
-		console.error(`Error reading directory ${fixturesDir}:`, err instanceof Error ? err.message : err);
+		console.error(
+			`Error reading directory ${fixturesDir}:`,
+			err instanceof Error ? err.message : err,
+		);
 		process.exit(1);
 	}
 

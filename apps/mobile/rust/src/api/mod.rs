@@ -1,7 +1,7 @@
 pub mod dto;
 
-use base64::Engine as _;
 use crate::frb_generated::StreamSink;
+use base64::Engine as _;
 use once_cell::sync::Lazy;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
@@ -10,10 +10,10 @@ use tokio::runtime::Runtime;
 pub use dto::*;
 
 // Re-export types used in public function signatures for FRB
+pub use offbeat_core::OffbeatNode;
 pub use offbeat_core::connection_manager::PeerEntry;
 pub use offbeat_core::doc_manager::DocManager;
 pub use offbeat_core::notifier::SyncStatus;
-pub use offbeat_core::OffbeatNode;
 
 /// Global tokio runtime for spawning watch tasks.
 /// FRB's async executor isn't a full tokio runtime, so we need our own.
@@ -92,7 +92,11 @@ pub async fn meshtastic_debug_scan(scan_ms: u32) -> anyhow::Result<Vec<Meshtasti
             device_id: device.id.to_string(),
             name: device.name,
             rssi: device.rssi,
-            services: device.services.into_iter().map(|uuid| uuid.to_string()).collect(),
+            services: device
+                .services
+                .into_iter()
+                .map(|uuid| uuid.to_string())
+                .collect(),
         })
         .collect())
 }
@@ -115,7 +119,7 @@ pub async fn meshtastic_debug_probe(
     use blew::central::{Central, CentralEvent, WriteType};
     use blew::types::DeviceId;
     use offbeat_core::transport::meshtastic::{
-        encode_to_radio_private_app, MeshtasticReassembly, OffbeatSyncFrame, DEFAULT_TTL,
+        DEFAULT_TTL, MeshtasticReassembly, OffbeatSyncFrame, encode_to_radio_private_app,
     };
     use offbeat_core::transport::profile::SyncPayloadKind;
     use tokio::time::{Duration, Instant, timeout};
@@ -245,6 +249,7 @@ pub async fn meshtastic_debug_probe(
         sent_fragments,
         raw_from_radio_count,
         private_app_count,
+        applied_group_chats: 0,
         received_frames,
         events: events_log,
     })
@@ -271,7 +276,7 @@ async fn drain_from_radio(
     private_app_count: &mut u32,
     frames: &mut Vec<MeshtasticDebugFrameDto>,
 ) -> anyhow::Result<()> {
-    use offbeat_core::transport::meshtastic::{decode_from_radio_private_app, MeshtasticPacket};
+    use offbeat_core::transport::meshtastic::{MeshtasticPacket, decode_from_radio_private_app};
 
     loop {
         let raw = central.read_characteristic(device, from_radio_uuid).await?;
@@ -302,6 +307,37 @@ fn first_eight_uuid_bytes(uuid: uuid::Uuid) -> [u8; 8] {
     let mut out = [0u8; 8];
     out.copy_from_slice(&uuid.as_bytes()[..8]);
     out
+}
+
+#[cfg(target_os = "android")]
+fn service_summaries(services: &[blew::gatt::GattService]) -> Vec<String> {
+    services
+        .iter()
+        .map(|service| {
+            let chars = service
+                .characteristics
+                .iter()
+                .map(|char_| char_.uuid.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("{}[{chars}]", service.uuid)
+        })
+        .collect()
+}
+
+#[cfg(target_os = "android")]
+fn group_key_from_vec(key: Vec<u8>) -> anyhow::Result<[u8; 32]> {
+    key.try_into()
+        .map_err(|key: Vec<u8>| anyhow::anyhow!("group key is {} bytes; expected 32", key.len()))
+}
+
+#[cfg(target_os = "android")]
+fn now_unix_secs() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 #[cfg(target_os = "android")]
@@ -449,7 +485,8 @@ impl AppNode {
         use offbeat_core::auth;
         let signing_key = auth::generate_or_load_identity(&self.inner.db)?;
         let user_id = auth::get_user_id(&signing_key);
-        let display_name = auth::get_display_name(&self.inner.db)?.unwrap_or_else(|| user_id.clone());
+        let display_name =
+            auth::get_display_name(&self.inner.db)?.unwrap_or_else(|| user_id.clone());
 
         let (msg, topic_id) = self.inner.chat_manager.send_festival_chat(
             &festival_id,
@@ -503,14 +540,13 @@ impl AppNode {
         use offbeat_core::auth;
         let signing_key = auth::generate_or_load_identity(&self.inner.db)?;
         let user_id = auth::get_user_id(&signing_key);
-        let display_name = auth::get_display_name(&self.inner.db)?.unwrap_or_else(|| user_id.clone());
+        let display_name =
+            auth::get_display_name(&self.inner.db)?.unwrap_or_else(|| user_id.clone());
 
-        let (encrypted, topic_id) = self.inner.chat_manager.send_group_chat(
-            &group_id,
-            &user_id,
-            &display_name,
-            &text,
-        )?;
+        let (encrypted, topic_id) =
+            self.inner
+                .chat_manager
+                .send_group_chat(&group_id, &user_id, &display_name, &text)?;
 
         let stored = self
             .inner
@@ -562,6 +598,286 @@ impl AppNode {
             stage_id: msg.stage_id,
             timestamp: msg.timestamp,
         })
+    }
+
+    /// Send a compact encrypted group chat through a selected Meshtastic radio.
+    pub async fn meshtastic_send_group_chat(
+        &self,
+        device_id: String,
+        group_id: String,
+        text: String,
+    ) -> anyhow::Result<MeshtasticDebugReportDto> {
+        #[cfg(target_os = "android")]
+        {
+            use blew::central::{Central, WriteType};
+            use blew::types::DeviceId;
+            use offbeat_core::auth;
+            use offbeat_core::crypto;
+            use offbeat_core::transport::meshtastic::{
+                CompactGroupChat, DEFAULT_TTL, OffbeatSyncFrame, encode_to_radio_private_app,
+                group_chat_topic_tag,
+            };
+            use offbeat_core::transport::profile::SyncPayloadKind;
+            use offbeat_core::types::ChatMessage;
+            use tokio::time::Duration;
+            use uuid::Uuid;
+
+            let group_key = self
+                .inner
+                .db
+                .load_group_key(&group_id)?
+                .ok_or_else(|| anyhow::anyhow!("group not found: {group_id}"))?;
+            let signing_key = auth::generate_or_load_identity(&self.inner.db)?;
+            let user_id = auth::get_user_id(&signing_key);
+            let display_name =
+                auth::get_display_name(&self.inner.db)?.unwrap_or_else(|| user_id.clone());
+            let topic = format!("group/{group_id}/chat");
+            let writer_seq = self.inner.db.get_next_writer_seq(&topic, &user_id)?;
+            let message_uuid = Uuid::new_v4();
+            let timestamp_secs = now_unix_secs();
+            let compact = CompactGroupChat {
+                message_uuid: *message_uuid.as_bytes(),
+                user_id: user_id.clone(),
+                display_name: display_name.clone(),
+                text: text.clone(),
+                writer_seq,
+                timestamp_secs,
+            };
+            let encrypted_body = crypto::encrypt(&group_key, &compact.encode()?)?;
+            let mut message_id = [0u8; 8];
+            message_id.copy_from_slice(&message_uuid.as_bytes()[..8]);
+            let frame = OffbeatSyncFrame::new(
+                SyncPayloadKind::GroupChat,
+                group_chat_topic_tag(&group_key),
+                message_id,
+                DEFAULT_TTL,
+                encrypted_body,
+            )?;
+
+            let message = ChatMessage {
+                id: message_uuid.to_string(),
+                user_id,
+                display_name,
+                text,
+                topic: topic.clone(),
+                stage_id: None,
+                timestamp: format!("{timestamp_secs}Z"),
+                writer_seq,
+            };
+            self.inner.db.save_chat_message(&message)?;
+            self.inner.notifier.record_sent(&topic);
+            self.inner.notifier.notify_chat(&topic);
+
+            let central: Central = Central::new().await?;
+            let device = DeviceId::from(device_id.clone());
+            let service_uuid = Uuid::parse_str(MESHTASTIC_SERVICE_UUID)?;
+            let to_radio_uuid = Uuid::parse_str(MESHTASTIC_TO_RADIO_CHAR_UUID)?;
+            central
+                .start_scan(blew::central::ScanFilter {
+                    services: vec![service_uuid],
+                    mode: blew::central::ScanMode::LowLatency,
+                })
+                .await?;
+            tokio::time::sleep(Duration::from_millis(750)).await;
+            let _ = central.stop_scan().await;
+            central.connect(&device).await?;
+            let services = central.discover_services(&device).await?;
+            let service_summaries = service_summaries(&services);
+            let mtu = central.mtu(&device).await;
+            let mut sent_fragments = 0u32;
+            for private_payload in frame.encode_private_app_payloads()? {
+                let to_radio = encode_to_radio_private_app(
+                    private_payload,
+                    SyncPayloadKind::GroupChat.priority(),
+                    DEFAULT_TTL,
+                    false,
+                )?;
+                central
+                    .write_characteristic(&device, to_radio_uuid, to_radio, WriteType::WithResponse)
+                    .await?;
+                sent_fragments += 1;
+            }
+            let _ = central.disconnect(&device).await;
+            Ok(MeshtasticDebugReportDto {
+                device_id,
+                connected: true,
+                mtu,
+                services: service_summaries,
+                sent_fragments,
+                raw_from_radio_count: 0,
+                private_app_count: 0,
+                applied_group_chats: 0,
+                received_frames: Vec::new(),
+                events: vec![
+                    format!("sent_group_chat:{group_id}"),
+                    format!("sent_fragments:{sent_fragments}"),
+                ],
+            })
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            let _ = (device_id, group_id, text);
+            anyhow::bail!("Meshtastic group chat send is currently wired for Android builds only")
+        }
+    }
+
+    /// Listen for Meshtastic group chat frames and apply matching local groups.
+    pub async fn meshtastic_listen_apply_group_chats(
+        &self,
+        device_id: String,
+        festival_id: String,
+        listen_ms: u32,
+    ) -> anyhow::Result<MeshtasticDebugReportDto> {
+        #[cfg(target_os = "android")]
+        {
+            use blew::central::{Central, CentralEvent};
+            use blew::types::DeviceId;
+            use offbeat_core::crypto;
+            use offbeat_core::transport::meshtastic::{
+                CompactGroupChat, MeshtasticPacket, MeshtasticReassembly,
+                decode_from_radio_private_app, group_chat_topic_tag,
+            };
+            use offbeat_core::transport::profile::SyncPayloadKind;
+            use offbeat_core::types::ChatMessage;
+            use std::collections::HashMap;
+            use tokio::time::{Duration, Instant, timeout};
+            use tokio_stream::StreamExt;
+            use uuid::Uuid;
+
+            let mut group_by_tag: HashMap<[u8; 8], (String, [u8; 32])> = HashMap::new();
+            for (group_id, _name, key) in self.inner.db.load_groups(&festival_id)? {
+                let group_key = group_key_from_vec(key)?;
+                group_by_tag.insert(group_chat_topic_tag(&group_key), (group_id, group_key));
+            }
+            if group_by_tag.is_empty() {
+                anyhow::bail!("no local groups for festival {festival_id}");
+            }
+
+            let central: Central = Central::new().await?;
+            let device = DeviceId::from(device_id.clone());
+            let service_uuid = Uuid::parse_str(MESHTASTIC_SERVICE_UUID)?;
+            let from_num_uuid = Uuid::parse_str(MESHTASTIC_FROM_NUM_CHAR_UUID)?;
+            let from_radio_uuid = Uuid::parse_str(MESHTASTIC_FROM_RADIO_CHAR_UUID)?;
+            let mut events = central.events();
+            let mut events_log = Vec::new();
+            let mut raw_from_radio_count = 0u32;
+            let mut private_app_count = 0u32;
+            let mut applied_group_chats = 0u32;
+            let mut reassembly = MeshtasticReassembly::default();
+            let mut received_frames = Vec::new();
+
+            central
+                .start_scan(blew::central::ScanFilter {
+                    services: vec![service_uuid],
+                    mode: blew::central::ScanMode::LowLatency,
+                })
+                .await?;
+            tokio::time::sleep(Duration::from_millis(750)).await;
+            let _ = central.stop_scan().await;
+            central.connect(&device).await?;
+            events_log.push(format!("connected:{device_id}"));
+            let services = central.discover_services(&device).await?;
+            let service_summaries = service_summaries(&services);
+            central
+                .subscribe_characteristic(&device, from_num_uuid)
+                .await?;
+            events_log.push("subscribed:from_num".to_string());
+            let mtu = central.mtu(&device).await;
+            let deadline = Instant::now() + Duration::from_millis(listen_ms.max(1000) as u64);
+            while Instant::now() < deadline {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                let Some(event) = timeout(remaining, events.next()).await? else {
+                    break;
+                };
+                match event {
+                    CentralEvent::CharacteristicNotification {
+                        device_id: event_device,
+                        char_uuid,
+                        ..
+                    } if event_device == device && char_uuid == from_num_uuid => {
+                        events_log.push("notify:from_num".to_string());
+                        loop {
+                            let raw = central
+                                .read_characteristic(&device, from_radio_uuid)
+                                .await?;
+                            if raw.is_empty() {
+                                break;
+                            }
+                            raw_from_radio_count += 1;
+                            let Some(private_payload) = decode_from_radio_private_app(&raw)? else {
+                                continue;
+                            };
+                            private_app_count += 1;
+                            let packet = MeshtasticPacket::decode(&private_payload)?;
+                            if let Some(frame) = reassembly.push(packet)? {
+                                received_frames.push(MeshtasticDebugFrameDto {
+                                    kind: format!("{:?}", frame.kind),
+                                    topic_tag_hex: hex::encode(frame.topic_tag),
+                                    message_id_hex: hex::encode(frame.message_id),
+                                    body_text: None,
+                                    body_hex: hex::encode(&frame.body),
+                                });
+                                if frame.kind != SyncPayloadKind::GroupChat {
+                                    continue;
+                                }
+                                let Some((group_id, group_key)) =
+                                    group_by_tag.get(&frame.topic_tag)
+                                else {
+                                    events_log.push(format!(
+                                        "ignored_unknown_group:{}",
+                                        hex::encode(frame.topic_tag)
+                                    ));
+                                    continue;
+                                };
+                                let plaintext = crypto::decrypt(group_key, &frame.body)?;
+                                let compact = CompactGroupChat::decode(&plaintext)?;
+                                let topic = format!("group/{group_id}/chat");
+                                let message = ChatMessage {
+                                    id: Uuid::from_bytes(compact.message_uuid).to_string(),
+                                    user_id: compact.user_id,
+                                    display_name: compact.display_name,
+                                    text: compact.text,
+                                    topic: topic.clone(),
+                                    stage_id: None,
+                                    timestamp: format!("{}Z", compact.timestamp_secs),
+                                    writer_seq: compact.writer_seq,
+                                };
+                                self.inner.db.save_chat_message(&message)?;
+                                self.inner.notifier.record_received(&topic);
+                                self.inner.notifier.notify_chat(&topic);
+                                applied_group_chats += 1;
+                                events_log.push(format!("applied_group_chat:{group_id}"));
+                            }
+                        }
+                    }
+                    CentralEvent::DeviceDisconnected { device_id, cause }
+                        if device_id == device =>
+                    {
+                        events_log.push(format!("disconnected:{cause:?}"));
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            let _ = central.disconnect(&device).await;
+            Ok(MeshtasticDebugReportDto {
+                device_id,
+                connected: true,
+                mtu,
+                services: service_summaries,
+                sent_fragments: 0,
+                raw_from_radio_count,
+                private_app_count,
+                applied_group_chats,
+                received_frames,
+                events: events_log,
+            })
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            let _ = (device_id, festival_id, listen_ms);
+            anyhow::bail!("Meshtastic group chat apply is currently wired for Android builds only")
+        }
     }
 
     /// Return paginated chat history for a topic string.
@@ -641,10 +957,16 @@ impl AppNode {
         let notifier = Arc::clone(&self.inner.notifier);
 
         // Ensure the festival public key is registered with the orchestrator
-        let festival_pk = self.inner.festival_public_keys.get(&festival_id).copied()
-            .ok_or_else(|| anyhow::anyhow!(
-                "no public key for festival {festival_id} — call set_festival_public_key first"
-            ))?;
+        let festival_pk = self
+            .inner
+            .festival_public_keys
+            .get(&festival_id)
+            .copied()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "no public key for festival {festival_id} — call set_festival_public_key first"
+                )
+            })?;
         sync_orchestrator.set_festival_public_key(&festival_id, festival_pk);
 
         let (sink, receive_loop) = ws_relay::connect(
@@ -660,7 +982,10 @@ impl AppNode {
             && let Ok(signing_key) = auth::generate_or_load_identity(&self.inner.db)
         {
             let pubkey_hex = auth::get_public_key_hex(&signing_key);
-            if let Err(e) = sink.authenticate(&pubkey_hex, &attestation, &signing_key).await {
+            if let Err(e) = sink
+                .authenticate(&pubkey_hex, &attestation, &signing_key)
+                .await
+            {
                 tracing::warn!("ws relay auth failed: {e}");
             }
         }
@@ -683,19 +1008,31 @@ impl AppNode {
     /// subscribe + catch-up to the SyncOrchestrator.
     pub async fn subscribe_festival(&mut self, festival_id: String) -> anyhow::Result<()> {
         // Register the festival resource so the orchestrator knows about it
-        let festival_pk = self.inner.festival_public_keys.get(&festival_id).copied()
-            .ok_or_else(|| anyhow::anyhow!(
-                "no public key for festival {festival_id} — call set_festival_public_key first"
-            ))?;
+        let festival_pk = self
+            .inner
+            .festival_public_keys
+            .get(&festival_id)
+            .copied()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "no public key for festival {festival_id} — call set_festival_public_key first"
+                )
+            })?;
         {
-            let mut reg = self.inner.resource_registry.write()
+            let mut reg = self
+                .inner
+                .resource_registry
+                .write()
                 .map_err(|_| anyhow::anyhow!("resource registry lock poisoned"))?;
             reg.register_festival(&festival_id, festival_pk);
         }
 
         // Sync via orchestrator using the WS peer
         if let Some(ws) = { self.inner.ws_relay.read().clone() } {
-            self.inner.sync_orchestrator.sync_with_peer(ws.as_ref()).await?;
+            self.inner
+                .sync_orchestrator
+                .sync_with_peer(ws.as_ref())
+                .await?;
         }
 
         Ok(())
@@ -757,13 +1094,9 @@ impl AppNode {
     }
 
     /// Broadcast a chat message on the given gossip topic.
-    pub async fn publish_chat(
-        &self,
-        topic: String,
-        message: ChatMessageDto,
-    ) -> anyhow::Result<()> {
+    pub async fn publish_chat(&self, topic: String, message: ChatMessageDto) -> anyhow::Result<()> {
         use offbeat_core::gossip_manager::{GossipMessage, encode_gossip_message};
-            use offbeat_core::proto::GossipEnvelope;
+        use offbeat_core::proto::GossipEnvelope;
         use offbeat_core::types::ChatMessage;
 
         let chat = ChatMessage {
@@ -809,7 +1142,10 @@ impl AppNode {
         let signing_key = auth::generate_or_load_identity(&self.inner.db)?;
         let user_id = auth::get_user_id(&signing_key);
         let display_name = auth::get_display_name(&self.inner.db)?;
-        Ok(IdentityDto { user_id, display_name })
+        Ok(IdentityDto {
+            user_id,
+            display_name,
+        })
     }
 
     /// Persist a display name for the local user.
@@ -941,7 +1277,7 @@ impl AppNode {
             let diff = self.inner.doc_manager.encode_diff(&doc_id, &[])?;
             let encrypted = offbeat_core::crypto::encrypt(&group_key, &diff)?;
 
-            use offbeat_core::gossip_manager::{encode_gossip_message, GossipMessage};
+            use offbeat_core::gossip_manager::{GossipMessage, encode_gossip_message};
             use offbeat_core::proto::GossipEnvelope;
             let gossip_msg = GossipMessage::GroupUpdate {
                 doc_id: doc_id.clone(),
@@ -1028,7 +1364,9 @@ impl AppNode {
             .leave_group(&group_id, &user_id)
             .await?;
         // Notify local watchers so the UI updates immediately
-        self.inner.notifier.notify_doc(&format!("group/{group_id}/state"));
+        self.inner
+            .notifier
+            .notify_doc(&format!("group/{group_id}/state"));
         Ok(())
     }
 
@@ -1055,7 +1393,9 @@ impl AppNode {
             .await?;
 
         // Notify local watchers so the UI updates immediately
-        self.inner.notifier.notify_doc(&format!("group/{group_id}/state"));
+        self.inner
+            .notifier
+            .notify_doc(&format!("group/{group_id}/state"));
 
         if let Some(group_key) = self.inner.db.load_group_key(&group_id)? {
             use offbeat_core::gossip_manager::{GossipMessage, encode_gossip_message};
@@ -1099,7 +1439,9 @@ impl AppNode {
             .await?;
 
         // Notify local watchers so the UI updates immediately
-        self.inner.notifier.notify_doc(&format!("group/{group_id}/state"));
+        self.inner
+            .notifier
+            .notify_doc(&format!("group/{group_id}/state"));
 
         if let Some(group_key) = self.inner.db.load_group_key(&group_id)? {
             use offbeat_core::gossip_manager::{GossipMessage, encode_gossip_message};
@@ -1145,7 +1487,9 @@ impl AppNode {
             .await?;
 
         // Notify local watchers so the UI updates immediately
-        self.inner.notifier.notify_doc(&format!("group/{group_id}/state"));
+        self.inner
+            .notifier
+            .notify_doc(&format!("group/{group_id}/state"));
 
         if let Some(group_key) = self.inner.db.load_group_key(&group_id)? {
             use offbeat_core::gossip_manager::{GossipMessage, encode_gossip_message};
@@ -1517,7 +1861,12 @@ impl AppNode {
         // the bridge must wire it up explicitly.)
         let mut handles = vec![so.clone().spawn_subscription_manager()];
         handles.extend(offbeat_core::ble_sync::spawn_ble_connection_tasks(
-            ble, gm, cm, so, endpoint, doc_manager,
+            ble,
+            gm,
+            cm,
+            so,
+            endpoint,
+            doc_manager,
         ));
         self.ble_task_handles = handles;
         tracing::info!("subscription manager + BLE auto-connection tasks started");
@@ -1584,7 +1933,6 @@ impl AppNode {
         Ok(())
     }
 
-
     /// Get a snapshot of transport status (no rate computation).
     pub fn get_transport_status(&self) -> TransportStatusDto {
         snapshot_transport(&self.inner)
@@ -1613,10 +1961,7 @@ impl AppNode {
     /// Watch the peer list — polls every second and emits whenever the
     /// snapshot changes (peer count or any entry status).
     #[flutter_rust_bridge::frb(stream_dart_await)]
-    pub fn watch_peer_list(
-        &self,
-        sink: StreamSink<Vec<PeerStatusInfo>>,
-    ) -> anyhow::Result<()> {
+    pub fn watch_peer_list(&self, sink: StreamSink<Vec<PeerStatusInfo>>) -> anyhow::Result<()> {
         use std::sync::Arc;
         use tokio::sync::Mutex;
 
@@ -1763,10 +2108,7 @@ impl AppNode {
 
     /// Watch sync status — emits current status, then updates on changes.
     #[flutter_rust_bridge::frb(stream_dart_await)]
-    pub fn watch_sync_status(
-        &self,
-        sink: StreamSink<SyncStatusDto>,
-    ) -> anyhow::Result<()> {
+    pub fn watch_sync_status(&self, sink: StreamSink<SyncStatusDto>) -> anyhow::Result<()> {
         use std::sync::Arc;
         use tokio::sync::Mutex;
 
