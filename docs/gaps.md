@@ -12,7 +12,13 @@ The following capabilities exist in source and should be tested or extended, not
 - Nested Yrs maps for group members, shared stars, and pins.
 - Normal group create/join/leave now registers both resources, publishes encrypted membership deltas, updates watchers, deregisters on leave, and rehydrates persisted resources after restart.
 - Direct iroh group-state catch-up encrypts both state vectors and diffs; the WebSocket DO remains an opaque encrypted replay adapter.
-- Personal saved sets persist locally, rapid toggles serialize and re-read durable state, and a dedicated My Schedule view renders liked cached sets. One derived overlap model drives clash badges, filtering, and the display-only Clash Radar. Group sharing remains explicit and per-set CRDT entries merge independent offline edits.
+- Personal saved sets persist locally, rapid toggles serialize and re-read
+  durable state, and ALL/MINE/OURS schedule scopes render cached personal and
+  group picks. Group membership continuously mirrors same-festival likes into
+  per-user/per-set encrypted CRDT entries; create/join/restart reconcile missed
+  changes. Co-liker overlays deduplicate identities across groups, member
+  schedules resolve cached lineup metadata, and one overlap model drives clash
+  badges, filtering, and the display-only Clash Radar.
 - Stage/custom check-ins use one atomic CRDT value, converge under duplicate/reordered/concurrent delivery, persist across restart, and additively subscribe the checked-in stage chat.
 - SQLite WAL, normal synchronous mode, and busy timeout.
 - Persisted iroh endpoint identity.

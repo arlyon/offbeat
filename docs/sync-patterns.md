@@ -119,6 +119,13 @@ Peers may discover that they share a group without revealing the group ID, group
 
 The Durable Object stores group updates and chat only as opaque encrypted blobs. Possession of the group key is the current membership credential; key rotation remains a future capability.
 
+Personal stars remain canonical in local SQLite. Group membership continuously
+mirrors those same-festival stars into the member's per-set entries in every
+matching encrypted `GroupState`; create, join, and restart subscription
+reconcile missed changes. Leaving removes access and stops future sharing.
+Schedule overlays are derived locally from cached lineup metadata plus the
+converged group documents, never synced as a separate resource.
+
 ## Public trust boundaries
 
 Different public data has different authority:

@@ -969,6 +969,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn personal_stars_reconcile_after_database_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("group-stars.db");
+        let group_id;
+
+        {
+            let db = Arc::new(Database::new(&path).unwrap());
+            let manager = GroupManager::new(db.clone(), Arc::new(DocManager::new(db.clone())));
+            group_id = manager
+                .create_group("festival-a", "Crew", "user", "Alex")
+                .await
+                .unwrap()
+                .group_id;
+            db.toggle_star("festival-a", "set-after-restart").unwrap();
+        }
+
+        let db = Arc::new(Database::new(&path).unwrap());
+        let manager = GroupManager::new(db.clone(), Arc::new(DocManager::new(db)));
+        let updates = manager
+            .reconcile_stars_for_festival("festival-a", "user")
+            .await
+            .unwrap();
+        assert_eq!(updates.len(), 1);
+        assert_eq!(
+            manager.read_user_stars(&group_id, "user"),
+            vec!["set-after-restart"]
+        );
+    }
+
+    #[tokio::test]
     async fn concurrent_shared_star_edits_merge_per_set() {
         let a = make_manager();
         let b = make_manager();

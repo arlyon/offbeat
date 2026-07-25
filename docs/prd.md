@@ -47,7 +47,8 @@ The system uses transport-agnostic logical resources, iroh for capable peer rout
 - **U14:** See group member list with display names.
 - **U15:** See which stage each member is at (manual check-in).
 - **U16:** Check in to a stage or custom location ("campsite", "at the bar") with one tap.
-- **U17:** See each member's starred sets (shared schedule planning).
+- **U17:** See each member's continuously synced starred sets,
+  co-likers on lineup items, and the union of group picks.
 - **U18:** Pin shared locations ("our campsite", "meeting point").
 - **U19:** Chat within the group (encrypted, private).
 - **U20:** Leave a group (remove yourself from members, delete group key locally).
@@ -403,7 +404,10 @@ FRB maps Rust `Stream`s to Dart `Stream`s natively:
 - **FR7.3:** Join: parse QR, store key, create Yrs doc, write self to members, sync via any available transport.
 - **FR7.4:** Leave: remove self from members map in Yrs doc, delete group key locally. Once peers receive the leave update, they can clean up.
 - **FR7.5:** Presence: update group Yrs doc with stage or custom location on check-in.
-- **FR7.6:** Stars: write starred set IDs to group Yrs doc (shared schedule).
+- **FR7.6:** Stars: joining a group continuously mirrors the member's
+  same-festival personal stars into per-user/per-set entries in the encrypted
+  group Yrs doc. Create/join backfills existing stars; unstars remove only that
+  user's entry; personal SQLite remains the local canonical schedule.
 - **FR7.7:** Pins: write shared location pins to group Yrs doc.
 - **Acceptance:** Create group → QR → scan on second device → both see each other in members + presence. Check in → other device sees update. Star a set → visible in group. Leave → removed from members.
 
