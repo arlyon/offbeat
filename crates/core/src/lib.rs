@@ -97,6 +97,7 @@ impl OffbeatNode {
             db.clone(),
             notifier.clone(),
         ));
+        sync_orchestrator.hydrate_persisted_groups()?;
         Ok(Self {
             doc_manager,
             db,
@@ -131,6 +132,7 @@ impl OffbeatNode {
             db.clone(),
             notifier.clone(),
         ));
+        sync_orchestrator.hydrate_persisted_groups()?;
         Ok(Self {
             doc_manager,
             db,
@@ -189,6 +191,7 @@ impl OffbeatNode {
             db.clone(),
             notifier.clone(),
         ));
+        sync_orchestrator.hydrate_persisted_groups()?;
 
         // Load a persisted iroh secret key so the EndpointId is stable across
         // restarts.  If none exists yet, generate a fresh one and persist it.
@@ -310,5 +313,65 @@ impl OffbeatNode {
         ));
 
         handles
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::resource::Resource;
+
+    #[tokio::test]
+    async fn restart_hydrates_group_resources_and_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("offbeat.db");
+        let node = OffbeatNode::new(&db_path).unwrap();
+        let created = node
+            .group_manager
+            .create_group("fest-1", "The Crew", "alice", "Alice")
+            .await
+            .unwrap();
+        node.group_manager
+            .update_stars(
+                &created.group_id,
+                "alice",
+                vec!["set-a".to_string(), "set-b".to_string()],
+            )
+            .await
+            .unwrap();
+        node.group_manager
+            .check_in(&created.group_id, "alice", Some("main"), None)
+            .await
+            .unwrap();
+        let group_id = created.group_id.clone();
+        let group_key = created.group_key;
+        drop(node);
+
+        let restarted = OffbeatNode::new(&db_path).unwrap();
+        {
+            let registry = restarted.resource_registry.read().unwrap();
+            assert!(
+                registry
+                    .get(&Resource::group_state(group_key).id())
+                    .is_some()
+            );
+            assert!(
+                registry
+                    .get(&Resource::group_chat(group_key).id())
+                    .is_some()
+            );
+        }
+
+        let state = restarted
+            .group_manager
+            .get_group_state(&group_id)
+            .await
+            .unwrap();
+        assert_eq!(state.name, "The Crew");
+        assert_eq!(state.members.len(), 1);
+        assert_eq!(state.members[0].user_id, "alice");
+        assert_eq!(state.members[0].starred_set_ids, vec!["set-a", "set-b"]);
+        assert_eq!(state.members[0].stage_id.as_deref(), Some("main"));
+        assert!(state.members[0].custom_location.is_none());
     }
 }

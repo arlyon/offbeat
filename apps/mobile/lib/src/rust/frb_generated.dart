@@ -3081,14 +3081,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   GroupMemberDto dco_decode_group_member_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 5)
-      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
+    if (arr.length != 6)
+      throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
     return GroupMemberDto(
       userId: dco_decode_String(arr[0]),
       displayName: dco_decode_String(arr[1]),
       status: dco_decode_String(arr[2]),
       stageId: dco_decode_opt_String(arr[3]),
       customLocation: dco_decode_opt_String(arr[4]),
+      starredSetIds: dco_decode_list_String(arr[5]),
     );
   }
 
@@ -3923,12 +3924,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_status = sse_decode_String(deserializer);
     var var_stageId = sse_decode_opt_String(deserializer);
     var var_customLocation = sse_decode_opt_String(deserializer);
+    var var_starredSetIds = sse_decode_list_String(deserializer);
     return GroupMemberDto(
       userId: var_userId,
       displayName: var_displayName,
       status: var_status,
       stageId: var_stageId,
       customLocation: var_customLocation,
+      starredSetIds: var_starredSetIds,
     );
   }
 
@@ -4974,6 +4977,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_String(self.status, serializer);
     sse_encode_opt_String(self.stageId, serializer);
     sse_encode_opt_String(self.customLocation, serializer);
+    sse_encode_list_String(self.starredSetIds, serializer);
   }
 
   @protected

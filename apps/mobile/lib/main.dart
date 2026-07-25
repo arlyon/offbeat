@@ -12,6 +12,7 @@ import 'theme/tokens.dart';
 import 'shell/bottom_tab_bar.dart';
 import 'shell/top_nav.dart';
 import 'data/models.dart';
+import 'data/serial_keyed_queue.dart';
 import 'screens/festival_list/festival_list_screen.dart';
 import 'screens/festival_detail/festival_detail_screen.dart';
 import 'screens/festival_detail/admin_panel.dart';
@@ -105,6 +106,7 @@ class _OffbeatShellState extends State<_OffbeatShell>
 
   // Starred set IDs (loaded from Rust SQLite)
   Set<String> _starredSetIds = {};
+  final SerialKeyedQueue _starToggleQueue = SerialKeyedQueue();
 
   // Weather state
   StreamSubscription<WeatherForecastDto?>? _weatherSub;
@@ -907,47 +909,43 @@ class _OffbeatShellState extends State<_OffbeatShell>
           node: _node!,
           festivalId: _selectedFestival!.id,
           festivalName: _selectedFestival!.name,
+          stages: {
+            if (_lineup != null)
+              for (final stage in _lineup!.stages) stage.id: stage.name,
+          },
           userId: _userId,
           displayName: _displayName,
         );
     }
   }
 
-  Future<void> _handleStarToggle(String setId) async {
+  void _handleStarToggle(String setId) {
     final node = _node;
-    final fest = _selectedFestival;
-    if (node == null || fest == null) return;
+    final festivalId = _selectedFestival?.id;
+    if (node == null || festivalId == null) return;
 
-    try {
-      final nowStarred = await node.toggleStar(
-        festivalId: fest.id,
-        setId: setId,
-      );
-      if (!mounted) return;
-      setState(() {
-        if (nowStarred) {
-          _starredSetIds.add(setId);
-        } else {
-          _starredSetIds.remove(setId);
+    _starToggleQueue.enqueue('$festivalId/$setId', () async {
+      try {
+        await node.toggleStar(festivalId: festivalId, setId: setId);
+        final persisted = await node.getStars(festivalId: festivalId);
+        if (!mounted || _selectedFestival?.id != festivalId) return;
+        setState(() => _starredSetIds = persisted.toSet());
+      } catch (error) {
+        debugPrint('star toggle failed: $error');
+        if (!mounted || _selectedFestival?.id != festivalId) return;
+        try {
+          final persisted = await node.getStars(festivalId: festivalId);
+          if (mounted && _selectedFestival?.id == festivalId) {
+            setState(() => _starredSetIds = persisted.toSet());
+          }
+        } catch (_) {}
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('COULD NOT UPDATE MY SCHEDULE')),
+          );
         }
-      });
-      _flushStarsToGroups(node, fest.id);
-    } catch (e) {
-      debugPrint('star toggle failed: $e');
-    }
-  }
-
-  /// Push current stars to all groups for this festival (fire-and-forget).
-  void _flushStarsToGroups(AppNode node, String festivalId) async {
-    try {
-      final stars = await node.getStars(festivalId: festivalId);
-      final groups = await node.getGroups(festivalId: festivalId);
-      for (final group in groups) {
-        node.updateSharedStars(groupId: group.id, setIds: stars);
       }
-    } catch (e) {
-      debugPrint('flush stars failed: $e');
-    }
+    });
   }
 
   Widget _buildScheduleTab() {
@@ -982,7 +980,7 @@ class _OffbeatShellState extends State<_OffbeatShell>
           )
           .toList();
 
-      sets = lineup.sets.map((s) {
+      final builtSets = lineup.sets.map((s) {
         final festSet = FestSet.fromJson({
           'id': s.id,
           'day': s.day,
@@ -996,6 +994,7 @@ class _OffbeatShellState extends State<_OffbeatShell>
         festSet.starred = _starredSetIds.contains(s.id);
         return festSet;
       }).toList();
+      sets = withScheduleClashes(builtSets);
     }
 
     return FestivalDetailScreen(

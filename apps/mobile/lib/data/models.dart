@@ -196,6 +196,7 @@ class FestSet {
   final String genre;
   bool starred;
   final bool live;
+  final bool cancelled;
   final List<String> clashes;
 
   FestSet({
@@ -208,6 +209,7 @@ class FestSet {
     required this.genre,
     this.starred = false,
     this.live = false,
+    this.cancelled = false,
     this.clashes = const [],
   });
 
@@ -222,11 +224,12 @@ class FestSet {
       genre: (j['genre'] as String?) ?? '',
       starred: false,
       live: false,
+      cancelled: (j['cancelled'] as bool?) ?? false,
       clashes: const [],
     );
   }
 
-  FestSet copyWith({bool? starred, int? t}) => FestSet(
+  FestSet copyWith({bool? starred, int? t, List<String>? clashes}) => FestSet(
     id: id,
     day: day,
     stage: stage,
@@ -236,8 +239,35 @@ class FestSet {
     genre: genre,
     starred: starred ?? this.starred,
     live: live,
-    clashes: clashes,
+    cancelled: cancelled,
+    clashes: clashes ?? this.clashes,
   );
+}
+
+/// Derive every set's overlaps with the user's currently liked schedule.
+/// A liked set only clashes with other liked sets; an unliked set is marked
+/// when it overlaps a liked set, allowing "hide clashes" filtering.
+List<FestSet> withScheduleClashes(List<FestSet> sets) {
+  final clashesBySet = {for (final set in sets) set.id: <String>{}};
+  final liked = sets.where((set) => set.starred && !set.cancelled).toList();
+
+  for (final set in sets) {
+    if (set.cancelled || set.dur <= 0) continue;
+    for (final likedSet in liked) {
+      if (set.id == likedSet.id || !_setsOverlap(set, likedSet)) continue;
+      clashesBySet[set.id]!.add(likedSet.id);
+    }
+  }
+
+  return sets.map((set) {
+    final clashes = clashesBySet[set.id]!.toList()..sort();
+    return set.copyWith(clashes: clashes);
+  }).toList();
+}
+
+bool _setsOverlap(FestSet a, FestSet b) {
+  if (a.day != b.day || a.cancelled || b.cancelled) return false;
+  return a.t < b.t + b.dur && b.t < a.t + a.dur;
 }
 
 // ── Helpers ───────────────────────────────────────────────────

@@ -17,6 +17,7 @@ class SocialScreen extends StatefulWidget {
   final AppNode node;
   final String festivalId;
   final String festivalName;
+  final Map<String, String> stages;
   final String userId;
   final String? displayName;
 
@@ -25,6 +26,7 @@ class SocialScreen extends StatefulWidget {
     required this.node,
     required this.festivalId,
     required this.festivalName,
+    required this.stages,
     required this.userId,
     this.displayName,
   });
@@ -110,7 +112,17 @@ class _SocialScreenState extends State<SocialScreen> {
     try {
       final stateStream = await widget.node.watchGroupState(groupId: groupId);
       _groupStateSub = stateStream.listen((state) {
-        if (mounted) setState(() => _groupState = state);
+        if (!mounted) return;
+        setState(() {
+          _groupState = state;
+          _groups = _groups
+              .map(
+                (group) => group.id == groupId && state.name.isNotEmpty
+                    ? GroupInfo(id: group.id, name: state.name)
+                    : group,
+              )
+              .toList();
+        });
       });
 
       // Also get initial state
@@ -157,6 +169,53 @@ class _SocialScreenState extends State<SocialScreen> {
     _composerController.clear();
     try {
       await widget.node.sendGroupChat(groupId: _activeGroupId!, text: text);
+    } catch (_) {}
+  }
+
+  Future<void> _checkIn({String? stageId, String? customLocation}) async {
+    final groupId = _activeGroupId;
+    if (groupId == null) return;
+    try {
+      await widget.node.checkIn(
+        groupId: groupId,
+        stageId: stageId,
+        customLocation: customLocation,
+      );
+      if (!mounted) return;
+      Navigator.of(context).maybePop();
+    } catch (_) {}
+  }
+
+  void _showCheckInSheet() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => _CheckInSheet(
+        stages: widget.stages,
+        onStage: (stageId) => _checkIn(stageId: stageId),
+        onCustom: (location) => _checkIn(customLocation: location),
+        onClear: () => _checkIn(),
+      ),
+    );
+  }
+
+  Future<void> _shareSchedule() async {
+    final groupId = _activeGroupId;
+    if (groupId == null) return;
+    try {
+      final stars = await widget.node.getStars(festivalId: widget.festivalId);
+      await widget.node.updateSharedStars(groupId: groupId, setIds: stars);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            stars.isEmpty
+                ? 'SHARED SCHEDULE CLEARED'
+                : '${stars.length} SAVED SETS SHARED',
+          ),
+        ),
+      );
     } catch (_) {}
   }
 
@@ -443,9 +502,14 @@ class _SocialScreenState extends State<SocialScreen> {
                   onTap: () => _showInviteSheet(),
                 ),
                 _actionButton(
-                  label: 'SCAN',
-                  icon: Icons.qr_code_scanner,
-                  onTap: _showScanSheet,
+                  label: 'CHECK IN',
+                  icon: Icons.location_on_outlined,
+                  onTap: _showCheckInSheet,
+                ),
+                _actionButton(
+                  label: 'SHARE ★',
+                  icon: Icons.star_outline,
+                  onTap: _shareSchedule,
                 ),
                 _actionButton(
                   label: 'NEW',
@@ -1179,5 +1243,208 @@ class _SocialScreenState extends State<SocialScreen> {
     } catch (_) {
       return DateTime.now();
     }
+  }
+}
+
+class _CheckInSheet extends StatefulWidget {
+  final Map<String, String> stages;
+  final Future<void> Function(String stageId) onStage;
+  final Future<void> Function(String location) onCustom;
+  final Future<void> Function() onClear;
+
+  const _CheckInSheet({
+    required this.stages,
+    required this.onStage,
+    required this.onCustom,
+    required this.onClear,
+  });
+
+  @override
+  State<_CheckInSheet> createState() => _CheckInSheetState();
+}
+
+class _CheckInSheetState extends State<_CheckInSheet> {
+  final _customController = TextEditingController();
+  bool _saving = false;
+
+  @override
+  void dispose() {
+    _customController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _run(Future<void> Function() action) async {
+    if (_saving) return;
+    setState(() => _saving = true);
+    try {
+      await action();
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final stages = widget.stages.entries.toList();
+    return DraggableScrollableSheet(
+      initialChildSize: 0.72,
+      minChildSize: 0.45,
+      maxChildSize: 0.92,
+      expand: false,
+      builder: (context, scrollController) => Container(
+        color: colorSurface1,
+        child: SafeArea(
+          top: false,
+          child: Column(
+            children: [
+              DottedBorder.bottom(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(18, 16, 12, 12),
+                  child: Row(
+                    children: [
+                      const Expanded(
+                        child: Text(
+                          'CHECK IN//LOCATION',
+                          style: TextStyle(
+                            fontFamily: 'JetBrainsMono',
+                            fontSize: 11,
+                            fontWeight: FontWeight.w500,
+                            letterSpacing: 0.08 * 11,
+                            color: colorFg,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: () => Navigator.pop(context),
+                        icon: const Icon(
+                          Icons.close,
+                          size: 18,
+                          color: colorFg2,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              Expanded(
+                child: ListView(
+                  controller: scrollController,
+                  padding: const EdgeInsets.fromLTRB(18, 14, 18, 18),
+                  children: [
+                    const Text(
+                      'STAGE',
+                      style: TextStyle(
+                        fontFamily: 'JetBrainsMono',
+                        fontSize: 10,
+                        letterSpacing: 0.08 * 10,
+                        color: colorFg3,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    if (stages.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 12),
+                        child: Text(
+                          'NO STAGES CACHED',
+                          style: TextStyle(
+                            fontFamily: 'JetBrainsMono',
+                            fontSize: 11,
+                            color: colorFg4,
+                          ),
+                        ),
+                      )
+                    else
+                      ...stages.map(
+                        (stage) => GestureDetector(
+                          onTap: _saving
+                              ? null
+                              : () => _run(() => widget.onStage(stage.key)),
+                          child: DottedBorder.bottom(
+                            child: SizedBox(
+                              height: 48,
+                              child: Row(
+                                children: [
+                                  const Icon(
+                                    Icons.location_on_outlined,
+                                    size: 16,
+                                    color: colorAccent,
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: Text(
+                                      stage.value.toUpperCase(),
+                                      style: const TextStyle(
+                                        fontFamily: 'JetBrainsMono',
+                                        fontSize: 12,
+                                        color: colorFg,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    const SizedBox(height: 20),
+                    const Text(
+                      'CUSTOM LOCATION',
+                      style: TextStyle(
+                        fontFamily: 'JetBrainsMono',
+                        fontSize: 10,
+                        letterSpacing: 0.08 * 10,
+                        color: colorFg3,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _customController,
+                      enabled: !_saving,
+                      style: const TextStyle(color: colorFg),
+                      decoration: const InputDecoration(
+                        hintText: 'CAMP, FOOD COURT, LANDMARK…',
+                        hintStyle: TextStyle(color: colorFg4),
+                        enabledBorder: UnderlineInputBorder(
+                          borderSide: BorderSide(color: colorFg3),
+                        ),
+                        focusedBorder: UnderlineInputBorder(
+                          borderSide: BorderSide(color: colorAccent),
+                        ),
+                      ),
+                      onSubmitted: (value) {
+                        final location = value.trim();
+                        if (location.isNotEmpty) {
+                          _run(() => widget.onCustom(location));
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      height: 44,
+                      child: OutlinedButton(
+                        onPressed: _saving
+                            ? null
+                            : () {
+                                final location = _customController.text.trim();
+                                if (location.isNotEmpty) {
+                                  _run(() => widget.onCustom(location));
+                                }
+                              },
+                        child: const Text('CHECK IN HERE'),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    TextButton(
+                      onPressed: _saving ? null : () => _run(widget.onClear),
+                      child: const Text('CLEAR CHECK-IN'),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }

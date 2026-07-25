@@ -226,6 +226,12 @@ impl ResourceRegistry {
         }
     }
 
+    /// Remove both resources protected by a group's key.
+    pub fn deregister_group(&mut self, group_key: [u8; 32]) {
+        self.deregister(&Resource::group_state(group_key).id());
+        self.deregister(&Resource::group_chat(group_key).id());
+    }
+
     /// Return all resources sorted by priority (lowest value first).
     pub fn by_priority(&self) -> Vec<&Resource> {
         let mut v: Vec<&Resource> = self.resources.values().collect();
@@ -333,6 +339,18 @@ mod tests {
         reg.register(Resource::festival_state("fest-2026", PK));
         reg.deregister("festival/fest-2026/state");
         assert!(reg.get("festival/fest-2026/state").is_none());
+    }
+
+    #[test]
+    fn registry_deregister_group_removes_state_and_chat() {
+        let key = [1; 32];
+        let mut reg = ResourceRegistry::new();
+        reg.register_groups(&[("ignored".to_string(), key)]);
+
+        reg.deregister_group(key);
+
+        assert!(reg.get(&Resource::group_state(key).id()).is_none());
+        assert!(reg.get(&Resource::group_chat(key).id()).is_none());
     }
 
     #[test]

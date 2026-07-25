@@ -62,8 +62,18 @@ pub enum GossipMessage {
 // dispatch_message
 // ---------------------------------------------------------------------------
 
+fn validate_group_state_doc(doc_id: &str, group_key: &[u8; 32]) -> anyhow::Result<()> {
+    let group_id = crypto::group_id_from_key(group_key);
+    let expected = format!("group/{group_id}/state");
+    if doc_id != expected {
+        anyhow::bail!("group document/key mismatch: {doc_id} != {expected}");
+    }
+    Ok(())
+}
+
 /// Result of dispatching a gossip message, carrying any info needed for
 /// notifications that the caller cannot derive from the original message.
+#[derive(Debug)]
 pub enum DispatchResult {
     /// No extra info needed for notification.
     Ok,
@@ -105,6 +115,7 @@ pub fn dispatch_message(
             encrypted,
             group_key,
         } => {
+            validate_group_state_doc(&doc_id, &group_key)?;
             doc_manager.apply_encrypted_update(&doc_id, &encrypted, &group_key)?;
         }
 
@@ -129,6 +140,7 @@ pub fn dispatch_message(
             encrypted_diff,
             group_key,
         } => {
+            validate_group_state_doc(&doc_id, &group_key)?;
             doc_manager.apply_encrypted_update(&doc_id, &encrypted_diff, &group_key)?;
         }
 
@@ -137,6 +149,7 @@ pub fn dispatch_message(
             encrypted_diff,
             group_key,
         } => {
+            validate_group_state_doc(&doc_id, &group_key)?;
             doc_manager.apply_encrypted_update(&doc_id, &encrypted_diff, &group_key)?;
         }
 
@@ -546,13 +559,14 @@ mod tests {
             .encode_state_as_update_v1(&StateVector::default());
 
         let encrypted = crypto::encrypt(&group_key, &update_bytes).unwrap();
+        let doc_id = format!("group/{}/state", crypto::group_id_from_key(&group_key));
 
         let dummy_pk = [0u8; 32];
         dispatch_message(
             &doc_mgr,
             &db_arc,
             GossipMessage::GroupUpdate {
-                doc_id: "group-doc".to_string(),
+                doc_id: doc_id.clone(),
                 encrypted,
                 group_key,
             },
@@ -560,8 +574,30 @@ mod tests {
         )
         .unwrap();
 
-        let val = doc_mgr.read_map_value("group-doc", "pin");
+        let val = doc_mgr.read_map_value(&doc_id, "pin");
         assert_eq!(val, Some("tent-area".to_string()));
+    }
+
+    #[test]
+    fn test_dispatch_group_update_rejects_document_key_mismatch() {
+        let db_arc = test_db();
+        let doc_mgr = DocManager::new(db_arc.clone());
+        let group_key = crypto::generate_group_key();
+        let encrypted = crypto::encrypt(&group_key, &[]).unwrap();
+
+        let err = dispatch_message(
+            &doc_mgr,
+            &db_arc,
+            GossipMessage::GroupUpdate {
+                doc_id: "group/not-the-key/state".to_string(),
+                encrypted,
+                group_key,
+            },
+            &[0u8; 32],
+        )
+        .expect_err("mismatched document must be rejected");
+
+        assert!(err.to_string().contains("document/key mismatch"));
     }
 
     #[test]

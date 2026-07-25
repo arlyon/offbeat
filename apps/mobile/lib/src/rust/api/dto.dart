@@ -258,6 +258,7 @@ class GroupMemberDto {
   final String status;
   final String? stageId;
   final String? customLocation;
+  final List<String> starredSetIds;
 
   const GroupMemberDto({
     required this.userId,
@@ -265,6 +266,7 @@ class GroupMemberDto {
     required this.status,
     this.stageId,
     this.customLocation,
+    required this.starredSetIds,
   });
 
   @override
@@ -273,7 +275,8 @@ class GroupMemberDto {
       displayName.hashCode ^
       status.hashCode ^
       stageId.hashCode ^
-      customLocation.hashCode;
+      customLocation.hashCode ^
+      starredSetIds.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -284,7 +287,8 @@ class GroupMemberDto {
           displayName == other.displayName &&
           status == other.status &&
           stageId == other.stageId &&
-          customLocation == other.customLocation;
+          customLocation == other.customLocation &&
+          starredSetIds == other.starredSetIds;
 }
 
 class GroupPinDto {

@@ -229,20 +229,52 @@ class MemberSheet extends StatelessWidget {
                     color: colorFg3,
                   ),
                 ),
-                const SizedBox(height: 4),
-                // Placeholder: no schedule data from API yet
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 16),
-                  child: Text(
-                    'NO SCHEDULE DATA AVAILABLE',
-                    style: TextStyle(
-                      fontFamily: 'JetBrainsMono',
-                      fontSize: 11,
-                      letterSpacing: 0.08 * 11,
-                      color: colorFg4,
+                const SizedBox(height: 8),
+                if (member.starredSetIds.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 12),
+                    child: Text(
+                      'NO SHARED SETS',
+                      style: TextStyle(
+                        fontFamily: 'JetBrainsMono',
+                        fontSize: 11,
+                        letterSpacing: 0.08 * 11,
+                        color: colorFg4,
+                      ),
                     ),
-                  ),
-                ),
+                  )
+                else
+                  ...member.starredSetIds
+                      .take(3)
+                      .map(
+                        (setId) => Padding(
+                          padding: const EdgeInsets.only(bottom: 6),
+                          child: Row(
+                            children: [
+                              const Text(
+                                '\u2605',
+                                style: TextStyle(
+                                  color: colorAccent,
+                                  fontSize: 11,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  setId.toUpperCase(),
+                                  style: const TextStyle(
+                                    fontFamily: 'JetBrainsMono',
+                                    fontSize: 11,
+                                    letterSpacing: 0.04 * 11,
+                                    color: colorFg2,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
               ],
             ),
           ),

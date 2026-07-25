@@ -41,6 +41,7 @@ pub struct GroupMemberDto {
     pub status: String,
     pub stage_id: Option<String>,
     pub custom_location: Option<String>,
+    pub starred_set_ids: Vec<String>,
 }
 
 pub struct GroupPinDto {

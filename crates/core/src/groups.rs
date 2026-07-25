@@ -1,8 +1,9 @@
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use base64::Engine as _;
 use iroh_gossip::proto::TopicId;
-use yrs::Map;
+use yrs::{Map, Out, any::Any};
 
 use crate::crypto;
 use crate::db::Database;
@@ -18,6 +19,8 @@ pub struct GroupCreateResult {
     pub group_id: String,
     pub festival_id: String,
     pub invite_payload: String,
+    pub group_key: [u8; 32],
+    pub encrypted_update: Vec<u8>,
     pub topic_state: TopicId,
     pub topic_chat: TopicId,
 }
@@ -26,8 +29,14 @@ pub struct GroupJoinResult {
     pub group_id: String,
     pub festival_id: String,
     pub group_key: [u8; 32],
+    pub encrypted_update: Vec<u8>,
     pub topic_state: TopicId,
     pub topic_chat: TopicId,
+}
+
+pub struct GroupLeaveResult {
+    pub group_key: [u8; 32],
+    pub encrypted_update: Vec<u8>,
 }
 
 pub struct GroupMember {
@@ -36,12 +45,20 @@ pub struct GroupMember {
     pub status: String,
     pub stage_id: Option<String>,
     pub custom_location: Option<String>,
+    pub starred_set_ids: Vec<String>,
 }
 
 pub struct GroupState {
     pub name: String,
     pub members: Vec<GroupMember>,
     pub pins: Vec<GroupPin>,
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+struct StoredCheckIn<'a> {
+    kind: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    value: Option<&'a str>,
 }
 
 // ---------------------------------------------------------------------------
@@ -81,7 +98,8 @@ impl GroupManager {
         let festival_id_s = festival_id.to_string();
         let user_id_s = user_id.to_string();
         let display_name_s = display_name.to_string();
-        self.doc_manager
+        let update = self
+            .doc_manager
             .mutate(&doc_id, &["root", "members"], |maps, txn| {
                 let (root, members) = (&maps[0], &maps[1]);
                 root.insert(txn, "name", name);
@@ -92,6 +110,7 @@ impl GroupManager {
                 member.insert(txn, "displayName", display_name_s);
                 member.insert(txn, "status", "active");
             })?;
+        let encrypted_update = crypto::encrypt(&key, &update)?;
 
         let b64key = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(key);
         let invite_payload = format!("offbeat://group/{festival_id}/{group_id}/{b64key}");
@@ -103,6 +122,8 @@ impl GroupManager {
             group_id,
             festival_id: festival_id.to_string(),
             invite_payload,
+            group_key: key,
+            encrypted_update,
             topic_state,
             topic_chat,
         })
@@ -165,12 +186,14 @@ impl GroupManager {
 
         let user_id_s = user_id.to_string();
         let display_name_s = display_name.to_string();
-        self.doc_manager
+        let update = self
+            .doc_manager
             .mutate(&doc_id, &["members"], |maps, txn| {
                 let member = doc_manager::get_or_init_map(&maps[0], txn, &user_id_s);
                 member.insert(txn, "displayName", display_name_s);
                 member.insert(txn, "status", "active");
             })?;
+        let encrypted_update = crypto::encrypt(&group_key, &update)?;
 
         let topic_state = topics::group_topic(&group_key, "state");
         let topic_chat = topics::group_topic(&group_key, "chat");
@@ -179,6 +202,7 @@ impl GroupManager {
             group_id: derived_id,
             festival_id,
             group_key,
+            encrypted_update,
             topic_state,
             topic_chat,
         })
@@ -195,7 +219,11 @@ impl GroupManager {
         &self,
         group_id: &str,
         user_id: &str,
-    ) -> anyhow::Result<Option<Vec<u8>>> {
+    ) -> anyhow::Result<GroupLeaveResult> {
+        let group_key = self
+            .db
+            .load_group_key(group_id)?
+            .ok_or_else(|| anyhow::anyhow!("group key not found for {group_id}"))?;
         let doc_id = format!("group/{group_id}/state");
         let user_id_s = user_id.to_string();
         let update = self
@@ -203,10 +231,14 @@ impl GroupManager {
             .mutate(&doc_id, &["members"], |maps, txn| {
                 maps[0].remove(txn, &user_id_s);
             })?;
+        let encrypted_update = crypto::encrypt(&group_key, &update)?;
 
         self.db.delete_group(group_id)?;
 
-        Ok(Some(update))
+        Ok(GroupLeaveResult {
+            group_key,
+            encrypted_update,
+        })
     }
 
     // -----------------------------------------------------------------------
@@ -227,6 +259,30 @@ impl GroupManager {
             .load_group_key(group_id)?
             .ok_or_else(|| anyhow::anyhow!("group not found: {group_id}"))?;
 
+        let check_in = match (stage_id, custom_location) {
+            (Some(_), Some(_)) => anyhow::bail!("check-in must be a stage or custom location"),
+            (Some(stage_id), None) if stage_id.trim().is_empty() => {
+                anyhow::bail!("stage ID cannot be empty")
+            }
+            (None, Some(location)) if location.trim().is_empty() => {
+                anyhow::bail!("custom location cannot be empty")
+            }
+            (Some(stage_id), None) => StoredCheckIn {
+                kind: "stage",
+                value: Some(stage_id),
+            },
+            (None, Some(location)) => StoredCheckIn {
+                kind: "custom",
+                value: Some(location),
+            },
+            (None, None) => StoredCheckIn {
+                kind: "none",
+                value: None,
+            },
+        };
+        let check_in_json = serde_json::to_string(&check_in)?;
+        let is_active = check_in.kind != "none";
+
         let doc_id = format!("group/{group_id}/state");
         let user_id_s = user_id.to_string();
         let stage_id_s = stage_id.map(String::from);
@@ -237,14 +293,23 @@ impl GroupManager {
             .doc_manager
             .mutate(&doc_id, &["members"], |maps, txn| {
                 let member = doc_manager::get_or_init_map(&maps[0], txn, &user_id_s);
-                member.insert(txn, "status", "active");
+                member.insert(txn, "checkIn", check_in_json);
+                member.insert(txn, "status", if is_active { "active" } else { "offline" });
                 member.insert(txn, "updatedAt", updated_at);
-                if let Some(sid) = stage_id_s {
-                    member.insert(txn, "stageId", sid);
-                    member.remove(txn, "customLocation");
-                } else if let Some(cl) = custom_loc_s {
-                    member.insert(txn, "customLocation", cl);
-                    member.remove(txn, "stageId");
+                match (stage_id_s, custom_loc_s) {
+                    (Some(stage_id), None) => {
+                        member.insert(txn, "stageId", stage_id);
+                        member.remove(txn, "customLocation");
+                    }
+                    (None, Some(location)) => {
+                        member.insert(txn, "customLocation", location);
+                        member.remove(txn, "stageId");
+                    }
+                    (None, None) => {
+                        member.remove(txn, "stageId");
+                        member.remove(txn, "customLocation");
+                    }
+                    (Some(_), Some(_)) => unreachable!("validated check-in location"),
                 }
             })?;
 
@@ -269,13 +334,20 @@ impl GroupManager {
 
         let doc_id = format!("group/{group_id}/state");
         let user_id_s = user_id.to_string();
+        let desired: HashSet<String> = set_ids.into_iter().collect();
         let diff = self.doc_manager.mutate(&doc_id, &["stars"], |maps, txn| {
             let user_stars = doc_manager::get_or_init_map(&maps[0], txn, &user_id_s);
-            let old_keys: Vec<String> = user_stars.keys(txn).map(|k| k.to_string()).collect();
-            for k in &old_keys {
-                user_stars.remove(txn, k);
+            let current: HashSet<String> = user_stars
+                .iter(txn)
+                .filter_map(|(set_id, value)| {
+                    matches!(value, Out::Any(Any::Bool(true))).then(|| set_id.to_string())
+                })
+                .collect();
+
+            for set_id in current.difference(&desired) {
+                user_stars.remove(txn, set_id.as_str());
             }
-            for set_id in &set_ids {
+            for set_id in desired.difference(&current) {
                 user_stars.insert(txn, set_id.as_str(), true);
             }
         })?;
@@ -333,16 +405,55 @@ impl GroupManager {
 
         let members_raw = self.doc_manager.read_nested_map_entries(&doc_id, "members");
         let pins_raw = self.doc_manager.read_nested_map_entries(&doc_id, "pins");
+        let stars_by_user: HashMap<String, Vec<String>> = self
+            .doc_manager
+            .read_nested_map_entries(&doc_id, "stars")
+            .into_iter()
+            .map(|(user_id, fields)| {
+                let mut stars: Vec<String> = fields
+                    .into_iter()
+                    .filter_map(|(set_id, value)| {
+                        matches!(value, Any::Bool(true)).then_some(set_id)
+                    })
+                    .collect();
+                stars.sort();
+                (user_id, stars)
+            })
+            .collect();
 
         let members = members_raw
             .into_iter()
-            .map(|(uid, fields)| GroupMember {
-                user_id: uid,
-                display_name: doc_manager::any_str(&fields, "displayName").unwrap_or_default(),
-                status: doc_manager::any_str(&fields, "status")
-                    .unwrap_or_else(|| "active".to_string()),
-                stage_id: doc_manager::any_str(&fields, "stageId"),
-                custom_location: doc_manager::any_str(&fields, "customLocation"),
+            .map(|(uid, fields)| {
+                let stored_check_in = doc_manager::any_str(&fields, "checkIn");
+                let parsed_check_in = stored_check_in
+                    .as_deref()
+                    .and_then(|value| serde_json::from_str::<StoredCheckIn<'_>>(value).ok());
+                let (status, stage_id, custom_location) = match parsed_check_in {
+                    Some(StoredCheckIn {
+                        kind: "stage",
+                        value: Some(value),
+                    }) => ("active".to_string(), Some(value.to_string()), None),
+                    Some(StoredCheckIn {
+                        kind: "custom",
+                        value: Some(value),
+                    }) => ("active".to_string(), None, Some(value.to_string())),
+                    Some(_) => ("offline".to_string(), None, None),
+                    None if stored_check_in.is_some() => ("offline".to_string(), None, None),
+                    None => (
+                        doc_manager::any_str(&fields, "status")
+                            .unwrap_or_else(|| "active".to_string()),
+                        doc_manager::any_str(&fields, "stageId"),
+                        doc_manager::any_str(&fields, "customLocation"),
+                    ),
+                };
+                GroupMember {
+                    starred_set_ids: stars_by_user.get(&uid).cloned().unwrap_or_default(),
+                    user_id: uid,
+                    display_name: doc_manager::any_str(&fields, "displayName").unwrap_or_default(),
+                    status,
+                    stage_id,
+                    custom_location,
+                }
             })
             .collect();
 
@@ -413,9 +524,8 @@ impl GroupManager {
 
     /// Read the starred set IDs for a user from the group doc.
     pub fn read_user_stars(&self, group_id: &str, user_id: &str) -> Vec<String> {
-        use yrs::{Out, any::Any};
         let doc_id = format!("group/{group_id}/state");
-        self.doc_manager.read(&doc_id, &["stars"], |maps, txn| {
+        let mut stars = self.doc_manager.read(&doc_id, &["stars"], |maps, txn| {
             match maps[0].get(txn, user_id) {
                 Some(Out::YMap(user_stars)) => user_stars
                     .keys(txn)
@@ -424,7 +534,9 @@ impl GroupManager {
                     .collect(),
                 _ => vec![],
             }
-        })
+        });
+        stars.sort();
+        stars
     }
 }
 
@@ -521,6 +633,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_join_and_leave_updates_converge_idempotently() {
+        let creator = make_manager();
+        let joiner = make_manager();
+        let created = creator
+            .create_group("fest-1", "Crew", "alice", "Alice")
+            .await
+            .unwrap();
+        let joined = joiner
+            .join_group(&created.invite_payload, "bob", "Bob")
+            .await
+            .unwrap();
+        let doc_id = format!("group/{}/state", created.group_id);
+
+        let creator_update =
+            crypto::decrypt(&created.group_key, &created.encrypted_update).unwrap();
+        joiner
+            .doc_manager
+            .apply_update(&doc_id, &creator_update)
+            .unwrap();
+        let join_update = crypto::decrypt(&joined.group_key, &joined.encrypted_update).unwrap();
+        creator
+            .doc_manager
+            .apply_update(&doc_id, &join_update)
+            .unwrap();
+        creator
+            .doc_manager
+            .apply_update(&doc_id, &join_update)
+            .unwrap();
+        assert_eq!(
+            creator
+                .get_group_state(&created.group_id)
+                .await
+                .unwrap()
+                .members
+                .len(),
+            2
+        );
+        assert_eq!(
+            joiner
+                .get_group_state(&created.group_id)
+                .await
+                .unwrap()
+                .members
+                .len(),
+            2
+        );
+
+        let left = joiner.leave_group(&created.group_id, "bob").await.unwrap();
+        let leave_update = crypto::decrypt(&left.group_key, &left.encrypted_update).unwrap();
+        creator
+            .doc_manager
+            .apply_update(&doc_id, &leave_update)
+            .unwrap();
+        creator
+            .doc_manager
+            .apply_update(&doc_id, &leave_update)
+            .unwrap();
+        let state = creator.get_group_state(&created.group_id).await.unwrap();
+        assert_eq!(state.members.len(), 1);
+        assert_eq!(state.members[0].user_id, "alice");
+    }
+
+    #[tokio::test]
     async fn test_leave_group() {
         let gm = make_manager();
         let create = gm
@@ -528,8 +703,9 @@ mod tests {
             .await
             .unwrap();
 
-        let update = gm.leave_group(&create.group_id, "user1").await.unwrap();
-        assert!(update.is_some());
+        let result = gm.leave_group(&create.group_id, "user1").await.unwrap();
+        assert!(!result.encrypted_update.is_empty());
+        assert_eq!(result.group_key, create.group_key);
 
         // DB entry removed
         let groups = gm.db.load_groups("fest-1").unwrap();
@@ -578,6 +754,95 @@ mod tests {
         let plaintext = crypto::decrypt(&group_key, &encrypted).unwrap();
         // Valid Yrs update bytes (non-empty)
         assert!(!plaintext.is_empty());
+        let state = gm.get_group_state(&create.group_id).await.unwrap();
+        assert_eq!(state.members[0].stage_id.as_deref(), Some("main-stage"));
+        assert!(state.members[0].custom_location.is_none());
+
+        assert!(
+            gm.check_in(&create.group_id, "user1", Some("main-stage"), Some("camp"))
+                .await
+                .is_err()
+        );
+        gm.check_in(&create.group_id, "user1", None, None)
+            .await
+            .unwrap();
+        let state = gm.get_group_state(&create.group_id).await.unwrap();
+        assert_eq!(state.members[0].status, "offline");
+        assert!(state.members[0].stage_id.is_none());
+        assert!(state.members[0].custom_location.is_none());
+    }
+
+    #[tokio::test]
+    async fn check_ins_converge_when_reordered_or_concurrent() {
+        let a = make_manager();
+        let b = make_manager();
+        let created = a
+            .create_group("fest-1", "Crew", "alice", "Alice")
+            .await
+            .unwrap();
+        let joined = b
+            .join_group(&created.invite_payload, "alice", "Alice")
+            .await
+            .unwrap();
+        let doc_id = format!("group/{}/state", created.group_id);
+        let created_update =
+            crypto::decrypt(&created.group_key, &created.encrypted_update).unwrap();
+        b.doc_manager
+            .apply_update(&doc_id, &created_update)
+            .unwrap();
+        let joined_update = crypto::decrypt(&joined.group_key, &joined.encrypted_update).unwrap();
+        a.doc_manager.apply_update(&doc_id, &joined_update).unwrap();
+
+        let stage_update = a
+            .check_in(&created.group_id, "alice", Some("main"), None)
+            .await
+            .unwrap();
+        let custom_update = a
+            .check_in(&created.group_id, "alice", None, Some("food court"))
+            .await
+            .unwrap();
+        let stage_update = crypto::decrypt(&created.group_key, &stage_update).unwrap();
+        let custom_update = crypto::decrypt(&created.group_key, &custom_update).unwrap();
+        b.doc_manager.apply_update(&doc_id, &custom_update).unwrap();
+        b.doc_manager.apply_update(&doc_id, &stage_update).unwrap();
+        b.doc_manager.apply_update(&doc_id, &custom_update).unwrap();
+        let state = b.get_group_state(&created.group_id).await.unwrap();
+        assert!(state.members[0].stage_id.is_none());
+        assert_eq!(
+            state.members[0].custom_location.as_deref(),
+            Some("food court")
+        );
+
+        let a_update = a
+            .check_in(&created.group_id, "alice", Some("side"), None)
+            .await
+            .unwrap();
+        let b_update = b
+            .check_in(&created.group_id, "alice", None, Some("camp"))
+            .await
+            .unwrap();
+        a.doc_manager
+            .apply_update(
+                &doc_id,
+                &crypto::decrypt(&created.group_key, &b_update).unwrap(),
+            )
+            .unwrap();
+        b.doc_manager
+            .apply_update(
+                &doc_id,
+                &crypto::decrypt(&created.group_key, &a_update).unwrap(),
+            )
+            .unwrap();
+        let a_state = a.get_group_state(&created.group_id).await.unwrap();
+        let b_state = b.get_group_state(&created.group_id).await.unwrap();
+        let a_member = &a_state.members[0];
+        let b_member = &b_state.members[0];
+        assert_eq!(a_member.stage_id, b_member.stage_id);
+        assert_eq!(a_member.custom_location, b_member.custom_location);
+        assert_ne!(
+            a_member.stage_id.is_some(),
+            a_member.custom_location.is_some()
+        );
     }
 
     #[tokio::test]
@@ -587,6 +852,9 @@ mod tests {
             .create_group("fest-1", "Crew", "user1", "Alice")
             .await
             .unwrap();
+
+        gm.db.toggle_star("fest-1", "private-set").unwrap();
+        assert!(gm.read_user_stars(&create.group_id, "user1").is_empty());
 
         let set_ids = vec!["set-a".to_string(), "set-b".to_string()];
         let encrypted = gm
@@ -604,6 +872,116 @@ mod tests {
         assert_eq!(stars.len(), 2);
         assert!(stars.contains(&"set-a".to_string()));
         assert!(stars.contains(&"set-b".to_string()));
+        let state = gm.get_group_state(&create.group_id).await.unwrap();
+        assert_eq!(state.members[0].starred_set_ids, vec!["set-a", "set-b"]);
+    }
+
+    #[tokio::test]
+    async fn concurrent_shared_star_edits_merge_per_set() {
+        let a = make_manager();
+        let b = make_manager();
+        let created = a
+            .create_group("fest-1", "Crew", "alice", "Alice")
+            .await
+            .unwrap();
+        let joined = b
+            .join_group(&created.invite_payload, "alice", "Alice")
+            .await
+            .unwrap();
+        let doc_id = format!("group/{}/state", created.group_id);
+        let created_update =
+            crypto::decrypt(&created.group_key, &created.encrypted_update).unwrap();
+        b.doc_manager
+            .apply_update(&doc_id, &created_update)
+            .unwrap();
+        let joined_update = crypto::decrypt(&joined.group_key, &joined.encrypted_update).unwrap();
+        a.doc_manager.apply_update(&doc_id, &joined_update).unwrap();
+
+        let initial = a
+            .update_stars(&created.group_id, "alice", vec!["a".to_string()])
+            .await
+            .unwrap();
+        let initial = crypto::decrypt(&created.group_key, &initial).unwrap();
+        b.doc_manager.apply_update(&doc_id, &initial).unwrap();
+
+        let a_update = a
+            .update_stars(
+                &created.group_id,
+                "alice",
+                vec!["a".to_string(), "b".to_string()],
+            )
+            .await
+            .unwrap();
+        let b_update = b
+            .update_stars(
+                &joined.group_id,
+                "alice",
+                vec!["a".to_string(), "c".to_string()],
+            )
+            .await
+            .unwrap();
+        a.doc_manager
+            .apply_update(
+                &doc_id,
+                &crypto::decrypt(&created.group_key, &b_update).unwrap(),
+            )
+            .unwrap();
+        b.doc_manager
+            .apply_update(
+                &doc_id,
+                &crypto::decrypt(&created.group_key, &a_update).unwrap(),
+            )
+            .unwrap();
+        assert_eq!(
+            a.read_user_stars(&created.group_id, "alice"),
+            vec!["a", "b", "c"]
+        );
+        assert_eq!(
+            b.read_user_stars(&created.group_id, "alice"),
+            vec!["a", "b", "c"]
+        );
+
+        let remove_b = a
+            .update_stars(
+                &created.group_id,
+                "alice",
+                vec!["a".to_string(), "c".to_string()],
+            )
+            .await
+            .unwrap();
+        let add_d = b
+            .update_stars(
+                &created.group_id,
+                "alice",
+                vec![
+                    "a".to_string(),
+                    "b".to_string(),
+                    "c".to_string(),
+                    "d".to_string(),
+                ],
+            )
+            .await
+            .unwrap();
+        a.doc_manager
+            .apply_update(
+                &doc_id,
+                &crypto::decrypt(&created.group_key, &add_d).unwrap(),
+            )
+            .unwrap();
+        b.doc_manager
+            .apply_update(
+                &doc_id,
+                &crypto::decrypt(&created.group_key, &remove_b).unwrap(),
+            )
+            .unwrap();
+        assert_eq!(
+            a.read_user_stars(&created.group_id, "alice"),
+            vec!["a", "c", "d"]
+        );
+        assert_eq!(
+            b.read_user_stars(&created.group_id, "alice"),
+            vec!["a", "c", "d"]
+        );
     }
 
     #[tokio::test]

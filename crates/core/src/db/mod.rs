@@ -1,7 +1,7 @@
 mod migrations;
 
 use anyhow::Result;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -190,8 +190,15 @@ impl Database {
 
     pub fn save_group(&self, id: &str, festival_id: &str, name: &str, key: &[u8]) -> Result<()> {
         self.conn.lock().unwrap().execute(
-            "INSERT OR REPLACE INTO groups (id, festival_id, name, key, created_at)
-             VALUES (?1, ?2, ?3, ?4, datetime('now'))",
+            "INSERT INTO groups (id, festival_id, name, key, created_at)
+             VALUES (?1, ?2, ?3, ?4, datetime('now'))
+             ON CONFLICT(id) DO UPDATE SET
+                 festival_id = CASE
+                     WHEN excluded.festival_id = '' THEN groups.festival_id
+                     ELSE excluded.festival_id
+                 END,
+                 name = CASE WHEN excluded.name = '' THEN groups.name ELSE excluded.name END,
+                 key = excluded.key",
             params![id, festival_id, name, key],
         )?;
         Ok(())
@@ -207,6 +214,39 @@ impl Database {
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(groups)
+    }
+
+    pub fn load_group_festival_id(&self, group_id: &str) -> Result<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT festival_id FROM groups WHERE id = ?1")?;
+        let mut rows = stmt.query(params![group_id])?;
+        Ok(rows.next()?.map(|row| row.get(0)).transpose()?)
+    }
+
+    pub fn load_all_group_keys(&self) -> Result<Vec<(String, [u8; 32])>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT id, key FROM groups")?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows.into_iter()
+            .map(|(id, key)| {
+                let key = key
+                    .try_into()
+                    .map_err(|_| anyhow::anyhow!("group {id} key must be 32 bytes"))?;
+                Ok((id, key))
+            })
+            .collect()
+    }
+
+    pub fn update_group_name(&self, id: &str, name: &str) -> Result<()> {
+        self.conn.lock().unwrap().execute(
+            "UPDATE groups SET name = ?2 WHERE id = ?1",
+            params![id, name],
+        )?;
+        Ok(())
     }
 
     pub fn delete_group(&self, id: &str) -> Result<()> {
@@ -674,6 +714,38 @@ mod tests {
         assert_eq!(groups[0].0, "g1");
         assert_eq!(groups[0].1, "My Group");
         assert_eq!(groups[0].2, key);
+
+        db.save_group("g1", "", "", &[1u8; 32]).unwrap();
+        let groups = db.load_groups("f1").unwrap();
+        assert_eq!(groups[0].1, "My Group", "repeat joins preserve synced name");
+        assert_eq!(groups[0].2, vec![1u8; 32]);
+        assert_eq!(
+            db.load_group_festival_id("g1").unwrap().as_deref(),
+            Some("f1")
+        );
+        assert!(db.load_group_festival_id("missing").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_load_all_group_keys() {
+        let db = test_db();
+        db.save_group("g1", "f1", "One", &[1u8; 32]).unwrap();
+        db.save_group("g2", "f2", "Two", &[2u8; 32]).unwrap();
+        let mut groups = db.load_all_group_keys().unwrap();
+        groups.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            groups,
+            vec![("g1".to_string(), [1u8; 32]), ("g2".to_string(), [2u8; 32])]
+        );
+    }
+
+    #[test]
+    fn test_update_group_name() {
+        let db = test_db();
+        db.save_group("g1", "f1", "", &[0u8; 32]).unwrap();
+        db.update_group_name("g1", "My Group").unwrap();
+        let groups = db.load_groups("f1").unwrap();
+        assert_eq!(groups[0].1, "My Group");
     }
 
     #[test]
@@ -703,6 +775,18 @@ mod tests {
         db.toggle_star("f1", "s2").unwrap();
         let stars = db.get_stars("f1").unwrap();
         assert_eq!(stars.len(), 2);
+    }
+
+    #[test]
+    fn test_stars_survive_database_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("stars.db");
+        {
+            let db = Database::new(&path).unwrap();
+            assert!(db.toggle_star("f1", "s1").unwrap());
+        }
+        let reopened = Database::new(&path).unwrap();
+        assert_eq!(reopened.get_stars("f1").unwrap(), vec!["s1"]);
     }
 
     #[test]

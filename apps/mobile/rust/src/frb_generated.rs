@@ -3733,12 +3733,14 @@ impl SseDecode for crate::api::dto::GroupMemberDto {
         let mut var_status = <String>::sse_decode(deserializer);
         let mut var_stageId = <Option<String>>::sse_decode(deserializer);
         let mut var_customLocation = <Option<String>>::sse_decode(deserializer);
+        let mut var_starredSetIds = <Vec<String>>::sse_decode(deserializer);
         return crate::api::dto::GroupMemberDto {
             user_id: var_userId,
             display_name: var_displayName,
             status: var_status,
             stage_id: var_stageId,
             custom_location: var_customLocation,
+            starred_set_ids: var_starredSetIds,
         };
     }
 }
@@ -4674,6 +4676,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::dto::GroupMemberDto {
             self.status.into_into_dart().into_dart(),
             self.stage_id.into_into_dart().into_dart(),
             self.custom_location.into_into_dart().into_dart(),
+            self.starred_set_ids.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -5347,6 +5350,7 @@ impl SseEncode for crate::api::dto::GroupMemberDto {
         <String>::sse_encode(self.status, serializer);
         <Option<String>>::sse_encode(self.stage_id, serializer);
         <Option<String>>::sse_encode(self.custom_location, serializer);
+        <Vec<String>>::sse_encode(self.starred_set_ids, serializer);
     }
 }
 

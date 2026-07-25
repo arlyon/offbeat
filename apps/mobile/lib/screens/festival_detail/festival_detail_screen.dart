@@ -5,6 +5,7 @@
 
 import 'package:flutter/material.dart';
 import '../../data/models.dart';
+import '../../theme/tokens.dart';
 import '../../widgets/dotted_border.dart';
 import '../../widgets/chip.dart';
 import 'gantt_view.dart';
@@ -14,7 +15,15 @@ import 'filter_panel.dart';
 import 'clash_radar_view.dart';
 import 'now_strip_view.dart';
 
-enum FestDetailView { gantt, dayTabs, stageTabs, filters, clashRadar, nowStrip }
+enum FestDetailView {
+  gantt,
+  mySchedule,
+  dayTabs,
+  stageTabs,
+  filters,
+  clashRadar,
+  nowStrip,
+}
 
 class FestivalDetailScreen extends StatefulWidget {
   final Festival festival;
@@ -106,6 +115,16 @@ class _FestivalDetailScreenState extends State<FestivalDetailScreen> {
           now: widget.now,
           onStar: widget.onStar,
         );
+      case FestDetailView.mySchedule:
+        final liked = sets.where((set) => set.starred).toList();
+        if (liked.isEmpty) return const _EmptyMySchedule();
+        return DayTabsView(
+          sets: liked,
+          stages: stages,
+          days: days,
+          festivalWhere: widget.festival.where,
+          onStar: widget.onStar,
+        );
       case FestDetailView.dayTabs:
         return DayTabsView(
           sets: sets,
@@ -131,6 +150,53 @@ class _FestivalDetailScreenState extends State<FestivalDetailScreen> {
   }
 }
 
+class _EmptyMySchedule extends StatelessWidget {
+  const _EmptyMySchedule();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Center(
+      child: Padding(
+        padding: EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              '☆',
+              style: TextStyle(
+                fontFamily: 'JetBrainsMono',
+                fontSize: 32,
+                color: colorFg4,
+              ),
+            ),
+            SizedBox(height: 12),
+            Text(
+              'MY SCHEDULE IS EMPTY',
+              style: TextStyle(
+                fontFamily: 'JetBrainsMono',
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.08 * 12,
+                color: colorFg2,
+              ),
+            ),
+            SizedBox(height: 6),
+            Text(
+              'STAR SETS TO BUILD IT',
+              style: TextStyle(
+                fontFamily: 'JetBrainsMono',
+                fontSize: 10,
+                letterSpacing: 0.08 * 10,
+                color: colorFg4,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _ViewSelector extends StatelessWidget {
   final FestDetailView active;
   final ValueChanged<FestDetailView> onChanged;
@@ -141,6 +207,7 @@ class _ViewSelector extends StatelessWidget {
   Widget build(BuildContext context) {
     final views = [
       (FestDetailView.gantt, 'GANTT'),
+      (FestDetailView.mySchedule, 'MY SCHEDULE'),
       (FestDetailView.dayTabs, 'DAYS'),
       (FestDetailView.stageTabs, 'STAGES'),
       (FestDetailView.filters, 'FILTER'),

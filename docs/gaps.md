@@ -10,6 +10,10 @@ The following capabilities exist in source and should be tested or extended, not
 - Yrs state-vector exchange.
 - Per-writer chat high-water marks and idempotent SQLite insertion.
 - Nested Yrs maps for group members, shared stars, and pins.
+- Normal group create/join/leave now registers both resources, publishes encrypted membership deltas, updates watchers, deregisters on leave, and rehydrates persisted resources after restart.
+- Direct iroh group-state catch-up encrypts both state vectors and diffs; the WebSocket DO remains an opaque encrypted replay adapter.
+- Personal saved sets persist locally, rapid toggles serialize and re-read durable state, and a dedicated My Schedule view renders liked cached sets. One derived overlap model drives clash badges, filtering, and the display-only Clash Radar. Group sharing remains explicit and per-set CRDT entries merge independent offline edits.
+- Stage/custom check-ins use one atomic CRDT value, converge under duplicate/reordered/concurrent delivery, persist across restart, and additively subscribe the checked-in stage chat.
 - SQLite WAL, normal synchronous mode, and busy timeout.
 - Persisted iroh endpoint identity.
 - WebSocket reconnect/backoff.
@@ -36,27 +40,15 @@ Required evidence:
 - constrained routes carry only bounded signed operations;
 - two real clients display the same state before and after restart.
 
-## P1: group resource lifecycle is not proven
+## P1: shared pins need normal-path convergence
 
-**Tracking:** `offbeat-t6a.1`
+**Tracking:** `offbeat-t6a.8`
 
-Group state types and mutations exist, but create/join must reliably register both group resources, subscribe immediately, perform private shared-group discovery, and initiate catch-up. Group name/metadata and members must be part of the encrypted convergent state rather than split across unsynchronised local records.
-
-This is the prerequisite for check-ins, shared stars, pins, and production group chat.
-
-## P1: group features need normal-path convergence
-
-**Tracking:**
-
-- check-ins: `offbeat-t6a.2`
-- personal/shared stars: `offbeat-t6a.3`
-- pins: `offbeat-t6a.8`
-
-The CRDT mutations exist, but each feature needs proof through the regular UI and sync orchestrator. Personal stars and group-shared stars are distinct privacy scopes. Concurrent shared-star changes must merge per set rather than replacing an atomic list.
+The pin CRDT mutation exists, but it still needs proof through the regular UI and sync orchestrator.
 
 ## P1: production group chat is not wired
 
-**Tracking:** `offbeat-t6a.9`; debug precursor `offbeat-c8t`
+**Tracking:** `offbeat-t6a.9`; the `offbeat-c8t` debug precursor is complete.
 
 Meshtastic group-chat send/apply currently proves a debug path. Production behaviour still needs:
 
@@ -136,7 +128,7 @@ Do not create separate domain semantics for any route. Do not assume that identi
 
 ## P1: Meshtastic production sidecar is incomplete
 
-**Tracking:** `offbeat-t6a.6`, `offbeat-t6a.9`, and `offbeat-t6a.12`
+**Tracking:** `offbeat-t6a.14`, intentionally blocked on the core resource, trust, ordering, and persistence tasks.
 
 Remaining work includes:
 

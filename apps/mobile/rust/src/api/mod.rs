@@ -936,6 +936,11 @@ impl AppNode {
                     .await?;
             }
         }
+        if let Some(relay) = { self.inner.ws_relay.read().clone() } {
+            relay
+                .subscribe(chat_topics.iter().map(|(topic, _)| topic.clone()).collect())
+                .await?;
+        }
 
         Ok(())
     }
@@ -1220,6 +1225,71 @@ impl AppNode {
     // Group lifecycle
     // -----------------------------------------------------------------------
 
+    fn register_group_resources(&self, group_id: &str, group_key: [u8; 32]) -> anyhow::Result<()> {
+        let mut registry = self
+            .inner
+            .resource_registry
+            .write()
+            .map_err(|_| anyhow::anyhow!("resource registry lock poisoned"))?;
+        registry.register_groups(&[(group_id.to_string(), group_key)]);
+        drop(registry);
+        self.inner
+            .sync_orchestrator
+            .cache_group_key(group_id, group_key);
+        Ok(())
+    }
+
+    async fn publish_group_state_update(
+        &self,
+        group_id: &str,
+        group_key: [u8; 32],
+        encrypted_update: Vec<u8>,
+    ) {
+        use offbeat_core::gossip_manager::{GossipMessage, encode_gossip_message};
+        use offbeat_core::proto::GossipEnvelope;
+
+        let doc_id = format!("group/{group_id}/state");
+        self.inner.notifier.notify_doc(&doc_id);
+
+        let message = GossipMessage::GroupUpdate {
+            doc_id: doc_id.clone(),
+            encrypted: encrypted_update,
+            group_key,
+        };
+        let envelope = GossipEnvelope::from_gossip_message(&message);
+        let bytes = encode_gossip_message(&message);
+
+        if let Some(gossip) = &self.inner.gossip_manager {
+            let topic = offbeat_core::topics::group_topic(&group_key, "state");
+            let _ = gossip.lock().await.broadcast(topic, bytes).await;
+        }
+        if let Some(relay) = { self.inner.ws_relay.read().clone() } {
+            let _ = relay.send_gossip(&doc_id, &envelope).await;
+        }
+        self.inner.notifier.record_sent(&doc_id);
+    }
+
+    async fn deregister_group_resources(&self, group_id: &str, group_key: [u8; 32]) {
+        if let Ok(mut registry) = self.inner.resource_registry.write() {
+            registry.deregister_group(group_key);
+        }
+        self.inner.sync_orchestrator.evict_group_key(group_id);
+
+        if let Some(gossip) = &self.inner.gossip_manager {
+            let mut gossip = gossip.lock().await;
+            gossip.unsubscribe(offbeat_core::topics::group_topic(&group_key, "state"));
+            gossip.unsubscribe(offbeat_core::topics::group_topic(&group_key, "chat"));
+        }
+        if let Some(relay) = { self.inner.ws_relay.read().clone() } {
+            let _ = relay
+                .unsubscribe(vec![
+                    format!("group/{group_id}/state"),
+                    format!("group/{group_id}/chat"),
+                ])
+                .await;
+        }
+    }
+
     /// Create a new group, register resources, subscribe, and broadcast
     /// the initial state. Returns the group ID + shareable invite payload.
     pub async fn create_group(
@@ -1238,23 +1308,7 @@ impl AppNode {
             .create_group(&festival_id, &name, &user_id, &display_name)
             .await?;
 
-        // Register resources for the new group
-        let group_key = self
-            .inner
-            .db
-            .load_group_key(&result.group_id)?
-            .ok_or_else(|| anyhow::anyhow!("group key not found after create"))?;
-        {
-            let mut reg = self
-                .inner
-                .resource_registry
-                .write()
-                .map_err(|_| anyhow::anyhow!("resource registry lock poisoned"))?;
-            reg.register_groups(&[(result.group_id.clone(), group_key)]);
-        }
-        self.inner
-            .sync_orchestrator
-            .cache_group_key(&result.group_id, group_key);
+        self.register_group_resources(&result.group_id, result.group_key)?;
 
         // Subscribe + sync via WS relay if connected
         if let Some(ws) = { self.inner.ws_relay.read().clone() } {
@@ -1264,38 +1318,12 @@ impl AppNode {
                 .await?;
         }
 
-        // Notify local watchers so the UI picks up the new group state
-        let doc_id = format!("group/{}/state", result.group_id);
-        self.inner.notifier.notify_doc(&doc_id);
-
-        // Broadcast initial state as GroupUpdate
-        {
-            let doc_id = format!("group/{}/state", result.group_id);
-            // Ensure doc is created so encode_diff works
-            self.inner.doc_manager.get_or_create(&doc_id);
-            // Encode full state as diff from empty SV
-            let diff = self.inner.doc_manager.encode_diff(&doc_id, &[])?;
-            let encrypted = offbeat_core::crypto::encrypt(&group_key, &diff)?;
-
-            use offbeat_core::gossip_manager::{GossipMessage, encode_gossip_message};
-            use offbeat_core::proto::GossipEnvelope;
-            let gossip_msg = GossipMessage::GroupUpdate {
-                doc_id: doc_id.clone(),
-                encrypted: encrypted.clone(),
-                group_key,
-            };
-            let envelope = GossipEnvelope::from_gossip_message(&gossip_msg);
-            let bytes = encode_gossip_message(&gossip_msg);
-
-            if let Some(gm) = &self.inner.gossip_manager {
-                let topic = offbeat_core::topics::group_topic(&group_key, "state");
-                let _ = gm.lock().await.broadcast(topic, bytes).await;
-            }
-            if let Some(ws) = { self.inner.ws_relay.read().clone() } {
-                let topic_str = format!("group/{}/state", result.group_id);
-                let _ = ws.send_gossip(&topic_str, &envelope).await;
-            }
-        }
+        self.publish_group_state_update(
+            &result.group_id,
+            result.group_key,
+            result.encrypted_update,
+        )
+        .await;
 
         Ok(GroupCreateResultDto {
             group_id: result.group_id,
@@ -1321,18 +1349,7 @@ impl AppNode {
             .join_group(&invite_payload, &user_id, &display_name)
             .await?;
 
-        // Register resources for the joined group
-        {
-            let mut reg = self
-                .inner
-                .resource_registry
-                .write()
-                .map_err(|_| anyhow::anyhow!("resource registry lock poisoned"))?;
-            reg.register_groups(&[(result.group_id.clone(), result.group_key)]);
-        }
-        self.inner
-            .sync_orchestrator
-            .cache_group_key(&result.group_id, result.group_key);
+        self.register_group_resources(&result.group_id, result.group_key)?;
 
         // Subscribe + sync (SV exchange + chat catchup) via WS relay
         if let Some(ws) = { self.inner.ws_relay.read().clone() } {
@@ -1342,10 +1359,12 @@ impl AppNode {
                 .await?;
         }
 
-        // Notify local watchers so the UI updates immediately
-        self.inner
-            .notifier
-            .notify_doc(&format!("group/{}/state", result.group_id));
+        self.publish_group_state_update(
+            &result.group_id,
+            result.group_key,
+            result.encrypted_update,
+        )
+        .await;
 
         Ok(GroupJoinResultDto {
             group_id: result.group_id,
@@ -1359,14 +1378,15 @@ impl AppNode {
         let signing_key = auth::generate_or_load_identity(&self.inner.db)?;
         let user_id = auth::get_user_id(&signing_key);
 
-        self.inner
+        let result = self
+            .inner
             .group_manager
             .leave_group(&group_id, &user_id)
             .await?;
-        // Notify local watchers so the UI updates immediately
-        self.inner
-            .notifier
-            .notify_doc(&format!("group/{group_id}/state"));
+        self.publish_group_state_update(&group_id, result.group_key, result.encrypted_update)
+            .await;
+        self.deregister_group_resources(&group_id, result.group_key)
+            .await;
         Ok(())
     }
 
@@ -1392,32 +1412,21 @@ impl AppNode {
             )
             .await?;
 
-        // Notify local watchers so the UI updates immediately
-        self.inner
-            .notifier
-            .notify_doc(&format!("group/{group_id}/state"));
+        let group_key = self
+            .inner
+            .db
+            .load_group_key(&group_id)?
+            .ok_or_else(|| anyhow::anyhow!("group key not found for {group_id}"))?;
+        self.publish_group_state_update(&group_id, group_key, encrypted)
+            .await;
 
-        if let Some(group_key) = self.inner.db.load_group_key(&group_id)? {
-            use offbeat_core::gossip_manager::{GossipMessage, encode_gossip_message};
-            use offbeat_core::proto::GossipEnvelope;
-            let gossip_msg = GossipMessage::GroupUpdate {
-                doc_id: format!("group/{group_id}/state"),
-                encrypted: encrypted.clone(),
-                group_key,
-            };
-            let envelope = GossipEnvelope::from_gossip_message(&gossip_msg);
-            let bytes = encode_gossip_message(&gossip_msg);
-
-            if let Some(gm) = &self.inner.gossip_manager {
-                let topic = offbeat_core::topics::group_topic(&group_key, "state");
-                let _ = gm.lock().await.broadcast(topic, bytes.clone()).await;
-            }
-            if let Some(ws) = { self.inner.ws_relay.read().clone() } {
-                let topic_str = format!("group/{group_id}/state");
-                let _ = ws.send_gossip(&topic_str, &envelope).await;
-            }
-            let resource_id = format!("group/{group_id}/state");
-            self.inner.notifier.record_sent(&resource_id);
+        if let Some(stage_id) = stage_id
+            && let Ok(Some(festival_id)) = self.inner.db.load_group_festival_id(&group_id)
+            && let Err(error) = self
+                .subscribe_chat_topics(festival_id, vec![stage_id])
+                .await
+        {
+            tracing::warn!(%error, "check-in stage chat subscription failed");
         }
         Ok(())
     }
@@ -1438,33 +1447,13 @@ impl AppNode {
             .update_stars(&group_id, &user_id, set_ids)
             .await?;
 
-        // Notify local watchers so the UI updates immediately
-        self.inner
-            .notifier
-            .notify_doc(&format!("group/{group_id}/state"));
-
-        if let Some(group_key) = self.inner.db.load_group_key(&group_id)? {
-            use offbeat_core::gossip_manager::{GossipMessage, encode_gossip_message};
-            use offbeat_core::proto::GossipEnvelope;
-            let gossip_msg = GossipMessage::GroupUpdate {
-                doc_id: format!("group/{group_id}/state"),
-                encrypted: encrypted.clone(),
-                group_key,
-            };
-            let envelope = GossipEnvelope::from_gossip_message(&gossip_msg);
-            let bytes = encode_gossip_message(&gossip_msg);
-
-            if let Some(gm) = &self.inner.gossip_manager {
-                let topic = offbeat_core::topics::group_topic(&group_key, "state");
-                let _ = gm.lock().await.broadcast(topic, bytes.clone()).await;
-            }
-            if let Some(ws) = { self.inner.ws_relay.read().clone() } {
-                let topic_str = format!("group/{group_id}/state");
-                let _ = ws.send_gossip(&topic_str, &envelope).await;
-            }
-            let resource_id = format!("group/{group_id}/state");
-            self.inner.notifier.record_sent(&resource_id);
-        }
+        let group_key = self
+            .inner
+            .db
+            .load_group_key(&group_id)?
+            .ok_or_else(|| anyhow::anyhow!("group key not found for {group_id}"))?;
+        self.publish_group_state_update(&group_id, group_key, encrypted)
+            .await;
         Ok(())
     }
 
@@ -1486,33 +1475,13 @@ impl AppNode {
             .add_pin(&group_id, &pin_id, &label, &location, &user_id)
             .await?;
 
-        // Notify local watchers so the UI updates immediately
-        self.inner
-            .notifier
-            .notify_doc(&format!("group/{group_id}/state"));
-
-        if let Some(group_key) = self.inner.db.load_group_key(&group_id)? {
-            use offbeat_core::gossip_manager::{GossipMessage, encode_gossip_message};
-            use offbeat_core::proto::GossipEnvelope;
-            let gossip_msg = GossipMessage::GroupUpdate {
-                doc_id: format!("group/{group_id}/state"),
-                encrypted: encrypted.clone(),
-                group_key,
-            };
-            let envelope = GossipEnvelope::from_gossip_message(&gossip_msg);
-            let bytes = encode_gossip_message(&gossip_msg);
-
-            if let Some(gm) = &self.inner.gossip_manager {
-                let topic = offbeat_core::topics::group_topic(&group_key, "state");
-                let _ = gm.lock().await.broadcast(topic, bytes.clone()).await;
-            }
-            if let Some(ws) = { self.inner.ws_relay.read().clone() } {
-                let topic_str = format!("group/{group_id}/state");
-                let _ = ws.send_gossip(&topic_str, &envelope).await;
-            }
-            let resource_id = format!("group/{group_id}/state");
-            self.inner.notifier.record_sent(&resource_id);
-        }
+        let group_key = self
+            .inner
+            .db
+            .load_group_key(&group_id)?
+            .ok_or_else(|| anyhow::anyhow!("group key not found for {group_id}"))?;
+        self.publish_group_state_update(&group_id, group_key, encrypted)
+            .await;
         Ok(())
     }
 
@@ -1531,6 +1500,7 @@ impl AppNode {
                     status: m.status,
                     stage_id: m.stage_id,
                     custom_location: m.custom_location,
+                    starred_set_ids: m.starred_set_ids,
                 })
                 .collect(),
             pins: state
@@ -1694,6 +1664,7 @@ impl AppNode {
                             status: m.status,
                             stage_id: m.stage_id,
                             custom_location: m.custom_location,
+                            starred_set_ids: m.starred_set_ids,
                         })
                         .collect(),
                     pins: state
@@ -1728,6 +1699,7 @@ impl AppNode {
                                 status: m.status,
                                 stage_id: m.stage_id,
                                 custom_location: m.custom_location,
+                                starred_set_ids: m.starred_set_ids,
                             })
                             .collect(),
                         pins: state
@@ -2142,5 +2114,116 @@ impl AppNode {
         });
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn group_lifecycle_registers_notifies_and_deregisters_resources() {
+        RUNTIME.block_on(async {
+            let creator = AppNode::create_in_memory().unwrap();
+            let created = creator
+                .create_group(
+                    "fest-1".to_string(),
+                    "The Crew".to_string(),
+                    "Alice".to_string(),
+                )
+                .await
+                .unwrap();
+            let group_key = creator
+                .inner
+                .db
+                .load_group_key(&created.group_id)
+                .unwrap()
+                .unwrap();
+            {
+                let registry = creator.inner.resource_registry.read().unwrap();
+                assert!(
+                    registry
+                        .get(&offbeat_core::resource::Resource::group_state(group_key).id())
+                        .is_some()
+                );
+                assert!(
+                    registry
+                        .get(&offbeat_core::resource::Resource::group_chat(group_key).id())
+                        .is_some()
+                );
+            }
+
+            let joiner = AppNode::create_in_memory().unwrap();
+            let joined = joiner
+                .join_group(created.invite_payload, "Bob".to_string())
+                .await
+                .unwrap();
+            let joiner_key = joiner
+                .inner
+                .db
+                .load_group_key(&joined.group_id)
+                .unwrap()
+                .unwrap();
+            {
+                let registry = joiner.inner.resource_registry.read().unwrap();
+                assert!(
+                    registry
+                        .get(&offbeat_core::resource::Resource::group_state(joiner_key).id())
+                        .is_some()
+                );
+                assert!(
+                    registry
+                        .get(&offbeat_core::resource::Resource::group_chat(joiner_key).id())
+                        .is_some()
+                );
+            }
+
+            let doc_id = format!("group/{}/state", joined.group_id);
+            let mut state_rx = joiner.inner.notifier.watch_doc(&doc_id);
+            joiner
+                .check_in(joined.group_id.clone(), Some("main".to_string()), None)
+                .await
+                .unwrap();
+            tokio::time::timeout(std::time::Duration::from_secs(1), state_rx.changed())
+                .await
+                .expect("local group watcher should be notified")
+                .unwrap();
+            joiner
+                .update_shared_stars(
+                    joined.group_id.clone(),
+                    vec!["set-a".to_string(), "set-b".to_string()],
+                )
+                .await
+                .unwrap();
+            let state = joiner
+                .get_group_state(joined.group_id.clone())
+                .await
+                .unwrap();
+            assert_eq!(state.members.len(), 1);
+            assert_eq!(state.members[0].starred_set_ids, vec!["set-a", "set-b"]);
+            assert_eq!(state.members[0].stage_id.as_deref(), Some("main"));
+            assert!(state.members[0].custom_location.is_none());
+
+            joiner.leave_group(joined.group_id.clone()).await.unwrap();
+            assert!(
+                joiner
+                    .inner
+                    .db
+                    .load_group_key(&joined.group_id)
+                    .unwrap()
+                    .is_none()
+            );
+            let registry = joiner.inner.resource_registry.read().unwrap();
+            assert!(
+                registry
+                    .get(&offbeat_core::resource::Resource::group_state(joiner_key).id())
+                    .is_none()
+            );
+            assert!(
+                registry
+                    .get(&offbeat_core::resource::Resource::group_chat(joiner_key).id())
+                    .is_none()
+            );
+        });
     }
 }

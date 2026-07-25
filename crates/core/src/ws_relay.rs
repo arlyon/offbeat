@@ -256,6 +256,12 @@ impl crate::sync::PeerConnection for WsRelaySink {
     }
 
     async fn sv_exchange(&self, doc_id: &str, sv: &[u8]) -> anyhow::Result<()> {
+        if doc_id.starts_with("group/") {
+            // The DO is an opaque mailbox and cannot compute a Yrs diff for
+            // encrypted group state. Subscription replay supplies encrypted
+            // group updates; never expose the plaintext state vector to it.
+            return Ok(());
+        }
         WsRelaySink::sv_exchange(self, doc_id, sv).await
     }
 

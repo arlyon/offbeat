@@ -32,6 +32,11 @@ pub struct ChatStateVector {
     pub writers: HashMap<String, u64>,
 }
 
+fn group_id_from_state_doc(doc_id: &str) -> Option<&str> {
+    let group_id = doc_id.strip_prefix("group/")?.strip_suffix("/state")?;
+    (!group_id.is_empty() && !group_id.contains('/')).then_some(group_id)
+}
+
 impl ChatStateVector {
     pub fn new() -> Self {
         Self::default()
@@ -309,6 +314,60 @@ impl SyncOrchestrator {
         self.key_cache.insert(group_id, key);
     }
 
+    pub fn evict_group_key(&self, group_id: &str) {
+        self.key_cache.remove(group_id);
+    }
+
+    pub fn hydrate_persisted_groups(&self) -> anyhow::Result<usize> {
+        let groups = self.db.load_all_group_keys()?;
+        {
+            let mut registry = self
+                .registry
+                .write()
+                .map_err(|_| anyhow::anyhow!("resource registry lock poisoned"))?;
+            registry.register_groups(&groups);
+        }
+        for (group_id, key) in &groups {
+            self.key_cache.insert(group_id, *key);
+        }
+        Ok(groups.len())
+    }
+
+    pub(crate) fn group_key_for_doc(&self, doc_id: &str) -> anyhow::Result<[u8; 32]> {
+        let group_id = group_id_from_state_doc(doc_id)
+            .ok_or_else(|| anyhow::anyhow!("invalid group state document ID {doc_id}"))?;
+        self.key_cache
+            .get_or_load(group_id, &self.db)?
+            .ok_or_else(|| anyhow::anyhow!("unknown group key {group_id}"))
+    }
+
+    pub(crate) fn apply_encrypted_group_diff(
+        &self,
+        doc_id: &str,
+        encrypted_diff: &[u8],
+    ) -> anyhow::Result<()> {
+        let group_key = self.group_key_for_doc(doc_id)?;
+        let diff = crate::crypto::decrypt(&group_key, encrypted_diff)?;
+        self.doc_manager.apply_update(doc_id, &diff)?;
+        self.refresh_group_name(doc_id)?;
+        self.notifier.record_received(doc_id);
+        self.notifier.notify_doc(doc_id);
+        self.notify_sync_status(false);
+        Ok(())
+    }
+
+    fn refresh_group_name(&self, doc_id: &str) -> anyhow::Result<()> {
+        let Some(group_id) = group_id_from_state_doc(doc_id) else {
+            return Ok(());
+        };
+        if let Some(name) = self.doc_manager.read_map_value(doc_id, "name")
+            && !name.is_empty()
+        {
+            self.db.update_group_name(group_id, &name)?;
+        }
+        Ok(())
+    }
+
     /// Build the resources list from the registry for sync status notifications.
     fn build_resource_statuses(&self) -> Vec<crate::notifier::ResourceSyncStatus> {
         let Ok(reg) = self.registry.read() else {
@@ -484,6 +543,22 @@ impl SyncOrchestrator {
         topic: &str,
         envelope: &proto::GossipEnvelope,
     ) -> anyhow::Result<()> {
+        if topic.starts_with("group/") {
+            use proto::gossip_envelope::Payload;
+            let routed_doc = match envelope.payload.as_ref() {
+                Some(Payload::GroupUpdate(update)) => Some(update.doc_id.as_str()),
+                Some(Payload::SyncRequest(request)) => Some(request.doc_id.as_str()),
+                Some(Payload::SyncResponse(response)) => Some(response.doc_id.as_str()),
+                Some(Payload::SyncUpdate(update)) => Some(update.doc_id.as_str()),
+                _ => None,
+            };
+            if let Some(doc_id) = routed_doc
+                && doc_id != topic
+            {
+                anyhow::bail!("group topic/document mismatch: {topic} != {doc_id}");
+            }
+        }
+
         let gossip_msg = self.decode_envelope(envelope)?;
         let Some(ref msg) = gossip_msg else {
             return Ok(());
@@ -513,6 +588,7 @@ impl SyncOrchestrator {
             GossipMessage::GroupUpdate { doc_id, .. }
             | GossipMessage::SyncResponse { doc_id, .. }
             | GossipMessage::SyncUpdate { doc_id, .. } => {
+                self.refresh_group_name(doc_id)?;
                 self.notifier.record_received(doc_id);
                 self.notifier.notify_doc(doc_id);
             }
@@ -568,6 +644,16 @@ impl SyncOrchestrator {
             Payload::Chat(chat) => Ok(Some(GossipMessage::Chat(chat.clone().into()))),
 
             Payload::GroupUpdate(gu) => {
+                let group_id = group_id_from_state_doc(&gu.doc_id).ok_or_else(|| {
+                    anyhow::anyhow!("group_update: invalid document ID {}", gu.doc_id)
+                })?;
+                if group_id != gu.group_key_id {
+                    anyhow::bail!(
+                        "group_update: document/key mismatch {} != {}",
+                        group_id,
+                        gu.group_key_id
+                    );
+                }
                 let group_key = self
                     .key_cache
                     .get_or_load(&gu.group_key_id, &self.db)?
@@ -600,6 +686,16 @@ impl SyncOrchestrator {
             }
 
             Payload::SyncResponse(sr) => {
+                let group_id = group_id_from_state_doc(&sr.doc_id).ok_or_else(|| {
+                    anyhow::anyhow!("sync_response: invalid document ID {}", sr.doc_id)
+                })?;
+                if group_id != sr.group_key_id {
+                    anyhow::bail!(
+                        "sync_response: document/key mismatch {} != {}",
+                        group_id,
+                        sr.group_key_id
+                    );
+                }
                 let group_key = self
                     .key_cache
                     .get_or_load(&sr.group_key_id, &self.db)?
@@ -614,6 +710,16 @@ impl SyncOrchestrator {
             }
 
             Payload::SyncUpdate(su) => {
+                let group_id = group_id_from_state_doc(&su.doc_id).ok_or_else(|| {
+                    anyhow::anyhow!("sync_update: invalid document ID {}", su.doc_id)
+                })?;
+                if group_id != su.group_key_id {
+                    anyhow::bail!(
+                        "sync_update: document/key mismatch {} != {}",
+                        group_id,
+                        su.group_key_id
+                    );
+                }
                 let group_key = self
                     .key_cache
                     .get_or_load(&su.group_key_id, &self.db)?
@@ -1150,7 +1256,7 @@ mod tests {
         let envelope = proto::GossipEnvelope {
             payload: Some(proto::gossip_envelope::Payload::GroupUpdate(
                 proto::GroupUpdate {
-                    doc_id: format!("group/{group_id}"),
+                    doc_id: format!("group/{group_id}/state"),
                     encrypted: encrypted.clone(),
                     group_key_id: group_id.clone(),
                 },
@@ -1166,7 +1272,7 @@ mod tests {
             group_key: key,
         }) = result
         {
-            assert_eq!(doc_id, format!("group/{group_id}"));
+            assert_eq!(doc_id, format!("group/{group_id}/state"));
             assert_eq!(key, group_key);
             assert_eq!(enc, encrypted);
         }
@@ -1204,7 +1310,7 @@ mod tests {
         let envelope = proto::GossipEnvelope {
             payload: Some(proto::gossip_envelope::Payload::SyncResponse(
                 proto::SyncResponse {
-                    doc_id: "group/test-doc".to_string(),
+                    doc_id: format!("group/{group_id}/state"),
                     encrypted_diff: encrypted_diff.clone(),
                     group_key_id: group_id.clone(),
                 },

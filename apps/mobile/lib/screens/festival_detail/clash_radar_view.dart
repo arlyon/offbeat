@@ -2,13 +2,12 @@
 // Hero: "X clashes in your night."
 // Mini stage-lane strip diagram with starred set blobs + hatched clash zones
 // Legend: scheduled / starred / clash
-// Clash cards: warn-colored dotted border, A vs B options, resolve actions
+// Clash cards: warn-colored overlap details for liked sets
 
 import 'package:flutter/material.dart';
 import '../../data/models.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/dotted_border.dart';
-import '../../widgets/chip.dart';
 
 class ClashRadarView extends StatefulWidget {
   final List<FestSet> sets;
@@ -41,13 +40,13 @@ class _ClashRadarViewState extends State<ClashRadarView> {
       widget.sets.where((s) => s.day == _day && s.starred).toList();
 
   List<List<FestSet>> get _clashPairs {
-    final starred = _starred;
+    final byId = {for (final set in widget.sets) set.id: set};
     final pairs = <List<FestSet>>[];
-    for (int i = 0; i < starred.length; i++) {
-      for (int j = i + 1; j < starred.length; j++) {
-        final a = starred[i], b = starred[j];
-        if (a.t < b.t + b.dur && b.t < a.t + a.dur) {
-          pairs.add([a, b]);
+    for (final set in _starred) {
+      for (final clashId in set.clashes) {
+        final other = byId[clashId];
+        if (other != null && other.starred && set.id.compareTo(other.id) < 0) {
+          pairs.add([set, other]);
         }
       }
     }
@@ -320,7 +319,7 @@ class _ClashRadarViewState extends State<ClashRadarView> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               const Text(
-                '! RESOLVE',
+                '! CLASHES',
                 style: TextStyle(
                   fontFamily: 'JetBrainsMono',
                   fontSize: 11,
@@ -444,7 +443,7 @@ class _HatchPainter extends CustomPainter {
   bool shouldRepaint(_) => false;
 }
 
-class _ClashCard extends StatefulWidget {
+class _ClashCard extends StatelessWidget {
   final FestSet setA;
   final FestSet setB;
   final Stage stageA;
@@ -458,16 +457,9 @@ class _ClashCard extends StatefulWidget {
   });
 
   @override
-  State<_ClashCard> createState() => _ClashCardState();
-}
-
-class _ClashCardState extends State<_ClashCard> {
-  String _chosen = 'a';
-
-  @override
   Widget build(BuildContext context) {
-    final a = widget.setA, b = widget.setB;
-    final sA = widget.stageA, sB = widget.stageB;
+    final a = setA, b = setB;
+    final sA = stageA, sB = stageB;
     final overlapStart = [a.t, b.t].reduce((v, e) => v > e ? v : e);
     final overlapEnd = [
       a.t + a.dur,
@@ -498,12 +490,7 @@ class _ClashCardState extends State<_ClashCard> {
           Row(
             children: [
               Expanded(
-                child: _ClashOption(
-                  set: a,
-                  stage: sA,
-                  chosen: _chosen == 'a',
-                  onTap: () => setState(() => _chosen = 'a'),
-                ),
+                child: _ClashOption(set: a, stage: sA),
               ),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -519,24 +506,7 @@ class _ClashCardState extends State<_ClashCard> {
                 ),
               ),
               Expanded(
-                child: _ClashOption(
-                  set: b,
-                  stage: sB,
-                  chosen: _chosen == 'b',
-                  onTap: () => setState(() => _chosen = 'b'),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Wrap(
-            spacing: 6,
-            children: [
-              MonoChip(label: 'SPLIT — 30M EACH', onTap: () {}),
-              MonoChip(
-                label:
-                    'UNSTAR ${_chosen == 'a' ? b.artist.split(' ').first : a.artist.split(' ').first}',
-                onTap: () {},
+                child: _ClashOption(set: b, stage: sB),
               ),
             ],
           ),
@@ -549,64 +519,45 @@ class _ClashCardState extends State<_ClashCard> {
 class _ClashOption extends StatelessWidget {
   final FestSet set;
   final Stage stage;
-  final bool chosen;
-  final VoidCallback onTap;
 
-  const _ClashOption({
-    required this.set,
-    required this.stage,
-    required this.chosen,
-    required this.onTap,
-  });
+  const _ClashOption({required this.set, required this.stage});
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        decoration: BoxDecoration(
-          color: chosen ? colorSurface2 : colorSurface1,
-          border: Border(left: BorderSide(color: Color(stage.color), width: 3)),
-          boxShadow: chosen
-              ? [
-                  BoxShadow(
-                    color: colorFg3.withValues(alpha: 0.3),
-                    blurRadius: 0,
-                    spreadRadius: 1,
-                  ),
-                ]
-              : null,
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              '★ ${set.artist}',
-              style: const TextStyle(
-                fontFamily: 'Helvetica',
-                fontWeight: FontWeight.w700,
-                fontSize: 14,
-                letterSpacing: -0.02 * 14,
-                color: colorFg,
-                height: 1,
-              ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: colorSurface1,
+        border: Border(left: BorderSide(color: Color(stage.color), width: 3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '★ ${set.artist}',
+            style: const TextStyle(
+              fontFamily: 'Helvetica',
+              fontWeight: FontWeight.w700,
+              fontSize: 14,
+              letterSpacing: -0.02 * 14,
+              color: colorFg,
+              height: 1,
             ),
-            const SizedBox(height: 2),
-            Text(
-              '${stage.name} · ${fmtTime(set.t)} → ${fmtTime(set.t + set.dur)}',
-              style: const TextStyle(
-                fontFamily: 'JetBrainsMono',
-                fontSize: 9,
-                letterSpacing: 0.08 * 9,
-                color: colorFg3,
-                height: 1,
-              ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          const SizedBox(height: 2),
+          Text(
+            '${stage.name} · ${fmtTime(set.t)} → ${fmtTime(set.t + set.dur)}',
+            style: const TextStyle(
+              fontFamily: 'JetBrainsMono',
+              fontSize: 9,
+              letterSpacing: 0.08 * 9,
+              color: colorFg3,
+              height: 1,
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
