@@ -7,7 +7,7 @@ import 'api/dto.dart';
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `deregister_group_resources`, `publish_group_state_update`, `register_group_resources`
+// These functions are ignored because they are not marked as `pub`: `deregister_group_resources`, `publish_group_state_update`, `reconcile_shared_stars`, `register_group_resources`
 
 Future<List<MeshtasticDebugDeviceDto>> meshtasticDebugScan({
   required int scanMs,
@@ -244,7 +244,8 @@ abstract class AppNode implements RustOpaqueInterface {
   /// and triggers a sync via the WS relay if connected.
   Future<void> subscribeGroups({required String festivalId});
 
-  /// Toggle a star on a set. Returns the new starred state (`true` = now starred).
+  /// Toggle a personal star and reconcile the resulting schedule into every
+  /// encrypted group for this festival.
   Future<bool> toggleStar({required String festivalId, required String setId});
 
   /// Update the shared stars for the current user in a group.

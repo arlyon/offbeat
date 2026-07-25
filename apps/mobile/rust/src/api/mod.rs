@@ -11,6 +11,7 @@ pub use dto::*;
 
 // Re-export types used in public function signatures for FRB
 pub use offbeat_core::OffbeatNode;
+use offbeat_core::auth;
 pub use offbeat_core::connection_manager::PeerEntry;
 pub use offbeat_core::doc_manager::DocManager;
 pub use offbeat_core::notifier::SyncStatus;
@@ -390,9 +391,14 @@ impl AppNode {
         self.inner.db.get_stars(&festival_id)
     }
 
-    /// Toggle a star on a set. Returns the new starred state (`true` = now starred).
-    pub fn toggle_star(&self, festival_id: String, set_id: String) -> anyhow::Result<bool> {
-        self.inner.db.toggle_star(&festival_id, &set_id)
+    /// Toggle a personal star and reconcile the resulting schedule into every
+    /// encrypted group for this festival.
+    pub async fn toggle_star(&self, festival_id: String, set_id: String) -> anyhow::Result<bool> {
+        let starred = self.inner.db.toggle_star(&festival_id, &set_id)?;
+        if let Err(error) = self.reconcile_shared_stars(&festival_id).await {
+            tracing::warn!(%festival_id, %error, "personal star saved; group reconciliation will retry");
+        }
+        Ok(starred)
     }
 
     /// Read the lineup from the local Yrs doc for a festival.
@@ -1071,6 +1077,9 @@ impl AppNode {
         for (group_id, key) in &pairs {
             self.inner.sync_orchestrator.cache_group_key(group_id, *key);
         }
+        if let Err(error) = self.reconcile_shared_stars(&festival_id).await {
+            tracing::warn!(%festival_id, %error, "group schedule reconciliation will retry");
+        }
         if let Some(ws) = { self.inner.ws_relay.read().clone() } {
             self.inner
                 .sync_orchestrator
@@ -1239,6 +1248,26 @@ impl AppNode {
         Ok(())
     }
 
+    async fn reconcile_shared_stars(&self, festival_id: &str) -> anyhow::Result<()> {
+        let signing_key = auth::generate_or_load_identity(&self.inner.db)?;
+        let user_id = auth::get_user_id(&signing_key);
+        let updates = self
+            .inner
+            .group_manager
+            .reconcile_stars_for_festival(festival_id, &user_id)
+            .await?;
+
+        for update in updates {
+            self.publish_group_state_update(
+                &update.group_id,
+                update.group_key,
+                update.encrypted_update,
+            )
+            .await;
+        }
+        Ok(())
+    }
+
     async fn publish_group_state_update(
         &self,
         group_id: &str,
@@ -1324,6 +1353,9 @@ impl AppNode {
             result.encrypted_update,
         )
         .await;
+        if let Err(error) = self.reconcile_shared_stars(&festival_id).await {
+            tracing::warn!(%festival_id, %error, "group created; schedule reconciliation will retry");
+        }
 
         Ok(GroupCreateResultDto {
             group_id: result.group_id,
@@ -1365,6 +1397,15 @@ impl AppNode {
             result.encrypted_update,
         )
         .await;
+        if !result.festival_id.is_empty()
+            && let Err(error) = self.reconcile_shared_stars(&result.festival_id).await
+        {
+            tracing::warn!(
+                festival_id = %result.festival_id,
+                %error,
+                "group joined; schedule reconciliation will retry"
+            );
+        }
 
         Ok(GroupJoinResultDto {
             group_id: result.group_id,
@@ -2153,7 +2194,11 @@ mod tests {
                 );
             }
 
-            let joiner = AppNode::create_in_memory().unwrap();
+            let mut joiner = AppNode::create_in_memory().unwrap();
+            joiner
+                .toggle_star("fest-1".to_string(), "set-a".to_string())
+                .await
+                .unwrap();
             let joined = joiner
                 .join_group(created.invite_payload, "Bob".to_string())
                 .await
@@ -2189,10 +2234,7 @@ mod tests {
                 .expect("local group watcher should be notified")
                 .unwrap();
             joiner
-                .update_shared_stars(
-                    joined.group_id.clone(),
-                    vec!["set-a".to_string(), "set-b".to_string()],
-                )
+                .toggle_star("fest-1".to_string(), "set-b".to_string())
                 .await
                 .unwrap();
             let state = joiner
@@ -2203,6 +2245,26 @@ mod tests {
             assert_eq!(state.members[0].starred_set_ids, vec!["set-a", "set-b"]);
             assert_eq!(state.members[0].stage_id.as_deref(), Some("main"));
             assert!(state.members[0].custom_location.is_none());
+
+            joiner
+                .toggle_star("fest-1".to_string(), "set-a".to_string())
+                .await
+                .unwrap();
+            let state = joiner
+                .get_group_state(joined.group_id.clone())
+                .await
+                .unwrap();
+            assert_eq!(state.members[0].starred_set_ids, vec!["set-b"]);
+
+            // Startup subscription reconciles any personal mutation that was
+            // persisted before its group document could be updated.
+            joiner.inner.db.toggle_star("fest-1", "set-c").unwrap();
+            joiner.subscribe_groups("fest-1".to_string()).await.unwrap();
+            let state = joiner
+                .get_group_state(joined.group_id.clone())
+                .await
+                .unwrap();
+            assert_eq!(state.members[0].starred_set_ids, vec!["set-b", "set-c"]);
 
             joiner.leave_group(joined.group_id.clone()).await.unwrap();
             assert!(

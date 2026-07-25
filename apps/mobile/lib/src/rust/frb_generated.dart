@@ -5848,7 +5848,8 @@ class AppNodeImpl extends RustOpaque implements AppNode {
       .api
       .crateApiAppNodeSubscribeGroups(that: this, festivalId: festivalId);
 
-  /// Toggle a star on a set. Returns the new starred state (`true` = now starred).
+  /// Toggle a personal star and reconcile the resulting schedule into every
+  /// encrypted group for this festival.
   Future<bool> toggleStar({
     required String festivalId,
     required String setId,

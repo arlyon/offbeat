@@ -39,6 +39,12 @@ pub struct GroupLeaveResult {
     pub encrypted_update: Vec<u8>,
 }
 
+pub struct SharedStarsUpdate {
+    pub group_id: String,
+    pub group_key: [u8; 32],
+    pub encrypted_update: Vec<u8>,
+}
+
 pub struct GroupMember {
     pub user_id: String,
     pub display_name: String,
@@ -320,6 +326,39 @@ impl GroupManager {
     // -----------------------------------------------------------------------
     // update_stars
     // -----------------------------------------------------------------------
+
+    pub async fn reconcile_stars_for_festival(
+        &self,
+        festival_id: &str,
+        user_id: &str,
+    ) -> anyhow::Result<Vec<SharedStarsUpdate>> {
+        let desired: HashSet<String> = self.db.get_stars(festival_id)?.into_iter().collect();
+        let mut updates = Vec::new();
+
+        for (group_id, _name, key_bytes) in self.db.load_groups(festival_id)? {
+            let current: HashSet<String> = self
+                .read_user_stars(&group_id, user_id)
+                .into_iter()
+                .collect();
+            if current == desired {
+                continue;
+            }
+
+            let group_key: [u8; 32] = key_bytes
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("group {group_id} key must be 32 bytes"))?;
+            let encrypted_update = self
+                .update_stars(&group_id, user_id, desired.iter().cloned().collect())
+                .await?;
+            updates.push(SharedStarsUpdate {
+                group_id,
+                group_key,
+                encrypted_update,
+            });
+        }
+
+        Ok(updates)
+    }
 
     pub async fn update_stars(
         &self,
@@ -874,6 +913,59 @@ mod tests {
         assert!(stars.contains(&"set-b".to_string()));
         let state = gm.get_group_state(&create.group_id).await.unwrap();
         assert_eq!(state.members[0].starred_set_ids, vec!["set-a", "set-b"]);
+    }
+
+    #[tokio::test]
+    async fn personal_stars_reconcile_to_every_same_festival_group() {
+        let manager = make_manager();
+        let db = manager.db.clone();
+        let first = manager
+            .create_group("festival-a", "First", "user", "Alex")
+            .await
+            .unwrap();
+        let second = manager
+            .create_group("festival-a", "Second", "user", "Alex")
+            .await
+            .unwrap();
+        let other = manager
+            .create_group("festival-b", "Other", "user", "Alex")
+            .await
+            .unwrap();
+
+        db.toggle_star("festival-a", "set-1").unwrap();
+        db.toggle_star("festival-a", "set-2").unwrap();
+        let updates = manager
+            .reconcile_stars_for_festival("festival-a", "user")
+            .await
+            .unwrap();
+        assert_eq!(updates.len(), 2);
+        assert_eq!(
+            manager.read_user_stars(&first.group_id, "user"),
+            vec!["set-1", "set-2"]
+        );
+        assert_eq!(
+            manager.read_user_stars(&second.group_id, "user"),
+            vec!["set-1", "set-2"]
+        );
+        assert!(manager.read_user_stars(&other.group_id, "user").is_empty());
+
+        assert!(
+            manager
+                .reconcile_stars_for_festival("festival-a", "user")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        db.toggle_star("festival-a", "set-1").unwrap();
+        manager
+            .reconcile_stars_for_festival("festival-a", "user")
+            .await
+            .unwrap();
+        assert_eq!(
+            manager.read_user_stars(&first.group_id, "user"),
+            vec!["set-2"]
+        );
     }
 
     #[tokio::test]
