@@ -20,6 +20,8 @@ class SocialScreen extends StatefulWidget {
   final Map<String, String> stages;
   final String userId;
   final String? displayName;
+  final LineupDto? lineup;
+  final VoidCallback? onGroupsChanged;
 
   const SocialScreen({
     super.key,
@@ -29,6 +31,8 @@ class SocialScreen extends StatefulWidget {
     required this.stages,
     required this.userId,
     this.displayName,
+    this.lineup,
+    this.onGroupsChanged,
   });
 
   @override
@@ -200,25 +204,6 @@ class _SocialScreenState extends State<SocialScreen> {
     );
   }
 
-  Future<void> _shareSchedule() async {
-    final groupId = _activeGroupId;
-    if (groupId == null) return;
-    try {
-      final stars = await widget.node.getStars(festivalId: widget.festivalId);
-      await widget.node.updateSharedStars(groupId: groupId, setIds: stars);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            stars.isEmpty
-                ? 'SHARED SCHEDULE CLEARED'
-                : '${stars.length} SAVED SETS SHARED',
-          ),
-        ),
-      );
-    } catch (_) {}
-  }
-
   Future<void> _handleCreateGroup(String name) async {
     try {
       final result = await widget.node.createGroup(
@@ -232,6 +217,7 @@ class _SocialScreenState extends State<SocialScreen> {
       });
       await _loadGroups();
       _subscribeToGroup(result.groupId);
+      widget.onGroupsChanged?.call();
       // Show invite sheet after creating
       if (mounted) {
         _showInviteSheet(result.invitePayload);
@@ -251,6 +237,7 @@ class _SocialScreenState extends State<SocialScreen> {
       });
       await _loadGroups();
       _subscribeToGroup(result.groupId);
+      widget.onGroupsChanged?.call();
     } catch (_) {}
   }
 
@@ -317,6 +304,7 @@ class _SocialScreenState extends State<SocialScreen> {
       builder: (_) => MemberSheet(
         member: member,
         groupName: _groupState!.name,
+        lineup: widget.lineup,
         isMe: member.userId == widget.userId,
       ),
     );
@@ -490,6 +478,23 @@ class _SocialScreenState extends State<SocialScreen> {
               Text(widget.festivalName.toUpperCase(), style: _metaStyle),
             ],
           ),
+          const SizedBox(height: 8),
+          const Row(
+            children: [
+              Icon(Icons.sync, size: 12, color: colorAccent),
+              SizedBox(width: 6),
+              Text(
+                'LIKES SYNC WITH THIS GROUP',
+                style: TextStyle(
+                  fontFamily: 'JetBrainsMono',
+                  fontSize: 9,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.06 * 9,
+                  color: colorAccent,
+                ),
+              ),
+            ],
+          ),
           const SizedBox(height: 14),
           // Action buttons row
           DottedBorder(
@@ -505,11 +510,6 @@ class _SocialScreenState extends State<SocialScreen> {
                   label: 'CHECK IN',
                   icon: Icons.location_on_outlined,
                   onTap: _showCheckInSheet,
-                ),
-                _actionButton(
-                  label: 'SHARE ★',
-                  icon: Icons.star_outline,
-                  onTap: _shareSchedule,
                 ),
                 _actionButton(
                   label: 'NEW',

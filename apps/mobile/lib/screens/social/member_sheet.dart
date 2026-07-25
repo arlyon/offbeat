@@ -3,6 +3,7 @@
 // Matches groups-screens.jsx MemberSheet (lines 787–857)
 
 import 'package:flutter/material.dart';
+import '../../data/models.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/dotted_border.dart';
 import '../../src/rust/api/dto.dart';
@@ -10,12 +11,14 @@ import '../../src/rust/api/dto.dart';
 class MemberSheet extends StatelessWidget {
   final GroupMemberDto member;
   final String groupName;
+  final LineupDto? lineup;
   final bool isMe;
 
   const MemberSheet({
     super.key,
     required this.member,
     required this.groupName,
+    this.lineup,
     this.isMe = false,
   });
 
@@ -102,6 +105,8 @@ class MemberSheet extends StatelessWidget {
   Widget _buildBody(BuildContext context) {
     final live = member.stageId != null;
     final initials = _initials(member.displayName);
+    final schedule = _resolvedSchedule;
+    final missingSetIds = _missingSetIds;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -220,9 +225,9 @@ class MemberSheet extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
-                  '\u2605 THEIR SCHEDULE \u00B7 NEXT 3',
-                  style: TextStyle(
+                Text(
+                  '\u2605 THEIR SCHEDULE \u00B7 ${member.starredSetIds.length}',
+                  style: const TextStyle(
                     fontFamily: 'JetBrainsMono',
                     fontSize: 10,
                     letterSpacing: 0.08 * 10,
@@ -243,38 +248,11 @@ class MemberSheet extends StatelessWidget {
                       ),
                     ),
                   )
-                else
-                  ...member.starredSetIds
-                      .take(3)
-                      .map(
-                        (setId) => Padding(
-                          padding: const EdgeInsets.only(bottom: 6),
-                          child: Row(
-                            children: [
-                              const Text(
-                                '\u2605',
-                                style: TextStyle(
-                                  color: colorAccent,
-                                  fontSize: 11,
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Text(
-                                  setId.toUpperCase(),
-                                  style: const TextStyle(
-                                    fontFamily: 'JetBrainsMono',
-                                    fontSize: 11,
-                                    letterSpacing: 0.04 * 11,
-                                    color: colorFg2,
-                                  ),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
+                else ...[
+                  for (final entry in schedule) _scheduleRow(entry),
+                  for (final setId in missingSetIds)
+                    _unavailableScheduleRow(setId),
+                ],
               ],
             ),
           ),
@@ -333,6 +311,114 @@ class MemberSheet extends StatelessWidget {
           ),
         ],
       ],
+    );
+  }
+
+  List<LineupSetDto> get _resolvedSchedule {
+    final currentLineup = lineup;
+    if (currentLineup == null) return const [];
+    final byId = {for (final set in currentLineup.sets) set.id: set};
+    final dayOrder = {
+      for (var index = 0; index < currentLineup.days.length; index++)
+        currentLineup.days[index].id: index,
+    };
+    final resolved = member.starredSetIds
+        .map((setId) => byId[setId])
+        .whereType<LineupSetDto>()
+        .toList();
+    resolved.sort((a, b) {
+      final byDay = (dayOrder[a.day] ?? 1 << 20).compareTo(
+        dayOrder[b.day] ?? 1 << 20,
+      );
+      return byDay != 0 ? byDay : a.startMin.compareTo(b.startMin);
+    });
+    return resolved;
+  }
+
+  List<String> get _missingSetIds {
+    final available =
+        lineup?.sets.map((set) => set.id).toSet() ?? const <String>{};
+    final missing = member.starredSetIds
+        .where((setId) => !available.contains(setId))
+        .toList();
+    missing.sort();
+    return missing;
+  }
+
+  Widget _scheduleRow(LineupSetDto set) {
+    final dayLabel = lineup?.days
+        .where((day) => day.id == set.day)
+        .map((day) => day.label)
+        .firstOrNull;
+    final stageName = lineup?.stages
+        .where((stage) => stage.id == set.stage)
+        .map((stage) => stage.name)
+        .firstOrNull;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Padding(
+            padding: EdgeInsets.only(top: 2),
+            child: Text(
+              '★',
+              style: TextStyle(color: colorAccent, fontSize: 11),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  set.artist,
+                  style: const TextStyle(
+                    fontFamily: 'Helvetica',
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: colorFg,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '${dayLabel ?? set.day} · ${fmtTime(set.startMin)} · ${stageName ?? set.stage}',
+                  style: const TextStyle(
+                    fontFamily: 'JetBrainsMono',
+                    fontSize: 9,
+                    letterSpacing: 0.04 * 9,
+                    color: colorFg3,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _unavailableScheduleRow(String setId) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        children: [
+          const Text('?', style: TextStyle(color: colorWarn, fontSize: 11)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'SET UNAVAILABLE · ${setId.toUpperCase()}',
+              style: const TextStyle(
+                fontFamily: 'JetBrainsMono',
+                fontSize: 9,
+                letterSpacing: 0.04 * 9,
+                color: colorFg4,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
     );
   }
 

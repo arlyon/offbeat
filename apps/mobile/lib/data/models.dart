@@ -1,5 +1,7 @@
 // OFFBEAT Models — Domain types for festival data
 
+import 'group_schedule_overlay.dart';
+
 // ── Models ────────────────────────────────────────────────────
 
 class Festival {
@@ -197,6 +199,8 @@ class FestSet {
   bool starred;
   final bool live;
   final bool cancelled;
+  final bool likedByGroup;
+  final List<ScheduleSupporter> supporters;
   final List<String> clashes;
 
   FestSet({
@@ -210,6 +214,8 @@ class FestSet {
     this.starred = false,
     this.live = false,
     this.cancelled = false,
+    this.likedByGroup = false,
+    this.supporters = const [],
     this.clashes = const [],
   });
 
@@ -229,7 +235,13 @@ class FestSet {
     );
   }
 
-  FestSet copyWith({bool? starred, int? t, List<String>? clashes}) => FestSet(
+  FestSet copyWith({
+    bool? starred,
+    int? t,
+    bool? likedByGroup,
+    List<ScheduleSupporter>? supporters,
+    List<String>? clashes,
+  }) => FestSet(
     id: id,
     day: day,
     stage: stage,
@@ -240,6 +252,8 @@ class FestSet {
     starred: starred ?? this.starred,
     live: live,
     cancelled: cancelled,
+    likedByGroup: likedByGroup ?? this.likedByGroup,
+    supporters: supporters ?? this.supporters,
     clashes: clashes ?? this.clashes,
   );
 }

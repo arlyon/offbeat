@@ -15,15 +15,9 @@ import 'filter_panel.dart';
 import 'clash_radar_view.dart';
 import 'now_strip_view.dart';
 
-enum FestDetailView {
-  gantt,
-  mySchedule,
-  dayTabs,
-  stageTabs,
-  filters,
-  clashRadar,
-  nowStrip,
-}
+enum FestDetailView { gantt, dayTabs, stageTabs, filters, clashRadar, nowStrip }
+
+enum ScheduleScope { all, mine, ours }
 
 class FestivalDetailScreen extends StatefulWidget {
   final Festival festival;
@@ -51,6 +45,7 @@ class FestivalDetailScreen extends StatefulWidget {
 
 class _FestivalDetailScreenState extends State<FestivalDetailScreen> {
   FestDetailView _view = FestDetailView.gantt;
+  ScheduleScope _scope = ScheduleScope.all;
 
   @override
   Widget build(BuildContext context) {
@@ -92,15 +87,28 @@ class _FestivalDetailScreenState extends State<FestivalDetailScreen> {
       );
     }
 
+    final scopedSets = switch (_scope) {
+      ScheduleScope.all => sets,
+      ScheduleScope.mine => sets.where((set) => set.starred).toList(),
+      ScheduleScope.ours =>
+        sets.where((set) => set.starred || set.likedByGroup).toList(),
+    };
+
     return Column(
       children: [
-        // View mode selector
+        _ScheduleScopeSelector(
+          active: _scope,
+          onChanged: (scope) => setState(() => _scope = scope),
+        ),
         _ViewSelector(
           active: _view,
-          onChanged: (v) => setState(() => _view = v),
+          onChanged: (view) => setState(() => _view = view),
         ),
-        // Content
-        Expanded(child: _buildView(stages, days, sets)),
+        Expanded(
+          child: scopedSets.isEmpty
+              ? _EmptySchedule(scope: _scope)
+              : _buildView(stages, days, scopedSets),
+        ),
       ],
     );
   }
@@ -113,16 +121,6 @@ class _FestivalDetailScreenState extends State<FestivalDetailScreen> {
           stages: stages,
           days: days,
           now: widget.now,
-          onStar: widget.onStar,
-        );
-      case FestDetailView.mySchedule:
-        final liked = sets.where((set) => set.starred).toList();
-        if (liked.isEmpty) return const _EmptyMySchedule();
-        return DayTabsView(
-          sets: liked,
-          stages: stages,
-          days: days,
-          festivalWhere: widget.festival.where,
           onStar: widget.onStar,
         );
       case FestDetailView.dayTabs:
@@ -150,18 +148,21 @@ class _FestivalDetailScreenState extends State<FestivalDetailScreen> {
   }
 }
 
-class _EmptyMySchedule extends StatelessWidget {
-  const _EmptyMySchedule();
+class _EmptySchedule extends StatelessWidget {
+  final ScheduleScope scope;
+
+  const _EmptySchedule({required this.scope});
 
   @override
   Widget build(BuildContext context) {
-    return const Center(
+    final mine = scope == ScheduleScope.mine;
+    return Center(
       child: Padding(
         padding: EdgeInsets.all(24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(
+            const Text(
               '☆',
               style: TextStyle(
                 fontFamily: 'JetBrainsMono',
@@ -171,8 +172,8 @@ class _EmptyMySchedule extends StatelessWidget {
             ),
             SizedBox(height: 12),
             Text(
-              'MY SCHEDULE IS EMPTY',
-              style: TextStyle(
+              mine ? 'MY SCHEDULE IS EMPTY' : 'NO GROUP PICKS YET',
+              style: const TextStyle(
                 fontFamily: 'JetBrainsMono',
                 fontSize: 12,
                 fontWeight: FontWeight.w700,
@@ -182,14 +183,50 @@ class _EmptyMySchedule extends StatelessWidget {
             ),
             SizedBox(height: 6),
             Text(
-              'STAR SETS TO BUILD IT',
-              style: TextStyle(
+              mine ? 'STAR SETS TO BUILD IT' : 'GROUP LIKES APPEAR HERE',
+              style: const TextStyle(
                 fontFamily: 'JetBrainsMono',
                 fontSize: 10,
                 letterSpacing: 0.08 * 10,
                 color: colorFg4,
               ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ScheduleScopeSelector extends StatelessWidget {
+  final ScheduleScope active;
+  final ValueChanged<ScheduleScope> onChanged;
+
+  const _ScheduleScopeSelector({required this.active, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    const scopes = [
+      (ScheduleScope.all, 'ALL'),
+      (ScheduleScope.mine, 'MINE'),
+      (ScheduleScope.ours, 'OURS'),
+    ];
+
+    return DottedBorder.bottom(
+      child: SizedBox(
+        height: 44,
+        child: Row(
+          children: [
+            for (final entry in scopes)
+              Expanded(
+                child: Center(
+                  child: MonoChip(
+                    label: entry.$2,
+                    active: active == entry.$1,
+                    onTap: () => onChanged(entry.$1),
+                  ),
+                ),
+              ),
           ],
         ),
       ),
@@ -207,7 +244,6 @@ class _ViewSelector extends StatelessWidget {
   Widget build(BuildContext context) {
     final views = [
       (FestDetailView.gantt, 'GANTT'),
-      (FestDetailView.mySchedule, 'MY SCHEDULE'),
       (FestDetailView.dayTabs, 'DAYS'),
       (FestDetailView.stageTabs, 'STAGES'),
       (FestDetailView.filters, 'FILTER'),

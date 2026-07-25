@@ -8,6 +8,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../data/models.dart';
 import '../../theme/tokens.dart';
+import '../../widgets/co_liker_pins.dart';
 import '../../widgets/live_dot.dart';
 import '../../widgets/dotted_border.dart';
 
@@ -224,7 +225,7 @@ class _NowHero extends StatelessWidget {
             ),
             const SizedBox(height: 6),
             // Time + genre
-            if (live != null)
+            if (live != null) ...[
               Text(
                 '${fmtTime(live!.t)} → ${fmtTime(live!.t + live!.dur)} · ${live!.genre}',
                 style: const TextStyle(
@@ -235,6 +236,9 @@ class _NowHero extends StatelessWidget {
                   height: 1,
                 ),
               ),
+              if (live!.supporters.isNotEmpty)
+                CoLikerPins(artist: live!.artist, supporters: live!.supporters),
+            ],
             // Countdown to next starred
             if (next != null) ...[
               const SizedBox(height: 14),
@@ -357,6 +361,11 @@ class _DepartureRow extends StatelessWidget {
                           height: 1,
                         ),
                       ),
+                      if (set.supporters.isNotEmpty)
+                        CoLikerPins(
+                          artist: set.artist,
+                          supporters: set.supporters,
+                        ),
                     ],
                   ),
                 ),

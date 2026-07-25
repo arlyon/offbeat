@@ -11,6 +11,7 @@ import 'theme/app_theme.dart';
 import 'theme/tokens.dart';
 import 'shell/bottom_tab_bar.dart';
 import 'shell/top_nav.dart';
+import 'data/group_schedule_overlay.dart';
 import 'data/models.dart';
 import 'data/serial_keyed_queue.dart';
 import 'screens/festival_list/festival_list_screen.dart';
@@ -107,6 +108,8 @@ class _OffbeatShellState extends State<_OffbeatShell>
   // Starred set IDs (loaded from Rust SQLite)
   Set<String> _starredSetIds = {};
   final SerialKeyedQueue _starToggleQueue = SerialKeyedQueue();
+  GroupScheduleOverlayController? _groupScheduleController;
+  GroupScheduleOverlay _groupScheduleOverlay = GroupScheduleOverlay.empty;
 
   // Weather state
   StreamSubscription<WeatherForecastDto?>? _weatherSub;
@@ -171,6 +174,7 @@ class _OffbeatShellState extends State<_OffbeatShell>
     _clockTimer?.cancel();
     _lineupSub?.cancel();
     _weatherSub?.cancel();
+    _groupScheduleController?.dispose();
     _transportSub?.cancel();
     _deepLinkSub?.cancel();
     _navController.dispose();
@@ -292,6 +296,9 @@ class _OffbeatShellState extends State<_OffbeatShell>
     _lineupSub = null;
     _weatherSub?.cancel();
     _weatherSub = null;
+    _groupScheduleController?.dispose();
+    _groupScheduleController = null;
+    _groupScheduleOverlay = GroupScheduleOverlay.empty;
     _transportSub?.cancel();
     _transportSub = null;
     _relayFestivalId = null;
@@ -416,7 +423,9 @@ class _OffbeatShellState extends State<_OffbeatShell>
       _lineupLoading = true;
       _weather = null;
       _starredSetIds = {};
+      _groupScheduleOverlay = GroupScheduleOverlay.empty;
     });
+    _startGroupScheduleOverlay(node, fest.id);
 
     // Load persisted stars from Rust SQLite
     try {
@@ -686,6 +695,9 @@ class _OffbeatShellState extends State<_OffbeatShell>
     _lineupSub = null;
     _weatherSub?.cancel();
     _weatherSub = null;
+    _groupScheduleController?.dispose();
+    _groupScheduleController = null;
+    _groupScheduleOverlay = GroupScheduleOverlay.empty;
     _relayFestivalId = null;
     _navController.reverse().then((_) {
       if (!mounted) return;
@@ -915,8 +927,29 @@ class _OffbeatShellState extends State<_OffbeatShell>
           },
           userId: _userId,
           displayName: _displayName,
+          lineup: _lineup,
+          onGroupsChanged: () => _groupScheduleController?.refresh(),
         );
     }
+  }
+
+  void _startGroupScheduleOverlay(AppNode node, String festivalId) {
+    _groupScheduleController?.dispose();
+    final controller = GroupScheduleOverlayController(
+      node: node,
+      festivalId: festivalId,
+      localUserId: _userId,
+    );
+    controller.addListener(() {
+      if (!mounted || _selectedFestival?.id != festivalId) return;
+      setState(() => _groupScheduleOverlay = controller.overlay);
+    });
+    _groupScheduleController = controller;
+    unawaited(
+      controller.refresh().catchError((Object error) {
+        debugPrint('group schedule overlay failed: $error');
+      }),
+    );
   }
 
   void _handleStarToggle(String setId) {
@@ -991,8 +1024,11 @@ class _OffbeatShellState extends State<_OffbeatShell>
           'genre': s.genre,
           'cancelled': s.cancelled,
         });
-        festSet.starred = _starredSetIds.contains(s.id);
-        return festSet;
+        return festSet.copyWith(
+          starred: _starredSetIds.contains(s.id),
+          likedByGroup: _groupScheduleOverlay.groupLikedSetIds.contains(s.id),
+          supporters: _groupScheduleOverlay.supportersBySetId[s.id],
+        );
       }).toList();
       sets = withScheduleClashes(builtSets);
     }

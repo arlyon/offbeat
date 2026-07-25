@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../data/models.dart';
 import '../../theme/tokens.dart';
+import '../../widgets/co_liker_pins.dart';
 import '../../widgets/live_dot.dart';
 import '../../widgets/dotted_border.dart';
 
@@ -996,54 +997,87 @@ class _SetBlock extends StatelessWidget {
       );
     }
 
-    return Container(
-      decoration: decoration,
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisSize: MainAxisSize.min,
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: set.supporters.isEmpty
+            ? null
+            : () => showCoLikersSheet(
+                context,
+                artist: set.artist,
+                supporters: set.supporters,
+              ),
+        splashColor: Colors.transparent,
+        highlightColor: colorSurface2,
+        child: Container(
+          decoration: decoration,
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (set.starred)
-                const Text(
-                  '★ ',
-                  style: TextStyle(color: colorAccent, fontSize: 10, height: 1),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (set.starred)
+                    const Text(
+                      '★ ',
+                      style: TextStyle(
+                        color: colorAccent,
+                        fontSize: 10,
+                        height: 1,
+                      ),
+                    ),
+                  if (set.live)
+                    const Padding(
+                      padding: EdgeInsets.only(right: 4),
+                      child: LiveDot(size: 6),
+                    ),
+                  Flexible(
+                    child: Text(
+                      set.artist,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontFamily: 'Helvetica',
+                        fontWeight: FontWeight.w700,
+                        fontSize: 12,
+                        letterSpacing: -0.01 * 12,
+                        color: colorFg,
+                        height: 1.1,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 2),
+              Text(
+                '${fmtTime(set.t)} → ${fmtTime(set.t + set.dur)}',
+                style: const TextStyle(
+                  fontFamily: 'JetBrainsMono',
+                  fontSize: 9,
+                  color: colorFg3,
+                  height: 1,
                 ),
-              if (set.live)
-                const Padding(
-                  padding: EdgeInsets.only(right: 4),
-                  child: LiveDot(size: 6),
-                ),
-              Flexible(
-                child: Text(
-                  set.artist,
+              ),
+              if (set.supporters.isNotEmpty) ...[
+                const SizedBox(height: 2),
+                Text(
+                  compactSupporterSummary(set.supporters).toUpperCase(),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
-                    fontFamily: 'Helvetica',
+                    fontFamily: 'JetBrainsMono',
+                    fontSize: 8,
                     fontWeight: FontWeight.w700,
-                    fontSize: 12,
-                    letterSpacing: -0.01 * 12,
-                    color: colorFg,
-                    height: 1.1,
+                    color: colorAccent,
+                    height: 1,
                   ),
                 ),
-              ),
+              ],
             ],
           ),
-          const SizedBox(height: 2),
-          Text(
-            '${fmtTime(set.t)} → ${fmtTime(set.t + set.dur)}',
-            style: const TextStyle(
-              fontFamily: 'JetBrainsMono',
-              fontSize: 9,
-              color: colorFg3,
-              height: 1,
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }

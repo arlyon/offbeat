@@ -86,7 +86,12 @@ class _CreateGroupSheetState extends State<CreateGroupSheet> {
             Expanded(
               child: SingleChildScrollView(
                 controller: scrollController,
-                child: _tab == 'new' ? _buildCreateTab() : _buildJoinTab(),
+                child: Column(
+                  children: [
+                    _tab == 'new' ? _buildCreateTab() : _buildJoinTab(),
+                    _buildScheduleSharingNotice(),
+                  ],
+                ),
               ),
             ),
             // Footer
@@ -439,6 +444,34 @@ class _CreateGroupSheetState extends State<CreateGroupSheet> {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildScheduleSharingNotice() {
+    return DottedBorder.top(
+      child: const Padding(
+        padding: EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(Icons.sync, size: 14, color: colorAccent),
+            SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                'YOUR SAVED SETS SYNC AUTOMATICALLY WITH GROUP MEMBERS',
+                style: TextStyle(
+                  fontFamily: 'JetBrainsMono',
+                  fontSize: 9,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.06 * 9,
+                  color: colorFg2,
+                  height: 1.4,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 

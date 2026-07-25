@@ -8,6 +8,7 @@
 import 'package:flutter/material.dart';
 import '../../data/models.dart';
 import '../../theme/tokens.dart';
+import '../../widgets/co_liker_pins.dart';
 import '../../widgets/dotted_border.dart';
 import '../../widgets/star_button.dart';
 import '../../widgets/live_dot.dart';
@@ -578,6 +579,11 @@ class _BigCard extends StatelessWidget {
                           ],
                         ],
                       ),
+                      if (set.supporters.isNotEmpty)
+                        CoLikerPins(
+                          artist: set.artist,
+                          supporters: set.supporters,
+                        ),
                     ],
                   ),
                 ),
