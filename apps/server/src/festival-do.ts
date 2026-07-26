@@ -663,10 +663,7 @@ export class FestivalDO extends DurableObject {
 					limit,
 				)
 				.toArray() as { message: ArrayBuffer }[];
-			const messages = this.#decodeChatRowsWithinBudget(rows);
-			this.#sendServerMsg(ws, {
-				msg: { case: "chatDiff", value: { topic, messages } },
-			});
+			this.#sendChatRowsWithinBudget(ws, topic, rows);
 			return;
 		}
 
@@ -707,22 +704,28 @@ export class FestivalDO extends DurableObject {
 				.toArray() as { message: ArrayBuffer }[];
 			this.sql.exec("DELETE FROM chat_catchup_heads WHERE request_id = ?", requestId);
 		});
-		const messages = this.#decodeChatRowsWithinBudget(rows);
-		this.#sendServerMsg(ws, {
-			msg: { case: "chatDiff", value: { topic, messages } },
-		});
+		this.#sendChatRowsWithinBudget(ws, topic, rows);
 	}
 
-	#decodeChatRowsWithinBudget(rows: { message: ArrayBuffer }[]) {
-		const messages = [];
-		let encodedBytes = 0;
-		const payloadBudget = MAX_CHAT_CATCHUP_BYTES - 8 * 1024;
-		for (const row of rows) {
-			encodedBytes += row.message.byteLength;
-			if (encodedBytes > payloadBudget) break;
-			messages.push(fromBinary(GossipEnvelopeSchema, new Uint8Array(row.message)));
+	#sendChatRowsWithinBudget(ws: WebSocket, topic: string, rows: { message: ArrayBuffer }[]) {
+		const messages = rows.map((row) =>
+			fromBinary(GossipEnvelopeSchema, new Uint8Array(row.message)),
+		);
+		while (true) {
+			const response = create(RelayServerMessageSchema, {
+				msg: { case: "chatDiff", value: { topic, messages } },
+			});
+			const bytes = toBinary(RelayServerMessageSchema, response);
+			if (bytes.byteLength <= MAX_CHAT_CATCHUP_BYTES) {
+				ws.send(bytes);
+				return;
+			}
+			if (messages.length === 0) {
+				this.#sendError(ws, "Chat catch-up response metadata exceeds limit", ErrorCode.MALFORMED);
+				return;
+			}
+			messages.pop();
 		}
-		return messages;
 	}
 
 	/** Send a binary RelayServerMessage to a WebSocket. */

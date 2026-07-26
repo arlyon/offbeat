@@ -124,6 +124,27 @@ function waitForMsg(ws: WebSocket, expectedCase: string, timeoutMs = 5000) {
 	});
 }
 
+function waitForRawMsg(ws: WebSocket, expectedCase: string, timeoutMs = 5000) {
+	return new Promise<
+		{ byteLength: number; msg: ReturnType<typeof fromBinary<typeof RelayServerMessageSchema>> }
+	>((resolve, reject) => {
+		const timeout = setTimeout(
+			() => reject(new Error(`Timeout waiting for ${expectedCase}`)),
+			timeoutMs,
+		);
+		const handler = (event: MessageEvent) => {
+			const bytes = new Uint8Array(event.data as ArrayBuffer);
+			const msg = fromBinary(RelayServerMessageSchema, bytes);
+			if (msg.msg.case === expectedCase) {
+				clearTimeout(timeout);
+				ws.removeEventListener("message", handler);
+				resolve({ byteLength: bytes.byteLength, msg });
+			}
+		};
+		ws.addEventListener("message", handler);
+	});
+}
+
 /** Drain all pending messages (like hello on connect). */
 async function drainMessages(_ws: WebSocket, ms = 100) {
 	await new Promise((r) => setTimeout(r, ms));
@@ -854,6 +875,90 @@ describe("FestivalDO lane split", () => {
 			});
 			expect((await manyWriterDiffPromise).msg.case).toBe("chatDiff");
 
+			ws.close();
+		});
+
+		it("caps the fully encoded chatDiff response", async () => {
+			const kp = generateKeypair();
+			const { attestation } = await registerUser(kp.publicKeyHex);
+			const topic = `festival/${FESTIVAL_ID}/chat/byte-budget-${crypto.randomUUID()}-${"t".repeat(20_000)}`;
+			const ws = await connectWS(FESTIVAL_ID);
+			await drainMessages(ws);
+			const authOk = waitForMsg(ws, "authOk");
+			ws.send(toBinary(RelayClientMessageSchema, buildAuthMsg(attestation, kp)));
+			await authOk;
+
+			// The old implementation reserved only 8 KiB for response framing.
+			// A 20 KiB outer topic plus near-limit envelopes made it exceed the
+			// actual wire limit even though its envelope-only accounting passed.
+			const text = "x".repeat(43_000);
+			for (let sequence = 1n; sequence <= 10n; sequence += 1n) {
+				const envelope = create(GossipEnvelopeSchema, {
+					payload: {
+						case: "chat",
+						value: {
+							id: `byte-budget-${sequence}`,
+							userId: kp.publicKeyHex,
+							displayName: "Tester",
+							text,
+							topic,
+							timestamp: new Date().toISOString(),
+							writerSeq: sequence,
+							logicalTime: sequence,
+						},
+					},
+				});
+				sendClientMsg(ws, {
+					msg: { case: "gossip", value: { topic, message: envelope } },
+				});
+			}
+			await new Promise((resolve) => setTimeout(resolve, 200));
+
+			const responsePromise = waitForRawMsg(ws, "chatDiff");
+			sendClientMsg(ws, {
+				msg: {
+					case: "chatCatchup",
+					value: { topic, sv: {}, headIds: {}, limit: 100 },
+				},
+			});
+			const response = await responsePromise;
+			expect(response.byteLength).toBeLessThanOrEqual(512 * 1024);
+			expect(response.msg.msg.case).toBe("chatDiff");
+			if (response.msg.msg.case === "chatDiff") {
+				const messageIds = response.msg.msg.value.messages.flatMap((message) =>
+					message.payload.case === "chat" ? [message.payload.value.id] : [],
+				);
+				expect(messageIds.length).toBeGreaterThan(0);
+				expect(messageIds.length).toBeLessThan(10);
+				expect(messageIds).toEqual(
+					Array.from({ length: messageIds.length }, (_, index) => `byte-budget-${index + 1}`),
+				);
+
+				const nextPagePromise = waitForRawMsg(ws, "chatDiff");
+				sendClientMsg(ws, {
+					msg: {
+						case: "chatCatchup",
+						value: {
+							topic,
+							sv: { [kp.publicKeyHex]: BigInt(messageIds.length) },
+							headIds: {
+								[kp.publicKeyHex]: `byte-budget-${messageIds.length}@${messageIds.length}`,
+							},
+							limit: 100,
+						},
+					},
+				});
+				const nextPage = await nextPagePromise;
+				expect(nextPage.byteLength).toBeLessThanOrEqual(512 * 1024);
+				if (nextPage.msg.msg.case === "chatDiff") {
+					const remainingIds = nextPage.msg.msg.value.messages.flatMap((message) =>
+						message.payload.case === "chat" ? [message.payload.value.id] : [],
+					);
+					expect([...messageIds, ...remainingIds]).toEqual(
+						Array.from({ length: 10 }, (_, index) => `byte-budget-${index + 1}`),
+					);
+				}
+			}
 			ws.close();
 		});
 
