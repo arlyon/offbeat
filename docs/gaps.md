@@ -74,18 +74,21 @@ Wall-clock timestamps are suitable for display but not authoritative distributed
 
 Use a deterministic causal tuple, such as hybrid logical time plus writer key and writer sequence. Migrate DB indexes and test adversarial skew.
 
-## P1: offline public-message trust is unresolved
+## P1: offline public-message trust policy is accepted; implementation remains
 
-**Tracking:** `offbeat-t6a.10`
+**Decision:** `offbeat-t6a.10`; delivery tracking: `offbeat-t6a.4`
 
-Festival state and attendee chat have different authorities:
+Public attendee chat uses domain-separated Ed25519 authorship signatures plus
+cached MainDO registration attestations. Current proofs and the 7-day offline
+grace produce verified trust. Missing or out-of-grace proof produces a visibly
+unverified message that is retained and forwarded only within per-writer/topic
+quotas and never included in history catch-up. Invalid signatures, forged
+proofs, revocations, replay, and writer-sequence equivocation are rejected.
+Festival authority and group-key possession remain separate trust domains.
 
-- festival state must be signed by the configured festival authority;
-- public chat needs sender authorship signatures;
-- MainDO attestations may add registered-user trust;
-- group traffic relies on possession of the group key.
-
-The final offline policy must define attestation caching, expiry/grace, unknown keys, replay handling, and constrained-route overhead before public chat ships.
+Implementation still needs the compact proof sidecar, persistent trust/rejection
+state, relay ingress checks, UI badge and reconciliation flow, and the security
+matrix defined in `auth-protocol.md`.
 
 ## P2: public chat needs bounded peer catch-up
 

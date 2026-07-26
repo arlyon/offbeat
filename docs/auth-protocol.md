@@ -1,6 +1,6 @@
 # Auth & Identity Protocol
 
-> **Status: proposed.** Passkey/session behaviour and group-key possession are the intended model. The exact offline MainDO-attestation policy for public chat remains an explicit decision in `execution-plan.md`.
+> **Status: accepted trust policy.** Public-chat authorship, offline attestation, and unknown-sender behaviour are defined below. Delivery implementation is tracked by `offbeat-t6a.4`; causal ordering is tracked separately by `offbeat-t6a.11`.
 
 This document describes the identity, authentication, and message-signing
 protocol proposed across Offbeat transports. It supersedes the "Future
@@ -11,8 +11,9 @@ work" section of `admin-protocol.md` where the implementation adopts it.
 ## Design Goals
 
 1. **One-time setup** — register once on first app launch, never again
-2. **No anonymous writes** — every public write is attributable to a
-   WebAuthn-registered identity
+2. **No anonymous relay writes** — the Festival DO accepts public writes only
+   from an attested session; disconnected peers may tentatively carry a signed
+   but unverified message under the bounded policy below
 3. **Reads are open** — anyone can subscribe and receive data
 4. **Group trust = key possession** — all group traffic (chat, CRDTs,
    check-ins) is authenticated by AES-256-GCM encryption alone. If you
@@ -39,9 +40,9 @@ Three trust domains have different guarantees:
 | Ed25519 message signature | "Which key authored this message?" | Per message | Every receiver |
 
 A valid Ed25519 signature proves authorship, not registration or organiser
-authority. The accepted offline policy must define how missing/expired
-attestations affect trust display and relay behaviour. The 64-byte
-signature cannot be meaningfully truncated.
+authority. Missing or out-of-grace attestations produce an explicitly
+unverified message; they are not equivalent to invalid signatures or forged
+attestations. The 64-byte signature cannot be meaningfully truncated.
 
 ### Festival state
 
@@ -69,6 +70,186 @@ This means group members can impersonate each other within the group.
 For groups of ~5 friends at a festival, this is an acceptable trade-off
 that eliminates 68 bytes of overhead per message and simplifies the
 protocol significantly, especially on constrained transports (BLE, LoRa).
+
+---
+
+## Accepted Offline Public-Chat Policy
+
+The accepted model is **signed authorship with cached registration proof and
+bounded deferred trust**. It applies only to public attendee chat.
+
+### Trust states
+
+| Evidence | Apply and display | Forward | Reconciliation |
+|---|---|---|---|
+| Missing/invalid attendee signature | Drop | Never | Record only a bounded diagnostic |
+| Valid signature + current MainDO attestation | Verified | Yes | Cache the attestation |
+| Valid signature + attestation expired by at most 7 days | Verified offline | Yes | Refresh when any full route returns |
+| Valid signature + no usable attestation | Unverified | Yes, within the unverified quota | Request proof on a capable route |
+| Cryptographically valid attestation beyond grace | Unverified | Yes, within the unverified quota | Treat like missing proof; expiry is not forgery |
+| Forged/malformed attestation or known-revoked key | Drop | Never | Persist a bounded rejection marker |
+
+An author cannot evade expiry handling by omitting an old attestation: missing
+proof and valid-but-out-of-grace proof have the same unverified state. A peer
+must never infer organiser authority from any attendee trust state.
+
+### Accepted transport representation
+
+Every public-chat message carries a 32-byte writer public key and an untruncated
+64-byte Ed25519 signature over canonical domain-separated message bytes. Full
+and low-bandwidth routes exchange a separate compact MainDO attestation on
+session establishment or cache miss; they do not repeat it on every message.
+The canonical attestation bytes are `offbeat/attestation/v1`, issuer key ID,
+issuer generation, writer public key, issued-at Unix seconds, and expires-at Unix
+seconds, encoded with fixed-width integers and length-delimited binary fields.
+The proof carries those fields plus the issuer's 64-byte signature. Verification
+selects the public key only from the locally trusted keyset by signed issuer ID;
+a proof-supplied issuer key is never trusted. Binary protocol fields are required
+on the wire rather than the current JSON/hex storage form.
+
+This baseline deliberately does not implement attestation metapackets or
+per-message attestation duplication. They remain optional optimisations only if
+measurement demonstrates a need.
+
+### Trust-anchor rotation
+
+Normal MainDO key rotation uses canonical `offbeat/main-keyset/v1` metadata that
+contains a monotonically increasing generation, validity window, each key's ID
+and public key, activation time, issuance cutoff, and verification end. It is
+signed by the previously trusted active key and the new key. Clients persist the
+highest accepted generation and reject rollback, unknown chains, invalid
+cross-signatures, overlapping key IDs, and attestations issued by an old key
+after its cutoff. An old attestation remains valid only when its issue time is at
+or before that cutoff and its expiry is at or before the old key's verification
+end.
+
+Compromise of the currently trusted key cannot be repaired by metadata signed
+only by that key. Emergency distrust therefore requires a denylist/keyset shipped
+through an authenticated app update rooted outside MainDO. Mixed-version peers
+may transport newer metadata but cannot make another peer trust it without that
+peer's existing chain or app root.
+
+| Route profile | Message auth overhead | Registration proof behaviour |
+|---|---:|---|
+| Full | 96 bytes plus framing | Exchange compact proof on session/cache miss |
+| Low bandwidth | 96 bytes plus framing | Exchange compact proof on cache miss, subject to route cap |
+| Constrained | 96 bytes plus compact framing | Never bulk-transfer proofs or history; unknown writers remain unverified until another route supplies proof |
+
+A constrained public message that does not fit the measured route payload is
+suppressed rather than weakening or truncating its signature. Festival and
+group traffic retain their own trust envelopes.
+
+### Relay, peer, and UI behaviour
+
+- The Festival DO requires a current or grace-period attested session, requires
+  the message writer key to equal the session key, verifies the per-message
+  signature, and applies topic/payload/rate limits before persistence.
+- Clients verify every public message independently; successful relay delivery
+  is not proof of authorship or registration.
+- Full/low-bandwidth peers request a missing attestation by writer key. A proof
+  is accepted only under a pinned MainDO trust anchor.
+- Unverified messages are stored with an `unverified` trust state, show an
+  **UNVERIFIED** badge and self-asserted name, and cannot populate trusted-name
+  state. They are capped per writer and topic, expire from the visible chat
+  after 24 hours unless promoted, and are not eligible for historical catch-up.
+- The initial abuse-control defaults are a burst of 5 and 30 messages per
+  minute per writer/connection, at most 20 visible unverified messages per
+  writer, 100 visible unverified messages per topic, and 100 admitted
+  unverified writer keys per topic. Implementations may tighten these limits by
+  route but may not make them unbounded.
+- Each admitted unverified writer retains a persistent per-topic sequence floor
+  until that festival's cached data is explicitly deleted. A first live message
+  establishes the floor because unverified traffic is ineligible for historical
+  catch-up; later expired or quota-evicted messages advance it. Sparse accepted,
+  rejected, and equivocated tuples are retained for 30 days. Thus visibility
+  expiry, quota eviction, restart, or route replay cannot resurrect a message.
+  Once the 100-writer admission table is full, new unverified writers are
+  rejected rather than evicting replay state.
+- On reconnect, positive MainDO validation promotes matching messages. A
+  definitive unregistered or revoked result hides them and retains the writer
+  floor and rejection state. Network failure is not a negative validation
+  result.
+
+### Authenticated revocation propagation
+
+Revocations are irreversible within a MainDO trust generation. MainDO emits
+`offbeat/revocations/v1` signed full snapshots and hash-linked deltas containing
+trust generation, monotonic revocation generation, issue time, previous
+generation/hash, and entries of writer key, revocation time, and reason code.
+Every full snapshot is cumulative for that trust generation.
+
+Clients verify objects against the accepted keyset and persist the highest
+contiguous generation plus the union of revoked keys. A delta applies only when
+its previous generation/hash exactly matches local state. A gap or out-of-order
+delta does not advance the generation; it triggers retrieval of the latest full
+snapshot. A newer valid cumulative snapshot may bridge the gap. No older,
+incomplete, or reordered object can remove a persisted revocation.
+
+A single object is capped at 256 KiB and 4096 entries; larger snapshots use
+signed, hash-linked pages under one generation and apply atomically only after
+all pages and the root hash verify. Forged, conflicting, rollback,
+unknown-chain, incomplete, or oversized data is rejected without changing
+trust. Peers may transport these signed objects but never author them. Snapshot
+age may prevent a negative "not revoked" conclusion, but a valid signed
+revocation remains applicable offline.
+
+Expiry and visibility decisions use a persisted trust-clock floor that never
+moves backwards across restart: the maximum of local time, previously observed
+trusted server time, and previously persisted trust time. Clock rollback cannot
+extend an attestation or revive a hidden message; clock advance can only
+downgrade a message to unverified, not forge or revoke it.
+
+### Signed bytes and replay handling
+
+The signature covers a protocol/version domain, festival and chat topic,
+message ID, writer key, writer sequence, causal-order value, display timestamp,
+display name, and text. Re-encoding or moving a signed message to another topic
+therefore invalidates it. Wall time remains display-only.
+
+An exact duplicate is ignored by stable message ID. Different signed payloads
+using the same topic, writer key, and writer sequence are writer equivocation.
+The convergent result is to quarantine and hide **all** variants for that tuple,
+persist an equivocation marker, and mark the sequence consumed.
+
+The chat state vector carries each writer's HWM **and the message ID at that
+HWM**, plus bounded equivocated sequence markers retained for 30 days. Equal
+sequences with different IDs force exchange of both signed envelopes regardless
+of HWM. Any receiver of two valid distinct variants emits an
+`EquivocationProof` containing those envelopes. Messages stop forwarding, but
+the bounded proof continues over normal capable catch-up; constrained routes
+carry only the compact marker and defer proof retrieval. A marker affects trust
+only after local proof verification. Once verified, all peers advertise the
+same `EQUIVOCATED` commitment for that sequence and quarantine any current or
+later-arriving variant.
+
+`offbeat-t6a.11` defines the remaining causal-order value and database order; it
+may not weaken this commitment exchange, proof verification, quarantine, or
+deduplication contract.
+
+### Required evidence before public chat ships
+
+1. Invalid signatures, forged attestations, revoked writers, cross-topic
+   replay, and exact duplicates are rejected; two partitions that each receive
+   a different same-sequence variant exchange HWM commitments/proof and converge
+   to quarantine across restart, forwarding, and catch-up.
+2. Current, grace-period, absent, expired, and later-promoted/rejected
+   attestations produce the defined persistent trust and UI states.
+3. Relay ingress rejects unpinned issuers and replayed/expired/wrong-festival
+   session challenges, proves session-key/message-key equality, and enforces
+   payload, topic, and rate limits.
+4. Unverified quotas, writer admission, sequence floors, and 24-hour visibility
+   expiry survive restart, eviction, and multiple-route replay without message
+   resurrection.
+5. Normal key overlap/retirement and emergency distrust reject rollback,
+   unknown chains, post-cutoff issuance, invalid cross-signatures, and stale
+   generation after restart.
+6. Forged, stale, rollback, conflicting, oversized, and paginated revocation
+   data cannot incorrectly add or remove trust; skipped/out-of-order deltas do
+   not advance state and recover through a cumulative signed snapshot.
+7. Full and low-bandwidth cache-miss proof exchange works offline; constrained
+   routes send no proofs or history and suppress oversize public messages.
+8. `pnpm check`, `pnpm check:rust`, Flutter analysis/tests, and targeted server
+   trust tests pass.
 
 ---
 
@@ -138,15 +319,13 @@ App                              MainDO
 
    The `public_key` column stores the Ed25519 public key (hex).
 
-3. Issue a signed **attestation** — proof that this Ed25519 public key
-   was registered via WebAuthn:
+3. Issue the accepted compact **attestation** proving that this Ed25519
+   public key was registered via WebAuthn. MainDO signs the canonical
+   `offbeat/attestation/v1` fields defined above, including issuer key ID and
+   generation, writer key, issue time, and expiry.
 
-   ```
-   MainDO signs: "attestation:v1:<pubkey_hex>:<issued_at_unix>:<expires_at_unix>"
-   ```
-
-   The attestation is a portable certificate. The client stores it
-   locally and presents it when connecting to any Festival DO or peer.
+   The attestation is a portable certificate. The client stores it locally and
+   presents it to a Festival DO or a capable peer on session/cache miss.
 
 > **Note:** The server cannot verify that the Ed25519 key was actually
 > derived from PRF — the PRF output is only visible client-side. The
@@ -219,31 +398,40 @@ a festival-length offline window doesn't break writes.
 
 ## 2. Session Authentication
 
-When connecting to a Festival DO (or a P2P peer), the client
-authenticates once per session. After that, writes are permitted without
-further checks.
+When connecting to a Festival DO (or a P2P peer), the client authenticates once
+per session. Session authentication establishes registration and key possession;
+every public message still undergoes signature, key-binding, topic, payload,
+rate, replay, and trust-state checks before persistence or forwarding.
 
 ### Relay (Festival DO WebSocket)
 
-The existing WS protocol adds an `auth` message type:
+The production WS protocol uses a server-generated, single-use challenge rather
+than accepting a client timestamp as replay protection:
 
 ```json
-// Client → DO (immediately after connect, before any writes)
+// Festival DO → client
+{ "type": "auth_challenge", "nonce": "<random 32 bytes>", "festivalId": "<id>" }
+
+// Client → Festival DO, before any writes
 {
   "type": "auth",
-  "publicKey": "<64-char hex Ed25519 public key>",
-  "attestation": "<MainDO-signed attestation>",
-  "signature": "<hex Ed25519 sig over the string 'session:<timestamp>'>"
+  "publicKey": "<32-byte Ed25519 public key>",
+  "attestation": "<compact MainDO-signed attestation>",
+  "signature": "<Ed25519 signature over offbeat/session/v1, festivalId, nonce>"
 }
 ```
 
 The DO:
 
-1. Verifies the attestation signature against MainDO's well-known
-   public key
-2. Checks expiry (with grace period)
-3. Verifies the session signature proves ownership of the public key
-4. Sets `session.authenticated = true` and `session.publicKey = ...`
+1. Verifies the attestation issuer against a pinned MainDO trust anchor, then
+   verifies the proof signature and writer-key binding.
+2. Checks expiry with the 7-day grace period and checks known revocation state.
+3. Atomically consumes the challenge and verifies the domain/festival-bound
+   session signature, proving possession of the attested key.
+4. Sets `session.authenticated = true` and `session.publicKey = ...`.
+
+A challenge expires after five minutes, is scoped to one socket/festival, and
+cannot be reused after success or failure.
 
 **After auth:**
 
@@ -256,27 +444,32 @@ Unauthenticated clients can read freely. Writes without auth return:
 { "type": "error", "message": "auth required for writes" }
 ```
 
-**Per-write overhead: one boolean check.** No crypto on the hot path.
+Attestation verification is session-level. Public-chat writes still require a
+per-message signature check and equality between the message writer key and the
+authenticated session key; opaque group writes require normal size/topic/rate
+checks.
 
 ### P2P (iroh-gossip)
 
-Peers exchange attestations during the gossip topic join handshake:
+On full and low-bandwidth routes, peers exchange attestations during the topic
+join handshake or on cache miss:
 
-1. Peer A connects to peer B on a shared topic
-2. Both send their attestation + a signed challenge
-3. Each side verifies the other's attestation
-4. Peers without valid attestations can receive messages but their
-   published messages are silently dropped by receivers
+1. Peer A connects to peer B on a shared topic.
+2. Both send a signed challenge and any requested compact attestation.
+3. Each side verifies the challenge and proof against a pinned MainDO key.
+4. Missing or out-of-grace proof produces the bounded unverified state; an
+   invalid signature, forged proof, or known revocation is dropped.
 
-This is symmetric — both sides authenticate to each other.
+This is symmetric. Constrained routes carry authorship-only live messages and
+rely on a later capable route to promote unknown writers.
 
 ---
 
 ## 3. Per-Message Signing (Public Traffic Only)
 
-Public writes (stage chat, festival updates) include the sender's full
-Ed25519 public key and a 64-byte signature. Group traffic is **not**
-signed — see Trust Layers above.
+Public attendee chat includes the sender's full Ed25519 public key and a
+64-byte signature. Festival updates instead use the distinct festival-authority
+envelope; group traffic is **not** signed — see Trust Layers above.
 
 ### Signing tiers
 
@@ -302,77 +495,31 @@ with the DO or has seen X's attestation through another channel.
 - **Best for**: relay path (DO already verified the session), low-
   bandwidth transports
 
-#### Tier 2: Fully self-contained (160B overhead)
+#### Alternatives not selected for the baseline
 
-```
-┌─────────────┬──────────────────┬───────────────┬────────────────┐
-│ sender_key  │ payload          │ sender_sig    │ attestation_sig│
-│ (32 bytes)  │ (variable)       │ (64 bytes)    │ (64 bytes)     │
-└─────────────┴──────────────────┴───────────────┴────────────────┘
-```
+A self-contained message could repeat the attestation signature, issue/expiry
+times, and issuer identifier. That adds at least 80 bytes beyond the 96-byte
+writer key/signature and repeats unchanged proof on every message. A batched
+metapacket could amortize proofs across writers, but introduces another framing
+and buffering protocol.
 
-Includes the MainDO attestation signature alongside the message
-signature. Any receiver can verify both authorship AND registration
-without any prior state or DO connectivity. The receiver verifies
-`attestation_sig` against MainDO's well-known public key over the
-attestation message `attestation:v1:<sender_key_hex>:<issued>:<expires>`.
+Neither representation is selected initially. Offbeat exchanges one compact
+proof sidecar per writer and attestation lifetime on capable routes. Revisit
+per-message or batched proof carriage only with measured cache-miss or framing
+evidence.
 
-- **Pros**: fully offline-verifiable, no trust state needed
-- **Cons**: 160B overhead per message (80% on a 200B payload)
-- **Best for**: single messages in low-trust environments
+### Accepted tier selection
 
-#### Tier 3: Batched attestations (amortized overhead)
+The implementation baseline uses Tier 1 messages on every route and exchanges
+a compact attestation separately on capable routes. The self-contained and
+batched alternatives above are retained for comparison, not requirements.
 
-```
-┌─ Metapacket ──────────────────────────────────────────┐
-│ Attestation table (header):                            │
-│ ┌─────────────────────────────────────────────────┐   │
-│ │ [0] key=<pubkey_A> att_sig=<attestation_sig_A>  │   │
-│ │ [1] key=<pubkey_D> att_sig=<attestation_sig_D>  │   │
-│ └─────────────────────────────────────────────────┘   │
-│                                                        │
-│ Messages:                                              │
-│ ┌──────────┬──────────────────┬────────────┐          │
-│ │ att_idx=0│ payload          │ sender_sig │ (from A) │
-│ │ att_idx=1│ payload          │ sender_sig │ (from D) │
-│ │ att_idx=0│ payload          │ sender_sig │ (from A) │
-│ └──────────┴──────────────────┴────────────┘          │
-└────────────────────────────────────────────────────────┘
-```
-
-A forwarding peer bundles all messages it is relaying into a
-metapacket. The header contains the attestation table — one entry
-per unique sender — and each message references its sender by index
-(1 byte). The attestation cost (64B per unique sender) is paid once
-per sender per batch, not per message.
-
-Per-message overhead: **65B** (1B index + 64B signature).
-Per-sender overhead: **96B** (32B key + 64B attestation sig), once.
-
-For a batch of 20 messages from 5 senders:
-
-- Tier 1: 20 × 96B = 1,920B
-- Tier 2: 20 × 160B = 3,200B
-- Tier 3: 5 × 96B + 20 × 65B = 480B + 1,300B = **1,780B**
-
-Tier 3 is cheaper than Tier 1 AND provides full registration proof.
-The savings grow with batch size and sender repetition.
-
-- **Pros**: amortized attestation cost, fully offline-verifiable,
-  most efficient for relay/forwarding scenarios
-- **Cons**: more complex framing, requires batching
-- **Best for**: P2P relay and mesh forwarding where a peer forwards
-  messages from multiple senders
-
-### Tier selection by context
-
-| Context | Tier | Why |
+| Context | Accepted representation | Why |
 |---|---|---|
-| Relay (DO) | 1 | DO already verified the session |
-| Direct P2P (first msg from sender) | 2 | Receiver has no prior state |
-| Direct P2P (subsequent) | 1 | Receiver cached the attestation |
-| P2P relay / mesh forwarding | 3 | Amortize across forwarded messages |
-| LoRa (single message) | 1 or 2 | Depends on payload budget |
+| Relay (DO) | Tier 1 message + attested session; proof sidecar on receiver cache miss | Avoid repeated proof while preserving independent client verification |
+| Direct full/low-bandwidth P2P | Tier 1 message + proof at handshake/cache miss | Cache once per writer and attestation lifetime |
+| P2P forwarding | Preserve the original signed message; forward proof separately when requested | No new metapacket format without measured need |
+| Constrained | Tier 1 compact live message only | Never transfer proofs or history; defer registration trust |
 
 ### Wire format (group messages)
 
@@ -395,72 +542,53 @@ An attacker can trivially generate an Ed25519 keypair. The signature
 prevents impersonation of a specific key but not spam from
 unregistered keys.
 
-On the relay path, both authorship and registration are verified
-immediately — the DO only relays from authenticated sessions. On P2P,
-trust depends on the tier:
+On the relay path, both authorship and registration are verified immediately —
+the DO requires an authenticated session and verifies each public-message
+signature. On P2P, trust depends on the available evidence:
 
-- **Tier 2/3**: registration is verifiable immediately (attestation
-  included). Accept if valid, drop if expired/forged.
-- **Tier 1**: registration is deferred. Check `known_keys` table;
-  if unknown, accept tentatively and display as "unverified."
+- A separately supplied current or grace-period proof promotes the writer.
+- Missing or out-of-grace proof is deferred trust: accept tentatively under the
+  quota and display as **UNVERIFIED**.
+- A forged/malformed proof, invalid message signature, or known revocation is
+  rejected. Expiry alone is not forgery.
 
 ```
 Receive signed message
         │
-        ├─ Signature invalid or missing → drop, never relay
+        ├─ Signature invalid/missing, proof forged, or key revoked
+        │       └─ drop, reject replay, never relay
         │
-        ├─ Attestation included (tier 2/3)?
-        │       ├─ Valid → accept as trusted, cache in known_keys
-        │       └─ Invalid/expired → drop
+        ├─ Cached/supplied proof current or within grace
+        │       └─ accept as verified and cache proof
         │
-        ├─ No attestation (tier 1), key in known_keys → accept (trusted)
-        │
-        └─ No attestation, key unknown → accept AND relay
-                │                         display as "unverified" in UI
-                │
-                └─ On next DO connection:
-                    ├─ Key confirmed → promote, add to known_keys
-                    └─ Key not registered → prune messages locally
+        └─ Proof missing or beyond grace
+                └─ accept as unverified only within quota
+                        ├─ later confirmed → promote
+                        ├─ definitively rejected/revoked → hide + reject replay
+                        └─ network unavailable → remain unverified
 ```
 
-Signed messages from unknown keys **are relayed freely**. This is
-essential for WiFi-direct meshes and P2P networks to function without
-DO access. A group of peers at a stage with no internet must be able
-to chat — blocking relay of unknown keys would break this.
-
-Spam from throwaway keys is mitigated by **rate limiting per
-connection**, not by blocking relay. On DO reconnect, messages from
-unattested keys are pruned locally.
+Signed messages from unknown keys are relayed only within the accepted
+per-writer/topic quotas. This keeps disconnected peer chat functional without
+turning deferred trust into an unbounded spam path. On reconnect, positive
+validation promotes messages; definitive unregistered/revoked results hide
+them and retain replay-resistant rejection markers.
 
 ### Known keys and friends
 
-Each device maintains two local tables for identity resolution:
+Each device persists registration evidence independently from local identity
+labels. The implementation schema must represent at least:
 
-```sql
-CREATE TABLE known_keys (
-    public_key TEXT PRIMARY KEY,
-    display_name TEXT,         -- last seen self-asserted name
-    verified_at TEXT,
-    source TEXT NOT NULL       -- 'group', 'attestation', 'do_confirmed'
-);
+- writer public key;
+- when a proof exists, all compact attestation fields and its issuer key ID;
+- issue/expiry timestamps and last successful validation;
+- `verified`, `verified_offline`, `unverified`, or `revoked` status;
+- bounded rejected message IDs/writer-sequence tuples.
 
-CREATE TABLE friends (
-    public_key TEXT PRIMARY KEY,
-    name TEXT NOT NULL,        -- user's chosen name for this person
-    added_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-```
-
-`known_keys` is populated automatically from:
-
-- **Group membership**: when joining a group, all member keys are added
-  (source: `group`)
-- **Direct attestation exchange**: P2P handshake or tier 2/3 messages
-  (source: `attestation`)
-- **DO confirmation**: batch validation on reconnect (source:
-  `do_confirmed`)
-
-`friends` is populated manually by the user.
+Group membership, a self-asserted display name, or a locally assigned friend
+name may improve identity display but **must not** promote registration trust.
+Only a MainDO proof rooted in a pinned key or a positive authenticated MainDO
+validation can do that.
 
 ### Display name resolution
 
@@ -469,43 +597,34 @@ whatever display name they want in the payload. The public key (bound
 by the signature) is the true identity. Names are resolved locally:
 
 ```
-1. friends table   → your name for them    (highest priority)
-2. known_keys table → last seen name       (verified sender)
-3. message payload → self-asserted name    (unverified indicator)
+1. local friend label   → your name for them    (highest display priority)
+2. verified profile    → last seen verified name
+3. message payload     → self-asserted name
 ```
 
-If a known key starts using a different name, the `known_keys` table
-updates silently. If a friend changes their self-asserted name, the
-friend name you set still takes priority.
+Name resolution never changes the message's registration badge. A friend label
+may replace the displayed name, but an unverified writer remains visibly
+**UNVERIFIED** until MainDO evidence promotes that key.
 
 ### Verification code
 
 Public messages — verify signature, check trust:
 
 ```rust
-fn handle_public_message(msg: &WireMessage, db: &Database) -> TrustLevel {
-    // Step 1: verify authorship
-    if !signing::verify(&msg.sender_key, &msg.payload, &msg.signature) {
-        return TrustLevel::Invalid; // drop
+fn classify_public_message(msg: &WireMessage, evidence: Evidence) -> TrustLevel {
+    if !verify_domain_separated_message(msg)
+        || evidence.is_forged()
+        || evidence.is_revoked()
+    {
+        return TrustLevel::Invalid;
     }
-
-    // Step 2: check attestation if present (tier 2/3)
-    if let Some(att_sig) = &msg.attestation_sig {
-        if verify_attestation(&msg.sender_key, att_sig, &MAIN_DO_PUBKEY) {
-            db.add_known_key(&msg.sender_key, "attestation");
-            return TrustLevel::Trusted;
-        } else {
-            return TrustLevel::Invalid; // forged attestation
-        }
+    if evidence.is_current() {
+        return TrustLevel::Verified;
     }
-
-    // Step 3: check local trust (tier 1)
-    if db.is_known_key(&msg.sender_key) {
-        TrustLevel::Trusted
-    } else {
-        db.track_unverified_key(&msg.sender_key);
-        TrustLevel::Unverified // display with indicator, relay freely
+    if evidence.is_within_grace() {
+        return TrustLevel::VerifiedOffline;
     }
+    TrustLevel::Unverified // persist/forward only if bounded quotas allow it
 }
 ```
 
@@ -534,7 +653,7 @@ fn verify_group_message(msg: &[u8], group_key: &[u8; 32]) -> Option<Vec<u8>> {
 |---|---|---|---|
 | **Public** | | | |
 | Stage chat | ~100B | 96B (key+sig) | **196B** |
-| Festival update | ~100B | 96B (key+sig) | **196B** |
+| Festival update | ~100B | Separate authority envelope | Transport-dependent |
 | **Group** (encrypted, no sig) | | | |
 | Group chat | ~100B | 28B (GCM) | **128B** |
 | Group star update | ~30B | 28B (GCM) | **58B** |
@@ -580,12 +699,12 @@ What varies across transports is the session auth mechanism and what
 data types are worth syncing. Signing rules are determined by traffic
 type (public vs group), not transport.
 
-| Transport | Session auth | Public msgs | Group msgs | What syncs |
+| Transport | Session/proof exchange | Public msgs | Group msgs | What syncs |
 |---|---|---|---|---|
-| Internet (relay) | WS `auth` message | Ed25519 (96B) | GCM only | Everything |
-| WiFi Direct | Attestation exchange | Ed25519 (96B) | GCM only | Everything |
-| BLE | Attestation exchange | Ed25519 (96B) | GCM only | Group state, group chat (last 50) |
-| LoRa/Meshtastic | Attestation exchange | Ed25519 (96B) | GCM only | Group state, check-ins, chat |
+| Internet (relay) | WS auth + proof on cache miss | Ed25519 (96B) | GCM only | Everything |
+| WiFi Direct/Aware | Attestation exchange | Ed25519 (96B) | GCM only | Everything |
+| BLE | Bounded attestation exchange | Ed25519 (96B) | GCM only | Bounded state/chat |
+| LoRa/Meshtastic | No proof/history transfer | Ed25519 (96B), live and size-gated | GCM only | Compact eligible operations |
 
 ### LoRa payload budget
 
@@ -595,8 +714,10 @@ case) have no signature overhead — just GCM's 28B (nonce + tag), leaving
 CRDT updates.
 
 Public messages over LoRa pay the full 96B auth overhead (32B pubkey +
-64B sig), leaving ~132B for payload. For fragmented messages, the auth
-data covers the reassembled payload — paid once, not per fragment.
+64B sig), leaving ~132B before Offbeat/Meshtastic framing. Existing bounded
+fragmentation may carry one eligible compact message, with the signature paid
+once over the logical payload; messages beyond the constrained route cap are
+suppressed rather than weakening authentication.
 
 ---
 
@@ -681,44 +802,33 @@ The client uses `adminCount: 0` to trigger the admin prompt.
 
 ### Passive expiry
 
-Attestations expire after 30 days (+7 day grace). Users who don't
-refresh are gradually excluded from writing. This handles abandoned
-devices and natural churn.
+Attestations expire after 30 days with a 7-day offline grace period. Beyond
+grace, the Festival DO excludes the key from relay writes. A disconnected peer
+may carry its correctly signed messages only as bounded unverified traffic until
+the proof refreshes; expiry never grants verified status.
 
 ### Active revocation
 
-MainDO maintains a revocation list:
-
-```sql
-CREATE TABLE revocations (
-    public_key TEXT PRIMARY KEY,
-    revoked_at TEXT NOT NULL,
-    reason TEXT
-);
-```
-
-Festival DOs sync the revocation list periodically (on WS connect, same
-pattern as admin sync). Revoked keys are rejected even if their
-attestation hasn't expired.
-
-For P2P networks without relay access, revocation propagates through
-peers who have recently connected to a DO. Peers gossip revocation
-lists alongside attestations.
+MainDO stores irreversible writer revocations and publishes the bounded,
+signed, monotonic snapshots/deltas defined under **Authenticated revocation
+propagation**. Festival DOs refresh them periodically; peers may relay the same
+verified objects. No peer-authored, stale, rollback, conflicting, or oversized
+object changes trust. A persisted valid revocation overrides an otherwise valid
+attestation and is never cleared by omission from an older snapshot.
 
 ---
 
 ## 9. MainDO Public Key Distribution
 
-Peers need MainDO's public key to verify attestations offline. This key
-is distributed through:
+Peers need MainDO's public key to verify attestations offline. Trust anchors
+come from the app binary and authenticated MainDO key-rotation metadata. A peer
+may advertise a key identifier or supply a missing certificate, but peer
+exchange alone can never establish a new trust anchor.
 
-1. **Hardcoded in the app binary** — the primary trust anchor
-2. **`GET /public-key`** on MainDO — for key rotation
-3. **Peer exchange** — peers share the key during attestation handshake
-
-Key rotation: MainDO can rotate its signing key. Old attestations remain
-valid until expiry. New attestations use the new key. The app ships with
-both old and new keys during the transition window.
+Key rotation: MainDO can rotate its signing key. Old attestations remain valid
+until expiry. New attestations use the new key. The app ships with both old and
+new keys during the transition window, or accepts a new key only through a
+signature chain rooted in an already trusted key.
 
 ---
 
@@ -736,7 +846,8 @@ User                     App (Rust)               MainDO              FestivalDO
   |                        |                        |                     |
   |  (open festival)       |                        |                     |
   |                        |-- WS connect -------------------------------->|
-  |                        |-- auth { attestation, sig } ----------------->|
+  |                        |<-- auth_challenge { nonce, festivalId } ------|
+  |                        |-- auth { attestation, challenge_sig } ------->|
   |                        |<-- auth_ok { adminCount: 0 } ----------------|
   |                        |                        |                     |
   |  "become admin?" ----->|                        |                     |
@@ -744,17 +855,20 @@ User                     App (Rust)               MainDO              FestivalDO
   |                        |<-- 200 ok -----------------------------------|
   |                        |                        |                     |
   |  (send stage chat)     |                        |                     |
-  |                        |-- gossip { payload, sig } ------------------>|
-  |                        |                 verify session → relay to all |
+  |                        |-- gossip { writer, payload, sig } ---------->|
+  |                        |   verify session/writer equality, signature, |
+  |                        |   topic, payload, replay, and rate → persist |
+  |                        |   and relay                                  |
   |                        |                        |                     |
   |  (send group chat)     |                        |                     |
   |                        |-- gossip { GCM ciphertext } ---------------->|
   |                        |                        store + relay (opaque) |
   |                        |                        |                     |
 Peer (public)              |                        |                     |
-  |-- WS connect + auth ------------------------------------------------->|
-  |<-- gossip { sender_id, payload, sig } --------------------------------|
-  |  (verify sig, accept)  |                        |                     |
+  |-- WS challenge/auth ------------------------------------------------>|
+  |<-- gossip { writer, payload, sig } -----------------------------------|
+  |  verify signature/topic/replay; classify cached proof                 |
+  |  → verified, verified-offline, unverified-within-quota, or drop       |
   |                        |                        |                     |
 Peer (group member)        |                        |                     |
   |<-- gossip { GCM ciphertext } -----------------------------------------|

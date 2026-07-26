@@ -82,14 +82,23 @@ Compact operations are optimisation representations, not a separate source of tr
 
 ## Append-log catch-up
 
-Each writer has a stable public writer key and monotonic sequence. A chat state vector maps writer keys to the highest contiguous sequence stored locally.
+Each writer has a stable public writer key and monotonic sequence. A chat state
+vector maps writer keys to the highest contiguous sequence and its message ID.
+It also carries bounded equivocation markers. Equal writer sequences with
+different IDs are therefore detectable rather than hidden by identical HWMs.
 
 Catch-up flow:
 
-1. Exchange per-writer high-water marks for the topic.
-2. Return messages newer than the remote mark, capped by the route profile.
-3. Verify/decrypt before persistence.
-4. Insert by stable message ID with `INSERT OR IGNORE` semantics.
+1. Exchange per-writer high-water marks, head commitments, and bounded
+   equivocation markers for the topic.
+2. Return messages newer than the remote mark, capped by the route profile. On
+   a same-sequence commitment mismatch, exchange both signed variants despite
+   the HWM; a verified conflict becomes a bounded `EquivocationProof` that
+   capable routes continue forwarding until peers advertise `EQUIVOCATED`.
+3. Verify/decrypt before persistence. An unproven peer marker never changes
+   trust; a verified proof quarantines every variant and consumes the sequence.
+4. Insert ordinary messages by stable message ID with `INSERT OR IGNORE`
+   semantics.
 5. Notify watchers once for the applied batch.
 
 Authoritative ordering must not rely only on device wall clocks. Use a deterministic causal tuple, such as hybrid logical time, writer key, and writer sequence. Wall time remains display metadata.
@@ -141,10 +150,28 @@ report lane/count diagnostics without exposing private group topic identifiers.
 Different public data has different authority:
 
 - `FestivalState`: only the configured festival authority may author updates.
-- `StageChat`: a sender signature proves message authorship, not organiser authority or registered-human status.
-- MainDO attestations may prove that a public key completed registration, subject to the accepted expiry and offline grace policy.
+- `StageChat`: an untruncated, domain-separated attendee signature proves
+  message authorship, never organiser authority.
+- A MainDO attestation rooted in a pinned key proves registration for 30 days,
+  with a 7-day offline grace period.
 
-Relays are untrusted delivery infrastructure. They should validate what they can to prevent abuse, but clients always verify trusted-origin content before apply.
+The accepted public-chat policy is cached registration proof with bounded
+deferred trust. A valid signature with current/grace proof is verified; a valid
+signature with missing or out-of-grace proof is stored and forwarded only within
+unverified quotas, visibly badged, excluded from history catch-up, and eligible
+for later promotion or rejection. Invalid signatures, forged proofs, known
+revocations and cross-topic replay are dropped. Writer-sequence equivocation
+quarantines every variant and marks the tuple consumed so opposite delivery
+orders converge without stalling high-water-mark catch-up.
+Full and low-bandwidth routes exchange compact proof sidecars on cache miss.
+Constrained routes carry only size-gated live authorship envelopes, never proofs
+or history.
+
+Relays are untrusted delivery infrastructure. A Festival DO requires an
+attested session, enforces equality between session and writer keys, verifies
+public-message signatures, and rate-limits ingress. Clients still independently
+verify every message before apply. See `auth-protocol.md` for the state table,
+quotas, UI, reconciliation, and validation contract.
 
 ## Event discovery boundary
 
