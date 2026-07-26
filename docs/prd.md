@@ -401,8 +401,15 @@ FRB maps Rust `Stream`s to Dart `Stream`s natively:
 
 - **FR7.1:** Create group: generate 256-bit AES key, derive group_id via blake3, create Yrs doc, write self to members.
 - **FR7.2:** QR payload: `offbeat://group/{groupId}/{base64(groupKey)}/{creatorNodeId}`.
-- **FR7.3:** Join: parse QR, store key, create Yrs doc, write self to members, sync via any available transport.
-- **FR7.4:** Leave: remove self from members map in Yrs doc, delete group key locally. Once peers receive the leave update, they can clean up.
+- **FR7.3:** Join: require the current festival scope, reject invite scope
+  mismatches, store the key, create the Yrs doc, write self to members, and sync
+  via any available transport. Legacy invites without a festival inherit only
+  the explicit current festival scope.
+- **FR7.4:** Leave: remove self from members and shared stars in one Yrs update,
+  atomically compact older outbound deltas into the encrypted leave envelope
+  while deleting the local group key, private chat history, and cached plaintext
+  group document. Relay delivery retries after reconnect or restart and clears
+  only after a durable relay echo.
 - **FR7.5:** Presence: update group Yrs doc with stage or custom location on check-in.
 - **FR7.6:** Stars: joining a group continuously mirrors the member's
   same-festival personal stars into per-user/per-set entries in the encrypted

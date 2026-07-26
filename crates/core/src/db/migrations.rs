@@ -45,6 +45,18 @@ const MIGRATIONS: &[(u32, &str)] = &[
     CREATE INDEX IF NOT EXISTS idx_verified_festival_checkpoint
         ON verified_festival_updates(doc_id, kind, authority_seq DESC);",
     ),
+    (
+        5,
+        "CREATE TABLE IF NOT EXISTS pending_group_updates (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        festival_id TEXT NOT NULL,
+        group_id TEXT NOT NULL,
+        envelope BLOB NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_pending_group_updates_festival
+        ON pending_group_updates(festival_id, id);",
+    ),
 ];
 
 /// Ensure the `_migrations` table exists and apply any pending migrations.
@@ -116,6 +128,7 @@ mod tests {
         assert!(tables.contains(&"starred_sets".to_string()));
         assert!(tables.contains(&"festival_peers".to_string()));
         assert!(tables.contains(&"verified_festival_updates".to_string()));
+        assert!(tables.contains(&"pending_group_updates".to_string()));
         assert!(tables.contains(&"_migrations".to_string()));
     }
 }

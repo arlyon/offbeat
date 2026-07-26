@@ -7,7 +7,7 @@ import 'api/dto.dart';
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `deregister_group_resources`, `publish_group_state_update`, `reconcile_shared_stars`, `register_group_resources`
+// These functions are ignored because they are not marked as `pub`: `deregister_group_resources`, `ensure_group_chat_access`, `flush_pending_group_updates`, `group_id_from_chat_topic`, `publish_group_state_update`, `reconcile_shared_stars`, `register_group_resources`, `schedule_pending_group_retry`, `send_group_state_update`, `send_pending_group_update`
 
 Future<List<MeshtasticDebugDeviceDto>> meshtasticDebugScan({
   required int scanMs,
@@ -72,6 +72,9 @@ abstract class AppNode implements RustOpaqueInterface {
 
   /// Derive the Ed25519 identity from a WebAuthn PRF output (32 bytes).
   Future<String> deriveIdentityFromPrf({required List<int> prfOutput});
+
+  /// Stop the active Festival DO relay and its reconnect loop.
+  Future<void> disconnectRelay();
 
   /// Load the stored attestation, if any.
   Future<AttestationDto?> getAttestation();
@@ -140,6 +143,7 @@ abstract class AppNode implements RustOpaqueInterface {
   /// SV exchange + chat catchup.
   Future<GroupJoinResultDto> joinGroup({
     required String invitePayload,
+    required String festivalId,
     required String displayName,
   });
 

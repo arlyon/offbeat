@@ -47,6 +47,7 @@ class _SocialScreenState extends State<SocialScreen> {
   // Group state (live)
   GroupStateDto? _groupState;
   StreamSubscription<GroupStateDto>? _groupStateSub;
+  int _groupSubscriptionGeneration = 0;
 
   // Chat (live)
   List<ChatMessageDto> _messages = [];
@@ -68,6 +69,7 @@ class _SocialScreenState extends State<SocialScreen> {
 
   @override
   void dispose() {
+    _groupSubscriptionGeneration++;
     _groupStateSub?.cancel();
     _chatSub?.cancel();
     _peerListSub?.cancel();
@@ -76,20 +78,31 @@ class _SocialScreenState extends State<SocialScreen> {
     super.dispose();
   }
 
-  Future<void> _loadGroups() async {
+  Future<void> _loadGroups({String? preferredGroupId}) async {
     setState(() => _loading = true);
     try {
       final groups = await widget.node.getGroups(festivalId: widget.festivalId);
       if (!mounted) return;
+      final existingIds = groups.map((group) => group.id).toSet();
+      final nextGroupId =
+          preferredGroupId != null && existingIds.contains(preferredGroupId)
+          ? preferredGroupId
+          : existingIds.contains(_activeGroupId)
+          ? _activeGroupId
+          : groups.firstOrNull?.id;
       setState(() {
         _groups = groups;
         _loading = false;
-        if (groups.isNotEmpty) {
-          _activeGroupId ??= groups.first.id;
-          _subscribeToGroup(_activeGroupId!);
+        _activeGroupId = nextGroupId;
+        if (nextGroupId == null) {
+          _groupState = null;
+          _messages = [];
         }
       });
-    } catch (e) {
+      if (nextGroupId != null) {
+        await _subscribeToGroup(nextGroupId);
+      }
+    } catch (_) {
       if (!mounted) return;
       setState(() => _loading = false);
     }
@@ -110,13 +123,27 @@ class _SocialScreenState extends State<SocialScreen> {
   }
 
   Future<void> _subscribeToGroup(String groupId) async {
-    _groupStateSub?.cancel();
-    _chatSub?.cancel();
+    final generation = ++_groupSubscriptionGeneration;
+    await _groupStateSub?.cancel();
+    await _chatSub?.cancel();
+    _groupStateSub = null;
+    _chatSub = null;
+    if (!mounted || generation != _groupSubscriptionGeneration) return;
 
     try {
       final stateStream = await widget.node.watchGroupState(groupId: groupId);
+      if (!mounted ||
+          generation != _groupSubscriptionGeneration ||
+          _activeGroupId != groupId) {
+        await stateStream.listen((_) {}).cancel();
+        return;
+      }
       _groupStateSub = stateStream.listen((state) {
-        if (!mounted) return;
+        if (!mounted ||
+            generation != _groupSubscriptionGeneration ||
+            _activeGroupId != groupId) {
+          return;
+        }
         setState(() {
           _groupState = state;
           _groups = _groups
@@ -129,29 +156,43 @@ class _SocialScreenState extends State<SocialScreen> {
         });
       });
 
-      // Also get initial state
       final state = await widget.node.getGroupState(groupId: groupId);
-      if (mounted) setState(() => _groupState = state);
+      if (mounted &&
+          generation == _groupSubscriptionGeneration &&
+          _activeGroupId == groupId) {
+        setState(() => _groupState = state);
+      }
     } catch (_) {}
 
-    // Subscribe to chat
     try {
       final topic = 'group/$groupId/chat';
       final chatStream = await widget.node.watchChat(topic: topic, lastN: 50);
+      if (!mounted ||
+          generation != _groupSubscriptionGeneration ||
+          _activeGroupId != groupId) {
+        await chatStream.listen((_) {}).cancel();
+        return;
+      }
       _chatSub = chatStream.listen((msgs) {
-        if (mounted) {
-          setState(() => _messages = msgs);
-          _scrollToBottom();
+        if (!mounted ||
+            generation != _groupSubscriptionGeneration ||
+            _activeGroupId != groupId) {
+          return;
         }
+        setState(() => _messages = msgs);
+        _scrollToBottom();
       });
 
-      // Load initial history
       final history = await widget.node.getChatHistory(
         topic: topic,
         limit: 50,
         offset: 0,
       );
-      if (mounted) setState(() => _messages = history);
+      if (mounted &&
+          generation == _groupSubscriptionGeneration &&
+          _activeGroupId == groupId) {
+        setState(() => _messages = history);
+      }
     } catch (_) {}
   }
 
@@ -212,11 +253,7 @@ class _SocialScreenState extends State<SocialScreen> {
         displayName: widget.displayName ?? 'anon',
       );
       if (!mounted) return;
-      setState(() {
-        _activeGroupId = result.groupId;
-      });
-      await _loadGroups();
-      _subscribeToGroup(result.groupId);
+      await _loadGroups(preferredGroupId: result.groupId);
       widget.onGroupsChanged?.call();
       // Show invite sheet after creating
       if (mounted) {
@@ -229,16 +266,60 @@ class _SocialScreenState extends State<SocialScreen> {
     try {
       final result = await widget.node.joinGroup(
         invitePayload: code,
+        festivalId: widget.festivalId,
         displayName: widget.displayName ?? 'anon',
       );
       if (!mounted) return;
-      setState(() {
-        _activeGroupId = result.groupId;
-      });
-      await _loadGroups();
-      _subscribeToGroup(result.groupId);
+      await _loadGroups(preferredGroupId: result.groupId);
       widget.onGroupsChanged?.call();
     } catch (_) {}
+  }
+
+  Future<void> _leaveActiveGroup() async {
+    final groupId = _activeGroupId;
+    if (groupId == null) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: const RoundedRectangleBorder(),
+        backgroundColor: colorSurface1,
+        title: const Text('LEAVE GROUP?'),
+        content: const Text(
+          'YOUR LIKES WILL STOP SYNCING. LOCAL SAVED SETS ARE KEPT.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('CANCEL'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('LEAVE', style: TextStyle(color: colorErr)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    try {
+      await widget.node.leaveGroup(groupId: groupId);
+      _groupSubscriptionGeneration++;
+      await _groupStateSub?.cancel();
+      await _chatSub?.cancel();
+      _groupStateSub = null;
+      _chatSub = null;
+      if (!mounted) return;
+      _activeGroupId = null;
+      _groupState = null;
+      _messages = [];
+      widget.onGroupsChanged?.call();
+      await _loadGroups();
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('COULD NOT LEAVE GROUP')));
+    }
   }
 
   void _showCreateSheet() {
@@ -310,13 +391,13 @@ class _SocialScreenState extends State<SocialScreen> {
     );
   }
 
-  void _switchGroup(String groupId) {
+  Future<void> _switchGroup(String groupId) async {
     setState(() {
       _activeGroupId = groupId;
       _groupState = null;
       _messages = [];
     });
-    _subscribeToGroup(groupId);
+    await _subscribeToGroup(groupId);
   }
 
   @override
@@ -514,8 +595,13 @@ class _SocialScreenState extends State<SocialScreen> {
                 _actionButton(
                   label: 'NEW',
                   icon: Icons.add,
-                  isLast: true,
                   onTap: _showCreateSheet,
+                ),
+                _actionButton(
+                  label: 'LEAVE',
+                  icon: Icons.logout,
+                  isLast: true,
+                  onTap: _leaveActiveGroup,
                 ),
               ],
             ),

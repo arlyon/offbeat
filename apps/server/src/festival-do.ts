@@ -11,6 +11,8 @@ import {
 import * as Y from "yjs";
 import { generateKeypair, sign, signFestivalUpdate, verify } from "./signing";
 
+const RELAY_ACK_CAPABILITY_TOPIC = "__offbeat/relay-ack/v1";
+
 interface Session {
 	topics: Set<string>;
 	authenticated: boolean;
@@ -66,6 +68,13 @@ export class FestivalDO extends DurableObject {
 
 			CREATE INDEX IF NOT EXISTS idx_group_gossip_group_seq
 				ON group_gossip_log(group_id, seq);
+
+			CREATE TABLE IF NOT EXISTS relay_receipts (
+				topic TEXT NOT NULL,
+				message BLOB NOT NULL,
+				seq INTEGER NOT NULL,
+				PRIMARY KEY (topic, message)
+			);
 
 			CREATE TABLE IF NOT EXISTS group_yrs_updates (
 				id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -940,79 +949,96 @@ export class FestivalDO extends DurableObject {
 					break;
 				}
 
-				// Route by payload case
-				const envelopeBytes = toBinary(GossipEnvelopeSchema, envelope);
-				let seq = 0;
-
-				switch (envelope.payload.case) {
-					case "festivalUpdate":
-						// Reject — only the DO signs these
-						this.#sendError(ws, "Clients cannot send festival updates", ErrorCode.UNAUTHORIZED);
-						return;
-
-					case "chat":
-						seq = (
-							this.sql
-								.exec(
-									"INSERT INTO public_gossip_log (topic, message) VALUES (?, ?) RETURNING seq",
-									topic,
-									envelopeBytes,
-								)
-								.one() as { seq: number }
-						).seq;
-						break;
-
-					case "encryptedChat": {
-						seq = (
-							this.sql
-								.exec(
-									"INSERT INTO group_gossip_log (group_id, message) VALUES (?, ?) RETURNING seq",
-									topic,
-									envelopeBytes,
-								)
-								.one() as { seq: number }
-						).seq;
-						break;
-					}
-
-					case "groupUpdate":
-					case "syncRequest":
-					case "syncResponse":
-					case "syncUpdate": {
-						// Keep the legacy Yrs mailbox while also assigning the envelope a
-						// durable per-topic sequence for reconnect catch-up.
-						this.sql.exec(
-							"INSERT INTO group_yrs_updates (group_id, update_data) VALUES (?, ?)",
-							topic,
-							envelopeBytes,
-						);
-						seq = (
-							this.sql
-								.exec(
-									"INSERT INTO group_gossip_log (group_id, message) VALUES (?, ?) RETURNING seq",
-									topic,
-									envelopeBytes,
-								)
-								.one() as { seq: number }
-						).seq;
-						break;
-					}
-
-					default:
-						// Unknown payload type — store in public log as fallback
-						seq = (
-							this.sql
-								.exec(
-									"INSERT INTO public_gossip_log (topic, message) VALUES (?, ?) RETURNING seq",
-									topic,
-									envelopeBytes,
-								)
-								.one() as { seq: number }
-						).seq;
-						break;
+				if (envelope.payload.case === "festivalUpdate") {
+					this.#sendError(ws, "Clients cannot send festival updates", ErrorCode.UNAUTHORIZED);
+					return;
 				}
 
-				// Broadcast to other subscribed WS clients
+				// Receipt lookup, lane writes, and receipt creation form one atomic
+				// storage transaction. Exact retries reuse the durable sequence.
+				const envelopeBytes = toBinary(GossipEnvelopeSchema, envelope);
+				let seq = 0;
+				this.ctx.storage.transactionSync(() => {
+					seq =
+						(
+							this.sql
+								.exec(
+									"SELECT seq FROM relay_receipts WHERE topic = ? AND message = ? LIMIT 1",
+									topic,
+									envelopeBytes,
+								)
+								.toArray() as { seq: number }[]
+						)[0]?.seq ?? 0;
+					if (seq !== 0) return;
+
+					switch (envelope.payload.case) {
+						case "chat":
+							seq = (
+								this.sql
+									.exec(
+										"INSERT INTO public_gossip_log (topic, message) VALUES (?, ?) RETURNING seq",
+										topic,
+										envelopeBytes,
+									)
+									.one() as { seq: number }
+							).seq;
+							break;
+
+						case "encryptedChat":
+							seq = (
+								this.sql
+									.exec(
+										"INSERT INTO group_gossip_log (group_id, message) VALUES (?, ?) RETURNING seq",
+										topic,
+										envelopeBytes,
+									)
+									.one() as { seq: number }
+							).seq;
+							break;
+
+						case "groupUpdate":
+						case "syncRequest":
+						case "syncResponse":
+						case "syncUpdate":
+							this.sql.exec(
+								"INSERT INTO group_yrs_updates (group_id, update_data) VALUES (?, ?)",
+								topic,
+								envelopeBytes,
+							);
+							seq = (
+								this.sql
+									.exec(
+										"INSERT INTO group_gossip_log (group_id, message) VALUES (?, ?) RETURNING seq",
+										topic,
+										envelopeBytes,
+									)
+									.one() as { seq: number }
+							).seq;
+							break;
+
+						default:
+							seq = (
+								this.sql
+									.exec(
+										"INSERT INTO public_gossip_log (topic, message) VALUES (?, ?) RETURNING seq",
+										topic,
+										envelopeBytes,
+									)
+									.one() as { seq: number }
+							).seq;
+							break;
+					}
+
+					this.sql.exec(
+						"INSERT INTO relay_receipts (topic, message, seq) VALUES (?, ?, ?)",
+						topic,
+						envelopeBytes,
+						seq,
+					);
+				});
+
+				// Echo to the sender as a positive persistence acknowledgement,
+				// and broadcast to every other subscribed client.
 				const broadcastMsg = create(RelayServerMessageSchema, {
 					msg: {
 						case: "gossip",
@@ -1026,7 +1052,10 @@ export class FestivalDO extends DurableObject {
 				const broadcastBytes = toBinary(RelayServerMessageSchema, broadcastMsg);
 
 				for (const [other, otherSess] of this.#sessions) {
-					if (other !== ws && otherSess.topics.has(topic)) {
+					if (
+						(other === ws && otherSess.topics.has(RELAY_ACK_CAPABILITY_TOPIC)) ||
+						(other !== ws && otherSess.topics.has(topic))
+					) {
 						other.send(broadcastBytes);
 					}
 				}

@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use futures_util::{SinkExt, StreamExt};
 use prost::Message;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, oneshot};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungstenite};
 
 use crate::auth::Attestation;
@@ -38,6 +38,15 @@ type WsSink = futures_util::stream::SplitSink<
 >;
 type WsStream =
     futures_util::stream::SplitStream<WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>>;
+type GossipAcknowledgementWaiters = HashMap<[u8; 32], Vec<oneshot::Sender<()>>>;
+const RELAY_ACK_CAPABILITY_TOPIC: &str = "__offbeat/relay-ack/v1";
+
+#[derive(Clone)]
+struct ReconnectAuth {
+    public_key_hex: String,
+    attestation: Attestation,
+    signing_key: ed25519_dalek::SigningKey,
+}
 
 /// Cloneable handle for sending messages to the Festival DO over WebSocket.
 #[derive(Clone)]
@@ -46,6 +55,10 @@ pub struct WsRelaySink {
     subscribed_topics: Arc<Mutex<HashSet<String>>>,
     last_seen_seq: Arc<Mutex<HashMap<String, u64>>>,
     authenticated: Arc<std::sync::atomic::AtomicBool>,
+    reconnect_auth: Arc<Mutex<Option<ReconnectAuth>>>,
+    acknowledgement_waiters: Arc<Mutex<GossipAcknowledgementWaiters>>,
+    shutdown: Arc<std::sync::atomic::AtomicBool>,
+    shutdown_notify: Arc<tokio::sync::Notify>,
     connected: Arc<std::sync::atomic::AtomicBool>,
     tx_bytes: Arc<std::sync::atomic::AtomicU64>,
     rx_bytes: Arc<std::sync::atomic::AtomicU64>,
@@ -62,22 +75,32 @@ impl WsRelaySink {
         attestation: &Attestation,
         signing_key: &ed25519_dalek::SigningKey,
     ) -> anyhow::Result<()> {
+        let auth = ReconnectAuth {
+            public_key_hex: public_key_hex.to_string(),
+            attestation: attestation.clone(),
+            signing_key: signing_key.clone(),
+        };
+        *self.reconnect_auth.lock().await = Some(auth.clone());
+        self.send_auth(&auth).await
+    }
+
+    async fn send_auth(&self, auth: &ReconnectAuth) -> anyhow::Result<()> {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
             .as_secs()
             .to_string();
         let session_msg = format!("session:{timestamp}");
-        let sig = crate::signing::sign(signing_key, session_msg.as_bytes());
+        let sig = crate::signing::sign(&auth.signing_key, session_msg.as_bytes());
 
-        let public_key_bytes = hex_to_bytes(public_key_hex)?;
-        let issuer_bytes = hex_to_bytes(&attestation.issuer)?;
-        let att_sig_bytes = hex_to_bytes(&attestation.signature)?;
+        let public_key_bytes = hex_to_bytes(&auth.public_key_hex)?;
+        let issuer_bytes = hex_to_bytes(&auth.attestation.issuer)?;
+        let att_sig_bytes = hex_to_bytes(&auth.attestation.signature)?;
 
         self.send_client_msg(&proto::RelayClientMessage {
             msg: Some(proto::relay_client_message::Msg::Auth(proto::AuthRequest {
                 public_key: public_key_bytes,
                 attestation: Some(proto::Attestation {
-                    message: attestation.message.clone(),
+                    message: auth.attestation.message.clone(),
                     signature: att_sig_bytes,
                     issuer: issuer_bytes,
                 }),
@@ -86,6 +109,23 @@ impl WsRelaySink {
             })),
         })
         .await
+    }
+
+    /// Stop this relay and its reconnect loop.
+    pub async fn close(&self) {
+        self.shutdown
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.connected
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        self.authenticated
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        self.shutdown_notify.notify_one();
+        let _ = self
+            .sink
+            .lock()
+            .await
+            .send(tungstenite::Message::Close(None))
+            .await;
     }
 
     /// Whether the session has been authenticated.
@@ -130,6 +170,60 @@ impl WsRelaySink {
             )),
         })
         .await
+    }
+
+    /// Send a gossip envelope and wait until the relay echoes its persisted
+    /// sequence number back to this client. A socket write alone is not an
+    /// acknowledgement: authentication or persistence may still fail.
+    pub async fn send_gossip_confirmed(
+        &self,
+        topic: &str,
+        envelope: &proto::GossipEnvelope,
+    ) -> anyhow::Result<()> {
+        if !self.is_connected() || !self.is_authenticated() {
+            anyhow::bail!("relay is not authenticated");
+        }
+
+        let key = gossip_acknowledgement_key(topic, envelope);
+        let (sender, receiver) = oneshot::channel();
+        self.acknowledgement_waiters
+            .lock()
+            .await
+            .entry(key)
+            .or_default()
+            .push(sender);
+
+        if let Err(error) = self.send_gossip(topic, envelope).await {
+            self.acknowledgement_waiters.lock().await.remove(&key);
+            return Err(error);
+        }
+
+        match tokio::time::timeout(std::time::Duration::from_secs(10), receiver).await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(_)) => anyhow::bail!("relay acknowledgement channel closed"),
+            Err(_) => {
+                self.acknowledgement_waiters.lock().await.remove(&key);
+                anyhow::bail!("relay persistence acknowledgement timed out")
+            }
+        }
+    }
+
+    async fn acknowledge_gossip(&self, topic: &str, envelope: &proto::GossipEnvelope) -> bool {
+        let key = gossip_acknowledgement_key(topic, envelope);
+        let Some(waiters) = self.acknowledgement_waiters.lock().await.remove(&key) else {
+            return false;
+        };
+        for waiter in waiters {
+            let _ = waiter.send(());
+        }
+        true
+    }
+
+    /// Advertise support for persistence acknowledgements without changing the
+    /// gossip wire envelope. Legacy relay clients never receive sender echoes.
+    pub async fn enable_persistence_acknowledgements(&self) -> anyhow::Result<()> {
+        self.subscribe(vec![RELAY_ACK_CAPABILITY_TOPIC.to_string()])
+            .await
     }
 
     /// Subscribe to topics on the DO.
@@ -313,6 +407,10 @@ pub async fn connect(
         subscribed_topics: Arc::new(Mutex::new(HashSet::new())),
         last_seen_seq: Arc::new(Mutex::new(HashMap::new())),
         authenticated: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        reconnect_auth: Arc::new(Mutex::new(None)),
+        acknowledgement_waiters: Arc::new(Mutex::new(HashMap::new())),
+        shutdown: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        shutdown_notify: Arc::new(tokio::sync::Notify::new()),
         connected: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         tx_bytes: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         rx_bytes: Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -393,15 +491,20 @@ async fn run_receive_loop_with_reconnect(
     let mut reconnect_attempt: u32 = 0;
 
     loop {
-        let result = run_receive_loop(
-            &sink,
-            &mut stream,
-            &sync_orchestrator,
-            &doc_manager,
-            &notifier,
-            &connection_manager,
-        )
-        .await;
+        if sink.shutdown.load(std::sync::atomic::Ordering::Relaxed) {
+            return Ok(());
+        }
+        let result = tokio::select! {
+            result = run_receive_loop(
+                &sink,
+                &mut stream,
+                &sync_orchestrator,
+                &doc_manager,
+                &notifier,
+                &connection_manager,
+            ) => result,
+            () = sink.shutdown_notify.notified() => return Ok(()),
+        };
 
         sink.connected
             .store(false, std::sync::atomic::Ordering::Relaxed);
@@ -417,6 +520,9 @@ async fn run_receive_loop_with_reconnect(
 
         // Reconnect with backoff
         loop {
+            if sink.shutdown.load(std::sync::atomic::Ordering::Relaxed) {
+                return Ok(());
+            }
             let base_ms = 1000u64.saturating_mul(1u64 << reconnect_attempt.min(5));
             let capped = base_ms.min(MAX_DELAY_MS);
             let jitter = rand::rng().random_range(0..=capped);
@@ -424,18 +530,40 @@ async fn run_receive_loop_with_reconnect(
                 "ws_relay: reconnecting in {jitter}ms (attempt {})",
                 reconnect_attempt + 1,
             );
-            tokio::time::sleep(std::time::Duration::from_millis(jitter)).await;
+            tokio::select! {
+                () = tokio::time::sleep(std::time::Duration::from_millis(jitter)) => {}
+                () = sink.shutdown_notify.notified() => return Ok(()),
+            }
 
-            match tokio::time::timeout(std::time::Duration::from_secs(10), connect_async(&url))
-                .await
-            {
+            let connection = tokio::select! {
+                result = tokio::time::timeout(
+                    std::time::Duration::from_secs(10),
+                    connect_async(&url),
+                ) => result,
+                () = sink.shutdown_notify.notified() => return Ok(()),
+            };
+            if sink.shutdown.load(std::sync::atomic::Ordering::Relaxed) {
+                return Ok(());
+            }
+
+            match connection {
                 Ok(Ok((ws_stream, _))) => {
                     let (new_sink, new_stream) = ws_stream.split();
+                    sink.authenticated
+                        .store(false, std::sync::atomic::Ordering::Relaxed);
                     sink.swap_sink(new_sink).await;
                     stream = new_stream;
                     reconnect_attempt = 0;
                     sink.connected
                         .store(true, std::sync::atomic::Ordering::Relaxed);
+
+                    // A replacement socket is a new server session. Authenticate
+                    // it before re-subscribing or allowing queued writes.
+                    if let Some(auth) = sink.reconnect_auth.lock().await.clone()
+                        && let Err(error) = sink.send_auth(&auth).await
+                    {
+                        tracing::warn!(%error, "ws_relay: re-authentication failed");
+                    }
 
                     // Re-subscribe to all previously subscribed topics
                     let topics: Vec<String> = sink
@@ -596,6 +724,14 @@ async fn handle_server_message(
         }
 
         Msg::Gossip(broadcast) => {
+            // The relay echoes a sender's persisted envelope. Resolve durable
+            // outbox waiters before dispatching the idempotent CRDT update.
+            if let Some(ref envelope) = broadcast.message
+                && sink.acknowledge_gossip(&broadcast.topic, envelope).await
+            {
+                return Ok(());
+            }
+
             // Track last seen seq for catchup on reconnect
             {
                 let mut seqs = sink.last_seen_seq.lock().await;
@@ -676,6 +812,14 @@ async fn handle_server_message(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+fn gossip_acknowledgement_key(topic: &str, envelope: &proto::GossipEnvelope) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(topic.as_bytes());
+    hasher.update(&[0]);
+    hasher.update(&envelope.encode_to_vec());
+    *hasher.finalize().as_bytes()
+}
 
 fn hex_to_bytes(hex: &str) -> anyhow::Result<Vec<u8>> {
     (0..hex.len())

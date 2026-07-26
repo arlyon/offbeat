@@ -40,7 +40,7 @@ class GroupScheduleOverlay {
 
     for (final state in states) {
       for (final member in state.members.where(
-        (member) => member.status == 'active',
+        (member) => member.status != 'left',
       )) {
         final existing = members[member.userId];
         final candidateName = member.displayName.trim();
@@ -107,8 +107,11 @@ class GroupScheduleOverlayController extends ChangeNotifier {
 
   final Map<String, GroupStateDto> _states = {};
   final Map<String, StreamSubscription<GroupStateDto>> _subscriptions = {};
+  final Map<String, Object> _subscriptionTokens = {};
   GroupScheduleOverlay _overlay = GroupScheduleOverlay.empty;
   int _refreshGeneration = 0;
+  Timer? _retryTimer;
+  Duration _retryDelay = const Duration(seconds: 1);
   bool _disposed = false;
 
   GroupScheduleOverlayController({
@@ -126,9 +129,8 @@ class GroupScheduleOverlayController extends ChangeNotifier {
 
     final groupIds = groups.map((group) => group.id).toSet();
     for (final removedId
-        in _subscriptions.keys
-            .where((groupId) => !groupIds.contains(groupId))
-            .toList()) {
+        in _states.keys.where((groupId) => !groupIds.contains(groupId)).toList()) {
+      _subscriptionTokens.remove(removedId);
       await _subscriptions.remove(removedId)?.cancel();
       _states.remove(removedId);
     }
@@ -136,19 +138,59 @@ class GroupScheduleOverlayController extends ChangeNotifier {
     for (final group in groups) {
       if (_subscriptions.containsKey(group.id)) continue;
       try {
-        _states[group.id] = await node.getGroupState(groupId: group.id);
-        final stream = await node.watchGroupState(groupId: group.id);
+        final state = await node.getGroupState(groupId: group.id);
         if (_disposed || generation != _refreshGeneration) return;
-        _subscriptions[group.id] = stream.listen((state) {
-          if (_disposed) return;
-          _states[group.id] = state;
-          _rebuild();
-        });
-      } catch (error) {
-        debugPrint('group schedule watch failed for ${group.id}: $error');
+        final stream = await node.watchGroupState(groupId: group.id);
+        if (_disposed || generation != _refreshGeneration) {
+          await stream.listen((_) {}).cancel();
+          return;
+        }
+        _states[group.id] = state;
+        final token = Object();
+        _subscriptionTokens[group.id] = token;
+        final subscription = stream.listen(
+          (state) {
+            if (_disposed || !identical(_subscriptionTokens[group.id], token)) {
+              return;
+            }
+            _states[group.id] = state;
+            _rebuild();
+          },
+          onError: (_) => _handleWatchEnded(group.id, token),
+          onDone: () => _handleWatchEnded(group.id, token),
+          cancelOnError: true,
+        );
+        if (identical(_subscriptionTokens[group.id], token)) {
+          _subscriptions[group.id] = subscription;
+          _retryDelay = const Duration(seconds: 1);
+        } else {
+          await subscription.cancel();
+        }
+      } catch (_) {
+        debugPrint('group schedule watch failed; retrying');
+        _scheduleRetry();
       }
     }
     _rebuild();
+  }
+
+  void _handleWatchEnded(String groupId, Object token) {
+    if (_disposed || !identical(_subscriptionTokens[groupId], token)) return;
+    _subscriptionTokens.remove(groupId);
+    _subscriptions.remove(groupId);
+    _states.remove(groupId);
+    _rebuild();
+    _scheduleRetry();
+  }
+
+  void _scheduleRetry() {
+    if (_disposed || _retryTimer?.isActive == true) return;
+    final delay = _retryDelay;
+    _retryDelay = Duration(seconds: (_retryDelay.inSeconds * 2).clamp(1, 30));
+    _retryTimer = Timer(delay, () {
+      if (_disposed) return;
+      unawaited(refresh().catchError((_) {}));
+    });
   }
 
   void _rebuild() {
@@ -163,10 +205,12 @@ class GroupScheduleOverlayController extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _refreshGeneration++;
+    _retryTimer?.cancel();
     for (final subscription in _subscriptions.values) {
       unawaited(subscription.cancel());
     }
     _subscriptions.clear();
+    _subscriptionTokens.clear();
     super.dispose();
   }
 }

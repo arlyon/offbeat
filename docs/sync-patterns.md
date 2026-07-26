@@ -124,7 +124,14 @@ mirrors those same-festival stars into the member's per-set entries in every
 matching encrypted `GroupState`; create, join, and restart subscription
 reconcile missed changes. Leaving removes access and stops future sharing.
 Schedule overlays are derived locally from cached lineup metadata plus the
-converged group documents, never synced as a separate resource.
+converged group documents, never synced as a separate resource. Every local
+group-state delta is also persisted as an encrypted, festival-scoped outbound
+intent before publication. Relay failures retry with bounded backoff and survive
+restart; rows clear only after the relay echoes the durably sequenced envelope.
+Exact retries reuse their original server sequence. Leave atomically compacts
+older outbound deltas into its encrypted wire envelope while deleting the local
+group key, chat history, and cached plaintext group document. Moving between
+festivals closes and awaits the previous relay loop before opening another.
 
 ## Public trust boundaries
 

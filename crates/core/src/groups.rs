@@ -145,6 +145,25 @@ impl GroupManager {
         user_id: &str,
         display_name: &str,
     ) -> anyhow::Result<GroupJoinResult> {
+        let payload = invite_payload
+            .strip_prefix("offbeat://group/")
+            .ok_or_else(|| anyhow::anyhow!("invalid invite payload format"))?;
+        let segments: Vec<_> = payload.split('/').collect();
+        if segments.len() != 3 {
+            anyhow::bail!("legacy invite requires an explicit festival scope");
+        }
+        let expected_festival_id = segments[0];
+        self.join_group_for_festival(invite_payload, expected_festival_id, user_id, display_name)
+            .await
+    }
+
+    pub async fn join_group_for_festival(
+        &self,
+        invite_payload: &str,
+        expected_festival_id: &str,
+        user_id: &str,
+        display_name: &str,
+    ) -> anyhow::Result<GroupJoinResult> {
         // Parse invite payload. Supports two formats:
         //   New: "offbeat://group/{festival_id}/{group_id}/{base64url_key}"
         //   Old: "offbeat://group/{group_id}/{base64url_key}"
@@ -156,12 +175,17 @@ impl GroupManager {
 
         let (festival_id, group_id_from_invite, b64key) = match segments.len() {
             3 => {
-                // New format: festival_id/group_id/key
-                (segments[0].to_string(), segments[1], segments[2])
+                // New format: festival_id/group_id/key. The festival context
+                // comes from the screen the user is joining from, not the URI.
+                if segments[0] != expected_festival_id {
+                    anyhow::bail!("invite festival does not match current festival");
+                }
+                (expected_festival_id.to_string(), segments[1], segments[2])
             }
             2 => {
-                // Old format: group_id/key (backward compat)
-                (String::new(), segments[0], segments[1])
+                // Old format: group_id/key. Scope it to the explicit current
+                // festival instead of persisting an unscoped group.
+                (expected_festival_id.to_string(), segments[0], segments[1])
             }
             _ => anyhow::bail!(
                 "invite payload has unexpected number of segments: {}",
@@ -234,12 +258,11 @@ impl GroupManager {
         let user_id_s = user_id.to_string();
         let update = self
             .doc_manager
-            .mutate(&doc_id, &["members"], |maps, txn| {
+            .mutate(&doc_id, &["members", "stars"], |maps, txn| {
                 maps[0].remove(txn, &user_id_s);
+                maps[1].remove(txn, &user_id_s);
             })?;
         let encrypted_update = crypto::encrypt(&group_key, &update)?;
-
-        self.db.delete_group(group_id)?;
 
         Ok(GroupLeaveResult {
             group_key,
@@ -344,12 +367,20 @@ impl GroupManager {
                 continue;
             }
 
-            let group_key: [u8; 32] = key_bytes
-                .try_into()
-                .map_err(|_| anyhow::anyhow!("group {group_id} key must be 32 bytes"))?;
-            let encrypted_update = self
+            let Ok(group_key) = key_bytes.try_into() else {
+                tracing::warn!("skipping schedule reconciliation for malformed group key");
+                continue;
+            };
+            let encrypted_update = match self
                 .update_stars(&group_id, user_id, desired.iter().cloned().collect())
-                .await?;
+                .await
+            {
+                Ok(update) => update,
+                Err(_) => {
+                    tracing::warn!("schedule reconciliation failed for one group");
+                    continue;
+                }
+            };
             updates.push(SharedStarsUpdate {
                 group_id,
                 group_key,
@@ -746,9 +777,10 @@ mod tests {
         assert!(!result.encrypted_update.is_empty());
         assert_eq!(result.group_key, create.group_key);
 
-        // DB entry removed
+        // The bridge retains the key until the encrypted leave update has
+        // been durably queued, then removes the local group record.
         let groups = gm.db.load_groups("fest-1").unwrap();
-        assert!(groups.is_empty());
+        assert_eq!(groups.len(), 1);
     }
 
     #[tokio::test]
@@ -756,6 +788,10 @@ mod tests {
         let gm = make_manager();
         let create = gm
             .create_group("fest-1", "Crew", "user1", "Alice")
+            .await
+            .unwrap();
+
+        gm.update_stars(&create.group_id, "user1", vec!["set-a".to_string()])
             .await
             .unwrap();
 
@@ -773,6 +809,10 @@ mod tests {
             .doc_manager
             .read_nested_map_entry(&doc_id, "members", "user1");
         assert!(val.is_none(), "member should be removed after leave");
+        assert!(
+            gm.read_user_stars(&create.group_id, "user1").is_empty(),
+            "departed member stars should be removed with membership"
+        );
     }
 
     #[tokio::test]
@@ -1237,10 +1277,13 @@ mod tests {
 
         // Create a fresh manager to join (simulate different device)
         let gm2 = make_manager();
-        let join = gm2.join_group(&old_payload, "u2", "Bob").await.unwrap();
+        let join = gm2
+            .join_group_for_festival(&old_payload, "fest-1", "u2", "Bob")
+            .await
+            .unwrap();
 
         assert_eq!(join.group_id, create.group_id);
-        assert_eq!(join.festival_id, ""); // old format has no festival_id
+        assert_eq!(join.festival_id, "fest-1");
     }
 
     #[test]

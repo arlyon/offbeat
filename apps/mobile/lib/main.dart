@@ -126,6 +126,9 @@ class _OffbeatShellState extends State<_OffbeatShell>
   StreamSubscription<TransportStatusDto>? _transportSub;
   bool _relayConnected = false;
   String? _relayFestivalId;
+  Timer? _relayRetryTimer;
+  Duration _relayRetryDelay = const Duration(seconds: 1);
+  int _relayConnectionGeneration = 0;
   int _blePeerCount = -1; // -1 = unavailable
 
   // Admin state
@@ -176,6 +179,7 @@ class _OffbeatShellState extends State<_OffbeatShell>
     _weatherSub?.cancel();
     _groupScheduleController?.dispose();
     _transportSub?.cancel();
+    _relayRetryTimer?.cancel();
     _deepLinkSub?.cancel();
     _navController.dispose();
     super.dispose();
@@ -198,13 +202,20 @@ class _OffbeatShellState extends State<_OffbeatShell>
     if (uri.host != 'group' && !uri.path.startsWith('/group/')) return;
 
     final node = _node;
-    if (node == null) return;
+    final festivalId = _selectedFestival?.id;
+    if (node == null || festivalId == null || _authState == 'unregistered') {
+      return;
+    }
 
     final invitePayload = uri.toString();
     final displayName = _displayName ?? 'anon';
 
     node
-        .joinGroup(invitePayload: invitePayload, displayName: displayName)
+        .joinGroup(
+          invitePayload: invitePayload,
+          festivalId: festivalId,
+          displayName: displayName,
+        )
         .then((result) {
           if (!mounted) return;
           // If we know the festival_id, navigate to that festival
@@ -292,6 +303,8 @@ class _OffbeatShellState extends State<_OffbeatShell>
 
   /// Restart the node to re-attempt BLE transport initialization.
   Future<void> _restartNode() async {
+    _relayConnectionGeneration++;
+    await _node?.disconnectRelay();
     _lineupSub?.cancel();
     _lineupSub = null;
     _weatherSub?.cancel();
@@ -301,6 +314,9 @@ class _OffbeatShellState extends State<_OffbeatShell>
     _groupScheduleOverlay = GroupScheduleOverlay.empty;
     _transportSub?.cancel();
     _transportSub = null;
+    _relayRetryTimer?.cancel();
+    _relayRetryTimer = null;
+    _relayRetryDelay = const Duration(seconds: 1);
     _relayFestivalId = null;
     setState(() {
       _nodeReady = false;
@@ -367,9 +383,15 @@ class _OffbeatShellState extends State<_OffbeatShell>
       _publicKeyHex = result.ed25519PublicKeyHex;
       _userId = identity.userId;
     });
+    final festivalId = _selectedFestival?.id;
+    if (festivalId != null) {
+      _startGroupScheduleOverlay(node, festivalId);
+    }
   }
 
   Future<void> _handleLogout() async {
+    _relayConnectionGeneration++;
+    await _node?.disconnectRelay();
     // Delete the database and recreate the node
     final dir = await getApplicationDocumentsDirectory();
     final dbPath = '${dir.path}/offbeat.db';
@@ -385,6 +407,10 @@ class _OffbeatShellState extends State<_OffbeatShell>
     _lineupSub = null;
     _weatherSub?.cancel();
     _weatherSub = null;
+    _relayRetryTimer?.cancel();
+    _relayRetryTimer = null;
+    _relayRetryDelay = const Duration(seconds: 1);
+    _relayFestivalId = null;
     setState(() {
       _node = node;
       _authState = 'unregistered';
@@ -408,10 +434,16 @@ class _OffbeatShellState extends State<_OffbeatShell>
   Future<void> _onFestivalTap(Festival fest) async {
     final node = _node;
     if (node == null) return;
+    final relayGeneration = ++_relayConnectionGeneration;
 
-    // Cancel any previous subscriptions
+    // Cancel and await the previous festival relay before setup can continue.
     _lineupSub?.cancel();
     _weatherSub?.cancel();
+    _relayRetryTimer?.cancel();
+    _relayRetryTimer = null;
+    _relayRetryDelay = const Duration(seconds: 1);
+    await node.disconnectRelay();
+    if (!mounted || relayGeneration != _relayConnectionGeneration) return;
 
     // Start animation and set state in the same frame so the lobby is
     // never removed before the slide transition begins.
@@ -430,15 +462,19 @@ class _OffbeatShellState extends State<_OffbeatShell>
     // Load persisted stars from Rust SQLite
     try {
       final stars = await node.getStars(festivalId: fest.id);
-      if (mounted) {
+      if (mounted && relayGeneration == _relayConnectionGeneration) {
         setState(() => _starredSetIds = stars.toSet());
       }
     } catch (_) {}
 
     // Start watching the lineup stream
     final stream = await node.watchLineup(festivalId: fest.id);
+    if (!mounted || relayGeneration != _relayConnectionGeneration) {
+      await stream.listen((_) {}).cancel();
+      return;
+    }
     _lineupSub = stream.listen((lineup) {
-      if (mounted) {
+      if (mounted && relayGeneration == _relayConnectionGeneration) {
         setState(() {
           _lineup = lineup;
           _lineupLoading = false;
@@ -448,12 +484,18 @@ class _OffbeatShellState extends State<_OffbeatShell>
 
     // Start watching weather
     final weatherStream = await node.watchWeather(festivalId: fest.id);
+    if (!mounted || relayGeneration != _relayConnectionGeneration) {
+      await weatherStream.listen((_) {}).cancel();
+      return;
+    }
     _weatherSub = weatherStream.listen((weather) {
-      if (mounted) setState(() => _weather = weather);
+      if (mounted && relayGeneration == _relayConnectionGeneration) {
+        setState(() => _weather = weather);
+      }
     });
 
-    // Connect to the Festival DO WebSocket relay in the background
-    _connectToRelay(fest.id);
+    // Connect to the Festival DO WebSocket relay in the background.
+    unawaited(_connectToRelay(fest.id));
 
     // Check admin status if authenticated
     if (_authState != 'unregistered' && _publicKeyHex.isNotEmpty) {
@@ -468,6 +510,7 @@ class _OffbeatShellState extends State<_OffbeatShell>
           } catch (_) {}
         }
 
+        if (!mounted || relayGeneration != _relayConnectionGeneration) return;
         setState(() {
           _adminKeys = admins;
           _isAdmin = isAdmin;
@@ -499,7 +542,12 @@ class _OffbeatShellState extends State<_OffbeatShell>
   /// The lineup stream will automatically emit updates as they arrive.
   Future<void> _connectToRelay(String festivalId) async {
     final node = _node;
-    if (node == null) return;
+    final generation = _relayConnectionGeneration;
+    bool isCurrent() =>
+        mounted &&
+        generation == _relayConnectionGeneration &&
+        _selectedFestival?.id == festivalId;
+    if (node == null || !isCurrent()) return;
     if (_relayFestivalId == festivalId) return;
     _relayFestivalId = festivalId;
 
@@ -509,11 +557,13 @@ class _OffbeatShellState extends State<_OffbeatShell>
       final pubKeyHex = await _festivalService.fetchFestivalPublicKey(
         festivalId,
       );
+      if (!isCurrent()) return;
       if (pubKeyHex != null) {
         await node.setFestivalPublicKey(
           festivalId: festivalId,
           hexKey: pubKeyHex,
         );
+        if (!isCurrent()) return;
       }
 
       // Connect WS relay to the Festival DO
@@ -521,15 +571,46 @@ class _OffbeatShellState extends State<_OffbeatShell>
       final authority = mainDoBaseUrl.replaceFirst(RegExp(r'^https?://'), '');
       final wsUrl = '$wsScheme://$authority/festivals/$festivalId/ws';
       await node.connectRelay(url: wsUrl, festivalId: festivalId);
+      if (!isCurrent()) return;
 
       // Subscribe to the state topic and request catchup from seq 0
       await node.subscribeFestival(festivalId: festivalId);
+      if (!isCurrent()) return;
 
       // Subscribe to all group topics for this festival
       await node.subscribeGroups(festivalId: festivalId);
+      if (!isCurrent()) return;
+      _relayRetryTimer?.cancel();
+      _relayRetryTimer = null;
+      _relayRetryDelay = const Duration(seconds: 1);
     } catch (e, st) {
+      if (!isCurrent()) return;
+      if (_relayFestivalId == festivalId) {
+        _relayFestivalId = null;
+      }
       debugPrint('relay error: $e\n$st');
+      _scheduleRelayRetry(festivalId);
     }
+  }
+
+  void _scheduleRelayRetry(String festivalId) {
+    final generation = _relayConnectionGeneration;
+    if (!mounted ||
+        _selectedFestival?.id != festivalId ||
+        _relayRetryTimer?.isActive == true) {
+      return;
+    }
+    final delay = _relayRetryDelay;
+    _relayRetryDelay = Duration(
+      seconds: (_relayRetryDelay.inSeconds * 2).clamp(1, 30),
+    );
+    _relayRetryTimer = Timer(delay, () {
+      if (mounted &&
+          generation == _relayConnectionGeneration &&
+          _selectedFestival?.id == festivalId) {
+        unawaited(_connectToRelay(festivalId));
+      }
+    });
   }
 
   Future<void> _handleBecomeAdmin(String festivalId) async {
@@ -690,7 +771,13 @@ class _OffbeatShellState extends State<_OffbeatShell>
     );
   }
 
-  void _navigateBack() {
+  Future<void> _navigateBack() async {
+    final generation = ++_relayConnectionGeneration;
+    final node = _node;
+    if (node != null) {
+      await node.disconnectRelay();
+    }
+    if (!mounted || generation != _relayConnectionGeneration) return;
     _lineupSub?.cancel();
     _lineupSub = null;
     _weatherSub?.cancel();
@@ -698,6 +785,9 @@ class _OffbeatShellState extends State<_OffbeatShell>
     _groupScheduleController?.dispose();
     _groupScheduleController = null;
     _groupScheduleOverlay = GroupScheduleOverlay.empty;
+    _relayRetryTimer?.cancel();
+    _relayRetryTimer = null;
+    _relayRetryDelay = const Duration(seconds: 1);
     _relayFestivalId = null;
     _navController.reverse().then((_) {
       if (!mounted) return;
@@ -727,7 +817,7 @@ class _OffbeatShellState extends State<_OffbeatShell>
         canPop: !inFestival,
         onPopInvokedWithResult: (didPop, _) {
           if (!didPop && inFestival) {
-            _navigateBack();
+            unawaited(_navigateBack());
           }
         },
         child: Scaffold(
@@ -738,7 +828,7 @@ class _OffbeatShellState extends State<_OffbeatShell>
               TopNav(
                 festivalName: _selectedFestival?.name,
                 showBack: inFestival,
-                onBack: _navigateBack,
+                onBack: () => unawaited(_navigateBack()),
                 animation: _navController,
                 syncing: _isSyncing,
                 relayConnected: _relayConnected,

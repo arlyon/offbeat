@@ -67,6 +67,11 @@ impl DocManager {
         }
     }
 
+    pub fn remove(&self, doc_id: &str) -> anyhow::Result<()> {
+        self.docs.remove(doc_id);
+        self.db.delete_doc(doc_id)
+    }
+
     /// Get an existing doc or create a new one, loading from DB if available.
     ///
     /// Returns `Arc<RwLock<Doc>>` — caller takes read or write lock as needed.

@@ -303,6 +303,11 @@ async fn drain_from_radio(
     Ok(())
 }
 
+fn group_id_from_chat_topic(topic: &str) -> Option<&str> {
+    let group_id = topic.strip_prefix("group/")?.strip_suffix("/chat")?;
+    (!group_id.is_empty() && !group_id.contains('/')).then_some(group_id)
+}
+
 #[cfg(target_os = "android")]
 fn first_eight_uuid_bytes(uuid: uuid::Uuid) -> [u8; 8] {
     let mut out = [0u8; 8];
@@ -358,6 +363,15 @@ const MESHTASTIC_FROM_RADIO_CHAR_UUID: &str = "2c55e69e-4993-11ed-b878-0242ac120
 #[flutter_rust_bridge::frb(opaque)]
 pub struct AppNode {
     inner: OffbeatNode,
+    relay_festival_id: Arc<std::sync::RwLock<Option<String>>>,
+    pending_group_retries: Arc<std::sync::Mutex<std::collections::HashSet<i64>>>,
+    group_retry_generations: Arc<std::sync::Mutex<std::collections::HashMap<String, u64>>>,
+    relay_task_handle: Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    group_publish_locks: Arc<
+        std::sync::Mutex<
+            std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>,
+        >,
+    >,
     /// Join handles for BLE connection background tasks.
     ble_task_handles: Vec<tokio::task::JoinHandle<()>>,
 }
@@ -372,6 +386,17 @@ impl AppNode {
             .await??;
         Ok(AppNode {
             inner,
+            relay_festival_id: Arc::new(std::sync::RwLock::new(None)),
+            pending_group_retries: Arc::new(std::sync::Mutex::new(
+                std::collections::HashSet::new(),
+            )),
+            group_retry_generations: Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
+            relay_task_handle: Arc::new(std::sync::Mutex::new(None)),
+            group_publish_locks: Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
             ble_task_handles: Vec::new(),
         })
     }
@@ -382,6 +407,17 @@ impl AppNode {
         let inner = OffbeatNode::new_in_memory()?;
         Ok(AppNode {
             inner,
+            relay_festival_id: Arc::new(std::sync::RwLock::new(None)),
+            pending_group_retries: Arc::new(std::sync::Mutex::new(
+                std::collections::HashSet::new(),
+            )),
+            group_retry_generations: Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
+            relay_task_handle: Arc::new(std::sync::Mutex::new(None)),
+            group_publish_locks: Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
             ble_task_handles: Vec::new(),
         })
     }
@@ -458,6 +494,15 @@ impl AppNode {
         self.inner.db.delete_group(&id)
     }
 
+    fn ensure_group_chat_access(&self, topic: &str) -> anyhow::Result<()> {
+        if let Some(group_id) = group_id_from_chat_topic(topic)
+            && self.inner.db.load_group_key(group_id)?.is_none()
+        {
+            anyhow::bail!("group membership not found");
+        }
+        Ok(())
+    }
+
     /// Fetch chat messages for a topic with pagination.
     pub fn get_chat_messages(
         &self,
@@ -465,6 +510,7 @@ impl AppNode {
         limit: u32,
         offset: u32,
     ) -> anyhow::Result<Vec<ChatMessageDto>> {
+        self.ensure_group_chat_access(&topic)?;
         let msgs = self.inner.db.get_chat_messages(&topic, limit, offset)?;
         Ok(msgs
             .into_iter()
@@ -893,6 +939,7 @@ impl AppNode {
         limit: u32,
         offset: u32,
     ) -> anyhow::Result<Vec<ChatMessageDto>> {
+        self.ensure_group_chat_access(&topic)?;
         let msgs = self.inner.chat_manager.get_history(&topic, limit, offset)?;
         Ok(msgs
             .into_iter()
@@ -963,6 +1010,8 @@ impl AppNode {
         use offbeat_core::{auth, ws_relay};
         use std::sync::Arc;
 
+        self.disconnect_relay().await;
+
         let sync_orchestrator = Arc::clone(&self.inner.sync_orchestrator);
         let doc_manager = Arc::clone(&self.inner.doc_manager);
         let notifier = Arc::clone(&self.inner.notifier);
@@ -988,6 +1037,7 @@ impl AppNode {
             self.inner.connection_manager.clone(),
         )
         .await?;
+        sink.enable_persistence_acknowledgements().await?;
 
         if let Ok(Some(attestation)) = auth::load_attestation(&self.inner.db)
             && let Ok(signing_key) = auth::generate_or_load_identity(&self.inner.db)
@@ -1002,14 +1052,36 @@ impl AppNode {
         }
 
         *self.inner.ws_relay.write() = Some(Arc::new(sink));
+        if let Ok(mut active_festival) = self.relay_festival_id.write() {
+            *active_festival = Some(festival_id.clone());
+        }
 
-        RUNTIME.spawn(async move {
+        let relay_task = RUNTIME.spawn(async move {
             if let Err(e) = receive_loop.await {
                 tracing::warn!("ws relay receive loop exited: {e}");
             }
         });
+        *self.relay_task_handle.lock().unwrap() = Some(relay_task);
 
+        if let Err(error) = self.flush_pending_group_updates(&festival_id).await {
+            tracing::warn!(%error, "queued group updates remain pending");
+        }
         Ok(())
+    }
+
+    /// Stop the active Festival DO relay and its reconnect loop.
+    pub async fn disconnect_relay(&self) {
+        let relay = self.inner.ws_relay.write().take();
+        if let Ok(mut active_festival) = self.relay_festival_id.write() {
+            *active_festival = None;
+        }
+        if let Some(relay) = relay {
+            relay.close().await;
+        }
+        let task = self.relay_task_handle.lock().unwrap().take();
+        if let Some(task) = task {
+            let _ = task.await;
+        }
     }
 
     /// Subscribe to the gossip topic for a festival and perform a state vector
@@ -1080,11 +1152,17 @@ impl AppNode {
         if let Err(error) = self.reconcile_shared_stars(&festival_id).await {
             tracing::warn!(%festival_id, %error, "group schedule reconciliation will retry");
         }
-        if let Some(ws) = { self.inner.ws_relay.read().clone() } {
-            self.inner
+        if let Err(error) = self.flush_pending_group_updates(&festival_id).await {
+            tracing::warn!(%error, "queued group updates remain pending");
+        }
+        if let Some(ws) = { self.inner.ws_relay.read().clone() }
+            && let Err(error) = self
+                .inner
                 .sync_orchestrator
                 .sync_with_peer(ws.as_ref())
-                .await?;
+                .await
+        {
+            tracing::warn!(%error, "group relay catch-up will retry");
         }
         Ok(())
     }
@@ -1210,7 +1288,23 @@ impl AppNode {
             signature,
             issuer,
         };
-        offbeat_core::auth::store_attestation(&self.inner.db, &att)
+        offbeat_core::auth::store_attestation(&self.inner.db, &att)?;
+
+        // Registration may complete after the relay socket was opened. Upgrade
+        // that existing session in place so queued group writes can progress.
+        if let Some(relay) = self.inner.ws_relay.read().clone() {
+            let signing_key = offbeat_core::auth::generate_or_load_identity(&self.inner.db)?;
+            let public_key_hex = offbeat_core::auth::get_public_key_hex(&signing_key);
+            RUNTIME.spawn(async move {
+                if let Err(error) = relay
+                    .authenticate(&public_key_hex, &att, &signing_key)
+                    .await
+                {
+                    tracing::warn!(%error, "ws relay authentication refresh failed");
+                }
+            });
+        }
+        Ok(())
     }
 
     /// Load the stored attestation, if any.
@@ -1233,6 +1327,15 @@ impl AppNode {
     // -----------------------------------------------------------------------
     // Group lifecycle
     // -----------------------------------------------------------------------
+
+    fn group_publish_lock(&self, group_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+        self.group_publish_locks
+            .lock()
+            .unwrap()
+            .entry(group_id.to_string())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
+    }
 
     fn register_group_resources(&self, group_id: &str, group_key: [u8; 32]) -> anyhow::Result<()> {
         let mut registry = self
@@ -1263,23 +1366,22 @@ impl AppNode {
                 update.group_key,
                 update.encrypted_update,
             )
-            .await;
+            .await?;
         }
         Ok(())
     }
 
-    async fn publish_group_state_update(
+    async fn send_group_state_update(
         &self,
+        festival_id: &str,
         group_id: &str,
         group_key: [u8; 32],
         encrypted_update: Vec<u8>,
-    ) {
+    ) -> bool {
         use offbeat_core::gossip_manager::{GossipMessage, encode_gossip_message};
         use offbeat_core::proto::GossipEnvelope;
 
         let doc_id = format!("group/{group_id}/state");
-        self.inner.notifier.notify_doc(&doc_id);
-
         let message = GossipMessage::GroupUpdate {
             doc_id: doc_id.clone(),
             encrypted: encrypted_update,
@@ -1287,18 +1389,188 @@ impl AppNode {
         };
         let envelope = GossipEnvelope::from_gossip_message(&message);
         let bytes = encode_gossip_message(&message);
+        let mut sent = false;
 
         if let Some(gossip) = &self.inner.gossip_manager {
             let topic = offbeat_core::topics::group_topic(&group_key, "state");
-            let _ = gossip.lock().await.broadcast(topic, bytes).await;
+            sent |= gossip.lock().await.broadcast(topic, bytes).await.is_ok();
         }
-        if let Some(relay) = { self.inner.ws_relay.read().clone() } {
-            let _ = relay.send_gossip(&doc_id, &envelope).await;
+
+        let relay_accepted = self
+            .send_pending_group_update(festival_id, group_id, &envelope)
+            .await;
+        sent |= relay_accepted;
+        if sent {
+            self.inner.notifier.record_sent(&doc_id);
         }
-        self.inner.notifier.record_sent(&doc_id);
+        relay_accepted
+    }
+
+    async fn send_pending_group_update(
+        &self,
+        festival_id: &str,
+        group_id: &str,
+        envelope: &offbeat_core::proto::GossipEnvelope,
+    ) -> bool {
+        let relay_matches = self
+            .relay_festival_id
+            .read()
+            .is_ok_and(|active| active.as_deref() == Some(festival_id));
+        if !relay_matches {
+            return false;
+        }
+        let Some(relay) = self.inner.ws_relay.read().clone() else {
+            return false;
+        };
+        let doc_id = format!("group/{group_id}/state");
+        match relay.send_gossip_confirmed(&doc_id, envelope).await {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::warn!(%error, "group update remains queued for relay retry");
+                false
+            }
+        }
+    }
+
+    async fn publish_group_state_update(
+        &self,
+        group_id: &str,
+        group_key: [u8; 32],
+        encrypted_update: Vec<u8>,
+    ) -> anyhow::Result<()> {
+        use offbeat_core::gossip_manager::GossipMessage;
+        use offbeat_core::proto::GossipEnvelope;
+
+        let publish_lock = self.group_publish_lock(group_id);
+        let _publish_guard = publish_lock.lock().await;
+        let festival_id = self
+            .inner
+            .db
+            .load_group_festival_id(group_id)?
+            .filter(|festival_id| !festival_id.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("group has no verified festival scope"))?;
+        let envelope = GossipEnvelope::from_gossip_message(&GossipMessage::GroupUpdate {
+            doc_id: format!("group/{group_id}/state"),
+            encrypted: encrypted_update.clone(),
+            group_key,
+        });
+        let pending_id = self.inner.db.enqueue_group_update(
+            &festival_id,
+            group_id,
+            &offbeat_core::proto::encode_envelope(&envelope),
+        )?;
+        self.inner
+            .notifier
+            .notify_doc(&format!("group/{group_id}/state"));
+
+        if self
+            .send_group_state_update(&festival_id, group_id, group_key, encrypted_update)
+            .await
+        {
+            self.inner.db.delete_pending_group_update(pending_id)?;
+        } else {
+            self.schedule_pending_group_retry(offbeat_core::db::PendingGroupUpdate {
+                id: pending_id,
+                festival_id,
+                group_id: group_id.to_string(),
+                envelope: offbeat_core::proto::encode_envelope(&envelope),
+            });
+        }
+        Ok(())
+    }
+
+    async fn flush_pending_group_updates(&self, festival_id: &str) -> anyhow::Result<()> {
+        for pending in self.inner.db.load_pending_group_updates(festival_id)? {
+            let publish_lock = self.group_publish_lock(&pending.group_id);
+            let _publish_guard = publish_lock.lock().await;
+            if !self.inner.db.pending_group_update_exists(pending.id)? {
+                continue;
+            }
+            let envelope = match offbeat_core::proto::decode_envelope(&pending.envelope) {
+                Ok(envelope) => envelope,
+                Err(_) => {
+                    tracing::warn!("discarding malformed queued group envelope");
+                    self.inner.db.delete_pending_group_update(pending.id)?;
+                    continue;
+                }
+            };
+            if self
+                .send_pending_group_update(festival_id, &pending.group_id, &envelope)
+                .await
+            {
+                self.inner.db.delete_pending_group_update(pending.id)?;
+            } else {
+                self.schedule_pending_group_retry(pending);
+            }
+        }
+        Ok(())
+    }
+
+    fn schedule_pending_group_retry(&self, pending: offbeat_core::db::PendingGroupUpdate) {
+        let mut retries = self.pending_group_retries.lock().unwrap();
+        if !retries.insert(pending.id) {
+            return;
+        }
+        drop(retries);
+
+        let generation = *self
+            .group_retry_generations
+            .lock()
+            .unwrap()
+            .entry(pending.group_id.clone())
+            .or_default();
+        let db = Arc::clone(&self.inner.db);
+        let ws_relay = Arc::clone(&self.inner.ws_relay);
+        let relay_festival_id = Arc::clone(&self.relay_festival_id);
+        let pending_group_retries = Arc::clone(&self.pending_group_retries);
+        let group_retry_generations = Arc::clone(&self.group_retry_generations);
+        let publish_lock = self.group_publish_lock(&pending.group_id);
+        RUNTIME.spawn(async move {
+            let Ok(envelope) = offbeat_core::proto::decode_envelope(&pending.envelope) else {
+                let _ = db.delete_pending_group_update(pending.id);
+                pending_group_retries.lock().unwrap().remove(&pending.id);
+                return;
+            };
+            let doc_id = format!("group/{}/state", pending.group_id);
+            let mut delay = std::time::Duration::from_secs(1);
+
+            loop {
+                tokio::time::sleep(delay).await;
+                let _publish_guard = publish_lock.lock().await;
+                let is_current_generation = group_retry_generations
+                    .lock()
+                    .unwrap()
+                    .get(&pending.group_id)
+                    .is_some_and(|current| *current == generation);
+                let row_exists = db
+                    .pending_group_update_exists(pending.id)
+                    .unwrap_or(false);
+                if !is_current_generation || !row_exists {
+                    pending_group_retries.lock().unwrap().remove(&pending.id);
+                    break;
+                }
+                let relay_matches = relay_festival_id
+                    .read()
+                    .is_ok_and(|active| active.as_deref() == Some(pending.festival_id.as_str()));
+                let relay = relay_matches.then(|| ws_relay.read().clone()).flatten();
+                if let Some(relay) = relay
+                    && relay
+                        .send_gossip_confirmed(&doc_id, &envelope)
+                        .await
+                        .is_ok()
+                {
+                    let _ = db.delete_pending_group_update(pending.id);
+                    pending_group_retries.lock().unwrap().remove(&pending.id);
+                    break;
+                }
+                delay = (delay * 2).min(std::time::Duration::from_secs(30));
+            }
+        });
     }
 
     async fn deregister_group_resources(&self, group_id: &str, group_key: [u8; 32]) {
+        let state_doc_id = format!("group/{group_id}/state");
+        self.inner.notifier.unwatch_doc(&state_doc_id);
         if let Ok(mut registry) = self.inner.resource_registry.write() {
             registry.deregister_group(group_key);
         }
@@ -1338,23 +1610,25 @@ impl AppNode {
             .await?;
 
         self.register_group_resources(&result.group_id, result.group_key)?;
-
-        // Subscribe + sync via WS relay if connected
-        if let Some(ws) = { self.inner.ws_relay.read().clone() } {
-            self.inner
-                .sync_orchestrator
-                .sync_with_peer(ws.as_ref())
-                .await?;
-        }
-
         self.publish_group_state_update(
             &result.group_id,
             result.group_key,
             result.encrypted_update,
         )
-        .await;
+        .await?;
         if let Err(error) = self.reconcile_shared_stars(&festival_id).await {
             tracing::warn!(%festival_id, %error, "group created; schedule reconciliation will retry");
+        }
+
+        // Network catch-up cannot roll back a locally completed create.
+        if let Some(ws) = { self.inner.ws_relay.read().clone() }
+            && let Err(error) = self
+                .inner
+                .sync_orchestrator
+                .sync_with_peer(ws.as_ref())
+                .await
+        {
+            tracing::warn!(%error, "group created; relay catch-up will retry");
         }
 
         Ok(GroupCreateResultDto {
@@ -1369,6 +1643,7 @@ impl AppNode {
     pub async fn join_group(
         &self,
         invite_payload: String,
+        festival_id: String,
         display_name: String,
     ) -> anyhow::Result<GroupJoinResultDto> {
         use offbeat_core::auth;
@@ -1378,33 +1653,33 @@ impl AppNode {
         let result = self
             .inner
             .group_manager
-            .join_group(&invite_payload, &user_id, &display_name)
+            .join_group_for_festival(&invite_payload, &festival_id, &user_id, &display_name)
             .await?;
 
         self.register_group_resources(&result.group_id, result.group_key)?;
-
-        // Subscribe + sync (SV exchange + chat catchup) via WS relay
-        if let Some(ws) = { self.inner.ws_relay.read().clone() } {
-            self.inner
-                .sync_orchestrator
-                .sync_with_peer(ws.as_ref())
-                .await?;
-        }
-
         self.publish_group_state_update(
             &result.group_id,
             result.group_key,
             result.encrypted_update,
         )
-        .await;
-        if !result.festival_id.is_empty()
-            && let Err(error) = self.reconcile_shared_stars(&result.festival_id).await
-        {
+        .await?;
+        if let Err(error) = self.reconcile_shared_stars(&result.festival_id).await {
             tracing::warn!(
                 festival_id = %result.festival_id,
                 %error,
                 "group joined; schedule reconciliation will retry"
             );
+        }
+
+        // Network catch-up cannot roll back a locally completed join.
+        if let Some(ws) = { self.inner.ws_relay.read().clone() }
+            && let Err(error) = self
+                .inner
+                .sync_orchestrator
+                .sync_with_peer(ws.as_ref())
+                .await
+        {
+            tracing::warn!(%error, "group joined; relay catch-up will retry");
         }
 
         Ok(GroupJoinResultDto {
@@ -1416,18 +1691,68 @@ impl AppNode {
     /// Leave a group.
     pub async fn leave_group(&self, group_id: String) -> anyhow::Result<()> {
         use offbeat_core::auth;
+        use offbeat_core::gossip_manager::GossipMessage;
+        use offbeat_core::proto::GossipEnvelope;
+
+        let festival_id = self
+            .inner
+            .db
+            .load_group_festival_id(&group_id)?
+            .filter(|festival_id| !festival_id.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("group has no verified festival scope"))?;
+        let publish_lock = self.group_publish_lock(&group_id);
+        let _publish_guard = publish_lock.lock().await;
         let signing_key = auth::generate_or_load_identity(&self.inner.db)?;
         let user_id = auth::get_user_id(&signing_key);
-
         let result = self
             .inner
             .group_manager
             .leave_group(&group_id, &user_id)
             .await?;
-        self.publish_group_state_update(&group_id, result.group_key, result.encrypted_update)
-            .await;
+        let envelope = GossipEnvelope::from_gossip_message(&GossipMessage::GroupUpdate {
+            doc_id: format!("group/{group_id}/state"),
+            encrypted: result.encrypted_update.clone(),
+            group_key: result.group_key,
+        });
+
+        // Invalidate every older retry before atomically replacing its rows
+        // with the leave tombstone and purging local private state.
+        {
+            let mut generations = self.group_retry_generations.lock().unwrap();
+            *generations.entry(group_id.clone()).or_default() += 1;
+        }
+        let pending_id = self.inner.db.finalize_group_leave(
+            &festival_id,
+            &group_id,
+            &offbeat_core::proto::encode_envelope(&envelope),
+        )?;
+        self.inner
+            .doc_manager
+            .remove(&format!("group/{group_id}/state"))?;
+        self.inner
+            .notifier
+            .unwatch_chat(&format!("group/{group_id}/chat"));
         self.deregister_group_resources(&group_id, result.group_key)
             .await;
+
+        if self
+            .send_group_state_update(
+                &festival_id,
+                &group_id,
+                result.group_key,
+                result.encrypted_update,
+            )
+            .await
+        {
+            self.inner.db.delete_pending_group_update(pending_id)?;
+        } else {
+            self.schedule_pending_group_retry(offbeat_core::db::PendingGroupUpdate {
+                id: pending_id,
+                festival_id,
+                group_id,
+                envelope: offbeat_core::proto::encode_envelope(&envelope),
+            });
+        }
         Ok(())
     }
 
@@ -1459,7 +1784,7 @@ impl AppNode {
             .load_group_key(&group_id)?
             .ok_or_else(|| anyhow::anyhow!("group key not found for {group_id}"))?;
         self.publish_group_state_update(&group_id, group_key, encrypted)
-            .await;
+            .await?;
 
         if let Some(stage_id) = stage_id
             && let Ok(Some(festival_id)) = self.inner.db.load_group_festival_id(&group_id)
@@ -1494,7 +1819,7 @@ impl AppNode {
             .load_group_key(&group_id)?
             .ok_or_else(|| anyhow::anyhow!("group key not found for {group_id}"))?;
         self.publish_group_state_update(&group_id, group_key, encrypted)
-            .await;
+            .await?;
         Ok(())
     }
 
@@ -1522,12 +1847,15 @@ impl AppNode {
             .load_group_key(&group_id)?
             .ok_or_else(|| anyhow::anyhow!("group key not found for {group_id}"))?;
         self.publish_group_state_update(&group_id, group_key, encrypted)
-            .await;
+            .await?;
         Ok(())
     }
 
     /// Read the current state of a group from the local Yrs doc.
     pub async fn get_group_state(&self, group_id: String) -> anyhow::Result<GroupStateDto> {
+        if self.inner.db.load_group_key(&group_id)?.is_none() {
+            anyhow::bail!("group membership not found");
+        }
         let state = self.inner.group_manager.get_group_state(&group_id).await?;
 
         Ok(GroupStateDto {
@@ -1679,6 +2007,9 @@ impl AppNode {
         group_id: String,
         sink: StreamSink<GroupStateDto>,
     ) -> anyhow::Result<()> {
+        if self.inner.db.load_group_key(&group_id)?.is_none() {
+            anyhow::bail!("group membership not found");
+        }
         use std::sync::Arc;
         use tokio::sync::Mutex;
 
@@ -1773,6 +2104,7 @@ impl AppNode {
         last_n: u32,
         sink: StreamSink<Vec<ChatMessageDto>>,
     ) -> anyhow::Result<()> {
+        self.ensure_group_chat_access(&topic)?;
         use std::sync::Arc;
         use tokio::sync::Mutex;
 
@@ -2194,13 +2526,37 @@ mod tests {
                 );
             }
 
+            let rejected = AppNode::create_in_memory().unwrap();
+            assert!(
+                rejected
+                    .join_group(
+                        created.invite_payload.clone(),
+                        "other-festival".to_string(),
+                        "Mallory".to_string(),
+                    )
+                    .await
+                    .is_err()
+            );
+            assert!(
+                rejected
+                    .inner
+                    .db
+                    .load_groups("other-festival")
+                    .unwrap()
+                    .is_empty()
+            );
+
             let mut joiner = AppNode::create_in_memory().unwrap();
             joiner
                 .toggle_star("fest-1".to_string(), "set-a".to_string())
                 .await
                 .unwrap();
             let joined = joiner
-                .join_group(created.invite_payload, "Bob".to_string())
+                .join_group(
+                    created.invite_payload,
+                    "fest-1".to_string(),
+                    "Bob".to_string(),
+                )
                 .await
                 .unwrap();
             let joiner_key = joiner
@@ -2266,7 +2622,62 @@ mod tests {
                 .unwrap();
             assert_eq!(state.members[0].starred_set_ids, vec!["set-b", "set-c"]);
 
+            let chat_topic = format!("group/{}/chat", joined.group_id);
+            joiner
+                .inner
+                .db
+                .save_chat_message(&offbeat_core::types::ChatMessage {
+                    id: "private-message".to_string(),
+                    user_id: "user".to_string(),
+                    display_name: "User".to_string(),
+                    text: "secret".to_string(),
+                    topic: chat_topic.clone(),
+                    stage_id: None,
+                    timestamp: "2026-01-01T00:00:00Z".to_string(),
+                    writer_seq: 1,
+                })
+                .unwrap();
+            assert_eq!(
+                joiner
+                    .get_chat_history(chat_topic.clone(), 10, 0)
+                    .unwrap()
+                    .len(),
+                1
+            );
+
             joiner.leave_group(joined.group_id.clone()).await.unwrap();
+            let pending_leave = joiner
+                .inner
+                .db
+                .load_pending_group_updates("fest-1")
+                .unwrap();
+            assert_eq!(
+                pending_leave.len(),
+                1,
+                "leave compacts every older group delta into one tombstone"
+            );
+            let leave_envelope =
+                offbeat_core::proto::decode_envelope(&pending_leave[0].envelope).unwrap();
+            assert!(matches!(
+                leave_envelope.payload,
+                Some(offbeat_core::proto::gossip_envelope::Payload::GroupUpdate(_))
+            ));
+            assert!(
+                joiner
+                    .get_group_state(joined.group_id.clone())
+                    .await
+                    .is_err()
+            );
+            assert!(joiner.inner.db.load_doc(&doc_id).unwrap().is_none());
+            assert!(
+                joiner
+                    .inner
+                    .db
+                    .get_chat_messages(&chat_topic, 10, 0)
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(joiner.get_chat_history(chat_topic, 10, 0).is_err());
             assert!(
                 joiner
                     .inner

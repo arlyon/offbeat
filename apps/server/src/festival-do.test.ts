@@ -15,6 +15,7 @@ let worker: Unstable_DevWorker;
 let workerUrl: string;
 
 const FESTIVAL_ID = "fest-do-test";
+const RELAY_ACK_CAPABILITY_TOPIC = "__offbeat/relay-ack/v1";
 
 function bytesToHex(bytes: Uint8Array): string {
 	return Array.from(bytes)
@@ -100,21 +101,6 @@ function sendClientMsg(
 	ws.send(toBinary(RelayClientMessageSchema, m));
 }
 
-/** Collect all server messages for a duration. */
-function collectServerMsgs(ws: WebSocket, durationMs: number) {
-	return new Promise<ReturnType<typeof fromBinary<typeof RelayServerMessageSchema>>[]>((resolve) => {
-		const msgs: ReturnType<typeof fromBinary<typeof RelayServerMessageSchema>>[] = [];
-		const handler = (event: MessageEvent) => {
-			msgs.push(fromBinary(RelayServerMessageSchema, new Uint8Array(event.data as ArrayBuffer)));
-		};
-		ws.addEventListener("message", handler);
-		setTimeout(() => {
-			ws.removeEventListener("message", handler);
-			resolve(msgs);
-		}, durationMs);
-	});
-}
-
 /** Wait for a specific server message case. */
 function waitForMsg(ws: WebSocket, expectedCase: string, timeoutMs = 5000) {
 	return new Promise<ReturnType<typeof fromBinary<typeof RelayServerMessageSchema>>>((resolve, reject) => {
@@ -138,7 +124,7 @@ function waitForMsg(ws: WebSocket, expectedCase: string, timeoutMs = 5000) {
 }
 
 /** Drain all pending messages (like hello on connect). */
-async function drainMessages(ws: WebSocket, ms = 100) {
+async function drainMessages(_ws: WebSocket, ms = 100) {
 	await new Promise((r) => setTimeout(r, ms));
 }
 
@@ -320,7 +306,7 @@ describe("FestivalDO lane split", () => {
 			const { attestation: att1 } = await registerUser(kp1.publicKeyHex);
 			const { attestation: att2 } = await registerUser(kp2.publicKeyHex);
 
-			const topic = `festival/${FESTIVAL_ID}/chat/stage1`;
+			const topic = `festival/${FESTIVAL_ID}/chat/${crypto.randomUUID()}`;
 
 			// Client A: connect, auth, subscribe
 			const wsA = await connectWS(FESTIVAL_ID);
@@ -329,7 +315,12 @@ describe("FestivalDO lane split", () => {
 			wsA.send(toBinary(RelayClientMessageSchema, buildAuthMsg(att1, kp1)));
 			await authOkA;
 			const subA = waitForMsg(wsA, "subscribed");
-			sendClientMsg(wsA, { msg: { case: "subscribe", value: { topics: [topic] } } });
+			sendClientMsg(wsA, {
+				msg: {
+					case: "subscribe",
+					value: { topics: [topic, RELAY_ACK_CAPABILITY_TOPIC] },
+				},
+			});
 			await subA;
 
 			// Client B: connect, auth, subscribe
@@ -342,7 +333,9 @@ describe("FestivalDO lane split", () => {
 			sendClientMsg(wsB, { msg: { case: "subscribe", value: { topics: [topic] } } });
 			await subB;
 
-			// B listens for broadcast
+			// Both peers listen. The sender echo is the positive persistence
+			// acknowledgement used by the durable client outbox.
+			const senderAckPromise = waitForMsg(wsA, "gossip");
 			const broadcastPromise = waitForMsg(wsB, "gossip");
 
 			// A sends a chat message
@@ -364,16 +357,34 @@ describe("FestivalDO lane split", () => {
 				msg: { case: "gossip", value: { topic, message: chatEnvelope } },
 			});
 
+			const senderAck = await senderAckPromise;
+			expect(senderAck.msg.case).toBe("gossip");
+
 			// B receives the broadcast
 			const broadcast = await broadcastPromise;
 			expect(broadcast.msg.case).toBe("gossip");
 			if (broadcast.msg.case === "gossip") {
 				expect(broadcast.msg.value.topic).toBe(topic);
+				if (senderAck.msg.case === "gossip") {
+					expect(senderAck.msg.value.seq).toBe(broadcast.msg.value.seq);
+				}
 				const payload = broadcast.msg.value.message?.payload;
 				expect(payload?.case).toBe("chat");
 				if (payload?.case === "chat") {
 					expect(payload.value.text).toBe("routed chat");
 				}
+			}
+
+			// Retrying the exact envelope is idempotent and acknowledges the
+			// original durable sequence rather than appending another row.
+			const retryAckPromise = waitForMsg(wsA, "gossip");
+			sendClientMsg(wsA, {
+				msg: { case: "gossip", value: { topic, message: chatEnvelope } },
+			});
+			const retryAck = await retryAckPromise;
+			expect(retryAck.msg.case).toBe("gossip");
+			if (retryAck.msg.case === "gossip" && senderAck.msg.case === "gossip") {
+				expect(retryAck.msg.value.seq).toBe(senderAck.msg.value.seq);
 			}
 
 			wsA.close();
@@ -390,11 +401,18 @@ describe("FestivalDO lane split", () => {
 			const authOk = waitForMsg(ws, "authOk");
 			ws.send(toBinary(RelayClientMessageSchema, buildAuthMsg(attestation, kp)));
 			await authOk;
-			const sub = waitForMsg(ws, "subscribed");
-			sendClientMsg(ws, { msg: { case: "subscribe", value: { topics: [groupTopic] } } });
-			await sub;
+			// Advertise acknowledgement support without subscribing to the group.
+			const ackSubscription = waitForMsg(ws, "subscribed");
+			sendClientMsg(ws, {
+				msg: {
+					case: "subscribe",
+					value: { topics: [RELAY_ACK_CAPABILITY_TOPIC] },
+				},
+			});
+			await ackSubscription;
 
-			// Send encryptedChat
+			// Send encryptedChat without subscribing to the group. The sender must
+			// still receive a persistence acknowledgement for durable outbox delivery.
 			const envelope = create(GossipEnvelopeSchema, {
 				payload: {
 					case: "encryptedChat",
@@ -404,12 +422,11 @@ describe("FestivalDO lane split", () => {
 					},
 				},
 			});
+			const persistenceAck = waitForMsg(ws, "gossip");
 			sendClientMsg(ws, {
 				msg: { case: "gossip", value: { topic: groupTopic, message: envelope } },
 			});
-
-			// Small delay to let it persist
-			await new Promise((r) => setTimeout(r, 100));
+			expect((await persistenceAck).msg.case).toBe("gossip");
 
 			// Verify it's NOT in public catchup (should be in group table instead)
 			const catchupPromise = waitForMsg(ws, "catchup");

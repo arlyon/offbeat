@@ -60,22 +60,25 @@ void main() {
     expect(overlay.likedSetIdsByUserId['luke'], {'set-a', 'set-b'});
   });
 
-  test('ignores inactive members and sorts supporter names', () {
-    final overlay = GroupScheduleOverlay.fromGroupStates(
-      localUserId: 'me',
-      states: [
-        group('Crew', [
-          member('zoe', 'Zoe', ['set-a']),
-          member('ali', 'Ali', ['set-a']),
-          member('gone', 'Gone', ['set-a'], status: 'left'),
-        ]),
-      ],
-    );
+  test(
+    'includes offline members, excludes departed entries, and sorts names',
+    () {
+      final overlay = GroupScheduleOverlay.fromGroupStates(
+        localUserId: 'me',
+        states: [
+          group('Crew', [
+            member('zoe', 'Zoe', ['set-a'], status: 'offline'),
+            member('ali', 'Ali', ['set-a']),
+            member('gone', 'Gone', ['set-a'], status: 'left'),
+          ]),
+        ],
+      );
 
-    expect(
-      overlay.supportersBySetId['set-a']!.map((person) => person.displayName),
-      ['Ali', 'Zoe'],
-    );
-    expect(overlay.likedSetIdsByUserId, isNot(contains('gone')));
-  });
+      expect(
+        overlay.supportersBySetId['set-a']!.map((person) => person.displayName),
+        ['Ali', 'Zoe'],
+      );
+      expect(overlay.likedSetIdsByUserId, isNot(contains('gone')));
+    },
+  );
 }

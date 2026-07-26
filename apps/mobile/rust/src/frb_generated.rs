@@ -29,7 +29,7 @@
 use crate::api::dto::*;
 use crate::api::*;
 use flutter_rust_bridge::for_generated::byteorder::{NativeEndian, ReadBytesExt, WriteBytesExt};
-use flutter_rust_bridge::for_generated::{Lifetimeable, Lockable, transform_result_dco};
+use flutter_rust_bridge::for_generated::{transform_result_dco, Lifetimeable, Lockable};
 use flutter_rust_bridge::{Handler, IntoIntoDart};
 
 // Section: boilerplate
@@ -40,7 +40,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1847887653;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 2062326316;
 
 // Section: executor
 
@@ -527,6 +527,63 @@ fn wire__crate__api__AppNode_derive_identity_from_prf_impl(
                         )?;
                         Ok(output_ok)
                     })(),
+                )
+            }
+        },
+    )
+}
+fn wire__crate__api__AppNode_disconnect_relay_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "AppNode_disconnect_relay",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<AppNode>,
+            >>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, ()>(
+                    (move || async move {
+                        let mut api_that_guard = None;
+                        let decode_indices_ =
+                            flutter_rust_bridge::for_generated::lockable_compute_decode_order(
+                                vec![flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                    &api_that, 0, false,
+                                )],
+                            );
+                        for i in decode_indices_ {
+                            match i {
+                                0 => {
+                                    api_that_guard =
+                                        Some(api_that.lockable_decode_async_ref().await)
+                                }
+                                _ => unreachable!(),
+                            }
+                        }
+                        let api_that_guard = api_that_guard.unwrap();
+                        let output_ok = Result::<_, ()>::Ok({
+                            crate::api::AppNode::disconnect_relay(&*api_that_guard).await;
+                        })?;
+                        Ok(output_ok)
+                    })()
+                    .await,
                 )
             }
         },
@@ -1372,6 +1429,7 @@ fn wire__crate__api__AppNode_join_group_impl(
                 flutter_rust_bridge::for_generated::RustAutoOpaqueInner<AppNode>,
             >>::sse_decode(&mut deserializer);
             let api_invite_payload = <String>::sse_decode(&mut deserializer);
+            let api_festival_id = <String>::sse_decode(&mut deserializer);
             let api_display_name = <String>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
@@ -1397,6 +1455,7 @@ fn wire__crate__api__AppNode_join_group_impl(
                         let output_ok = crate::api::AppNode::join_group(
                             &*api_that_guard,
                             api_invite_payload,
+                            api_festival_id,
                             api_display_name,
                         )
                         .await?;
@@ -4402,80 +4461,81 @@ fn pde_ffi_dispatcher_primary_impl(
             rust_vec_len,
             data_len,
         ),
-        10 => wire__crate__api__AppNode_get_attestation_impl(port, ptr, rust_vec_len, data_len),
-        11 => wire__crate__api__AppNode_get_auth_state_impl(port, ptr, rust_vec_len, data_len),
-        12 => wire__crate__api__AppNode_get_chat_history_impl(port, ptr, rust_vec_len, data_len),
-        13 => wire__crate__api__AppNode_get_chat_messages_impl(port, ptr, rust_vec_len, data_len),
-        14 => wire__crate__api__AppNode_get_group_state_impl(port, ptr, rust_vec_len, data_len),
-        15 => wire__crate__api__AppNode_get_groups_impl(port, ptr, rust_vec_len, data_len),
-        16 => wire__crate__api__AppNode_get_identity_impl(port, ptr, rust_vec_len, data_len),
-        17 => wire__crate__api__AppNode_get_invite_payload_impl(port, ptr, rust_vec_len, data_len),
-        18 => wire__crate__api__AppNode_get_lineup_impl(port, ptr, rust_vec_len, data_len),
-        19 => wire__crate__api__AppNode_get_peer_count_impl(port, ptr, rust_vec_len, data_len),
-        20 => wire__crate__api__AppNode_get_peer_list_impl(port, ptr, rust_vec_len, data_len),
-        21 => wire__crate__api__AppNode_get_public_key_hex_impl(port, ptr, rust_vec_len, data_len),
-        22 => wire__crate__api__AppNode_get_stars_impl(port, ptr, rust_vec_len, data_len),
-        23 => {
+        10 => wire__crate__api__AppNode_disconnect_relay_impl(port, ptr, rust_vec_len, data_len),
+        11 => wire__crate__api__AppNode_get_attestation_impl(port, ptr, rust_vec_len, data_len),
+        12 => wire__crate__api__AppNode_get_auth_state_impl(port, ptr, rust_vec_len, data_len),
+        13 => wire__crate__api__AppNode_get_chat_history_impl(port, ptr, rust_vec_len, data_len),
+        14 => wire__crate__api__AppNode_get_chat_messages_impl(port, ptr, rust_vec_len, data_len),
+        15 => wire__crate__api__AppNode_get_group_state_impl(port, ptr, rust_vec_len, data_len),
+        16 => wire__crate__api__AppNode_get_groups_impl(port, ptr, rust_vec_len, data_len),
+        17 => wire__crate__api__AppNode_get_identity_impl(port, ptr, rust_vec_len, data_len),
+        18 => wire__crate__api__AppNode_get_invite_payload_impl(port, ptr, rust_vec_len, data_len),
+        19 => wire__crate__api__AppNode_get_lineup_impl(port, ptr, rust_vec_len, data_len),
+        20 => wire__crate__api__AppNode_get_peer_count_impl(port, ptr, rust_vec_len, data_len),
+        21 => wire__crate__api__AppNode_get_peer_list_impl(port, ptr, rust_vec_len, data_len),
+        22 => wire__crate__api__AppNode_get_public_key_hex_impl(port, ptr, rust_vec_len, data_len),
+        23 => wire__crate__api__AppNode_get_stars_impl(port, ptr, rust_vec_len, data_len),
+        24 => {
             wire__crate__api__AppNode_get_transport_status_impl(port, ptr, rust_vec_len, data_len)
         }
-        24 => wire__crate__api__AppNode_get_weather_impl(port, ptr, rust_vec_len, data_len),
-        25 => wire__crate__api__AppNode_join_group_impl(port, ptr, rust_vec_len, data_len),
-        26 => wire__crate__api__AppNode_leave_group_impl(port, ptr, rust_vec_len, data_len),
-        27 => wire__crate__api__AppNode_meshtastic_listen_apply_group_chats_impl(
+        25 => wire__crate__api__AppNode_get_weather_impl(port, ptr, rust_vec_len, data_len),
+        26 => wire__crate__api__AppNode_join_group_impl(port, ptr, rust_vec_len, data_len),
+        27 => wire__crate__api__AppNode_leave_group_impl(port, ptr, rust_vec_len, data_len),
+        28 => wire__crate__api__AppNode_meshtastic_listen_apply_group_chats_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        28 => wire__crate__api__AppNode_meshtastic_send_group_chat_impl(
+        29 => wire__crate__api__AppNode_meshtastic_send_group_chat_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        29 => wire__crate__api__AppNode_nudge_gossip_impl(port, ptr, rust_vec_len, data_len),
-        30 => wire__crate__api__AppNode_publish_chat_impl(port, ptr, rust_vec_len, data_len),
-        31 => wire__crate__api__AppNode_restart_ble_impl(port, ptr, rust_vec_len, data_len),
-        32 => wire__crate__api__AppNode_save_group_impl(port, ptr, rust_vec_len, data_len),
-        33 => wire__crate__api__AppNode_send_festival_chat_impl(port, ptr, rust_vec_len, data_len),
-        34 => wire__crate__api__AppNode_send_group_chat_impl(port, ptr, rust_vec_len, data_len),
-        35 => wire__crate__api__AppNode_set_display_name_impl(port, ptr, rust_vec_len, data_len),
-        36 => wire__crate__api__AppNode_set_festival_public_key_impl(
+        30 => wire__crate__api__AppNode_nudge_gossip_impl(port, ptr, rust_vec_len, data_len),
+        31 => wire__crate__api__AppNode_publish_chat_impl(port, ptr, rust_vec_len, data_len),
+        32 => wire__crate__api__AppNode_restart_ble_impl(port, ptr, rust_vec_len, data_len),
+        33 => wire__crate__api__AppNode_save_group_impl(port, ptr, rust_vec_len, data_len),
+        34 => wire__crate__api__AppNode_send_festival_chat_impl(port, ptr, rust_vec_len, data_len),
+        35 => wire__crate__api__AppNode_send_group_chat_impl(port, ptr, rust_vec_len, data_len),
+        36 => wire__crate__api__AppNode_set_display_name_impl(port, ptr, rust_vec_len, data_len),
+        37 => wire__crate__api__AppNode_set_festival_public_key_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        37 => wire__crate__api__AppNode_sign_message_impl(port, ptr, rust_vec_len, data_len),
-        38 => wire__crate__api__AppNode_start_ble_sync_impl(port, ptr, rust_vec_len, data_len),
-        39 => wire__crate__api__AppNode_stop_ble_sync_impl(port, ptr, rust_vec_len, data_len),
-        40 => wire__crate__api__AppNode_store_attestation_impl(port, ptr, rust_vec_len, data_len),
-        41 => {
+        38 => wire__crate__api__AppNode_sign_message_impl(port, ptr, rust_vec_len, data_len),
+        39 => wire__crate__api__AppNode_start_ble_sync_impl(port, ptr, rust_vec_len, data_len),
+        40 => wire__crate__api__AppNode_stop_ble_sync_impl(port, ptr, rust_vec_len, data_len),
+        41 => wire__crate__api__AppNode_store_attestation_impl(port, ptr, rust_vec_len, data_len),
+        42 => {
             wire__crate__api__AppNode_subscribe_chat_topics_impl(port, ptr, rust_vec_len, data_len)
         }
-        42 => wire__crate__api__AppNode_subscribe_festival_impl(port, ptr, rust_vec_len, data_len),
-        43 => wire__crate__api__AppNode_subscribe_groups_impl(port, ptr, rust_vec_len, data_len),
-        44 => wire__crate__api__AppNode_toggle_star_impl(port, ptr, rust_vec_len, data_len),
-        45 => wire__crate__api__AppNode_update_shared_stars_impl(port, ptr, rust_vec_len, data_len),
-        46 => wire__crate__api__AppNode_watch_chat_impl(port, ptr, rust_vec_len, data_len),
-        47 => wire__crate__api__AppNode_watch_group_state_impl(port, ptr, rust_vec_len, data_len),
-        48 => wire__crate__api__AppNode_watch_lineup_impl(port, ptr, rust_vec_len, data_len),
-        49 => wire__crate__api__AppNode_watch_peer_list_impl(port, ptr, rust_vec_len, data_len),
-        50 => wire__crate__api__AppNode_watch_sync_status_impl(port, ptr, rust_vec_len, data_len),
-        51 => {
+        43 => wire__crate__api__AppNode_subscribe_festival_impl(port, ptr, rust_vec_len, data_len),
+        44 => wire__crate__api__AppNode_subscribe_groups_impl(port, ptr, rust_vec_len, data_len),
+        45 => wire__crate__api__AppNode_toggle_star_impl(port, ptr, rust_vec_len, data_len),
+        46 => wire__crate__api__AppNode_update_shared_stars_impl(port, ptr, rust_vec_len, data_len),
+        47 => wire__crate__api__AppNode_watch_chat_impl(port, ptr, rust_vec_len, data_len),
+        48 => wire__crate__api__AppNode_watch_group_state_impl(port, ptr, rust_vec_len, data_len),
+        49 => wire__crate__api__AppNode_watch_lineup_impl(port, ptr, rust_vec_len, data_len),
+        50 => wire__crate__api__AppNode_watch_peer_list_impl(port, ptr, rust_vec_len, data_len),
+        51 => wire__crate__api__AppNode_watch_sync_status_impl(port, ptr, rust_vec_len, data_len),
+        52 => {
             wire__crate__api__AppNode_watch_transport_status_impl(port, ptr, rust_vec_len, data_len)
         }
-        52 => wire__crate__api__AppNode_watch_weather_impl(port, ptr, rust_vec_len, data_len),
-        53 => wire__crate__api__dto__convert_sync_status_impl(port, ptr, rust_vec_len, data_len),
-        54 => wire__crate__api__dto__generate_group_key_impl(port, ptr, rust_vec_len, data_len),
-        55 => wire__crate__api__dto__group_id_from_key_impl(port, ptr, rust_vec_len, data_len),
-        56 => wire__crate__api__init_app_impl(port, ptr, rust_vec_len, data_len),
-        57 => wire__crate__api__meshtastic_debug_probe_impl(port, ptr, rust_vec_len, data_len),
-        58 => wire__crate__api__meshtastic_debug_scan_impl(port, ptr, rust_vec_len, data_len),
-        59 => wire__crate__api__dto__peer_entry_to_dto_impl(port, ptr, rust_vec_len, data_len),
-        60 => wire__crate__api__dto__read_lineup_from_doc_impl(port, ptr, rust_vec_len, data_len),
-        61 => wire__crate__api__dto__read_weather_from_doc_impl(port, ptr, rust_vec_len, data_len),
-        62 => wire__crate__api__dto__snapshot_transport_impl(port, ptr, rust_vec_len, data_len),
+        53 => wire__crate__api__AppNode_watch_weather_impl(port, ptr, rust_vec_len, data_len),
+        54 => wire__crate__api__dto__convert_sync_status_impl(port, ptr, rust_vec_len, data_len),
+        55 => wire__crate__api__dto__generate_group_key_impl(port, ptr, rust_vec_len, data_len),
+        56 => wire__crate__api__dto__group_id_from_key_impl(port, ptr, rust_vec_len, data_len),
+        57 => wire__crate__api__init_app_impl(port, ptr, rust_vec_len, data_len),
+        58 => wire__crate__api__meshtastic_debug_probe_impl(port, ptr, rust_vec_len, data_len),
+        59 => wire__crate__api__meshtastic_debug_scan_impl(port, ptr, rust_vec_len, data_len),
+        60 => wire__crate__api__dto__peer_entry_to_dto_impl(port, ptr, rust_vec_len, data_len),
+        61 => wire__crate__api__dto__read_lineup_from_doc_impl(port, ptr, rust_vec_len, data_len),
+        62 => wire__crate__api__dto__read_weather_from_doc_impl(port, ptr, rust_vec_len, data_len),
+        63 => wire__crate__api__dto__snapshot_transport_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -5836,7 +5896,7 @@ mod io {
     use flutter_rust_bridge::for_generated::byteorder::{
         NativeEndian, ReadBytesExt, WriteBytesExt,
     };
-    use flutter_rust_bridge::for_generated::{Lifetimeable, Lockable, transform_result_dco};
+    use flutter_rust_bridge::for_generated::{transform_result_dco, Lifetimeable, Lockable};
     use flutter_rust_bridge::{Handler, IntoIntoDart};
 
     // Section: boilerplate
@@ -5932,7 +5992,7 @@ mod web {
     };
     use flutter_rust_bridge::for_generated::wasm_bindgen;
     use flutter_rust_bridge::for_generated::wasm_bindgen::prelude::*;
-    use flutter_rust_bridge::for_generated::{Lifetimeable, Lockable, transform_result_dco};
+    use flutter_rust_bridge::for_generated::{transform_result_dco, Lifetimeable, Lockable};
     use flutter_rust_bridge::{Handler, IntoIntoDart};
 
     // Section: boilerplate

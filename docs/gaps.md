@@ -99,9 +99,19 @@ Constrained routes must never exchange bulk chat history. Festival chat is lower
 
 **Tracking:** `offbeat-t6a.12`
 
-Network tasks and in-memory queues are not a durability boundary. Persist accepted local mutations before broadcast, record retry state transactionally, expire stale items deliberately, and ensure apply-once behaviour after restart.
+Encrypted group-state mutations now persist festival-scoped outbound intents
+before publication and retry relay delivery across reconnect and restart. Leave
+atomically compacts older outbound deltas into one encrypted member/star
+removal while deleting the local key, chat, and cached plaintext document.
+Inactive festival relay loops are explicitly stopped before replacement.
 
-Catch-up writes should be batched. Blocking rusqlite work must not stall Tokio network reactors under load.
+Relay rows are removed only after the server echoes the durably sequenced
+message; exact retries reuse the original server sequence. Pending leave rows
+retain only the encrypted wire envelope, not the departed group's key. The
+remaining durability work covers chat/public writes, expiry policies, and stress
+evidence. Catch-up writes should
+be batched. Blocking rusqlite work must not stall Tokio network reactors under
+load.
 
 ## P1: relay resilience and abuse controls need verification
 

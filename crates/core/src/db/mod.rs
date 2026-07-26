@@ -12,6 +12,14 @@ pub struct Database {
     conn: Mutex<Connection>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingGroupUpdate {
+    pub id: i64,
+    pub festival_id: String,
+    pub group_id: String,
+    pub envelope: Vec<u8>,
+}
+
 // SAFETY: `Connection` is `Send` (rusqlite documents this), and we guard
 // all access with a `Mutex`, so `Database` can be shared across threads.
 unsafe impl Sync for Database {}
@@ -64,6 +72,16 @@ impl Database {
         } else {
             Ok(None)
         }
+    }
+
+    /// Delete a document snapshot and all of its incremental updates.
+    pub fn delete_doc(&self, doc_id: &str) -> Result<()> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM doc_updates WHERE doc_id = ?1", params![doc_id])?;
+        tx.execute("DELETE FROM docs WHERE id = ?1", params![doc_id])?;
+        tx.commit()?;
+        Ok(())
     }
 
     /// Returns the IDs of all docs of the given type.
@@ -241,6 +259,91 @@ impl Database {
             .collect()
     }
 
+    pub fn enqueue_group_update(
+        &self,
+        festival_id: &str,
+        group_id: &str,
+        envelope: &[u8],
+    ) -> Result<i64> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO pending_group_updates (festival_id, group_id, envelope)
+             VALUES (?1, ?2, ?3)",
+            params![festival_id, group_id, envelope],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn load_pending_group_updates(&self, festival_id: &str) -> Result<Vec<PendingGroupUpdate>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, festival_id, group_id, envelope
+             FROM pending_group_updates
+             WHERE festival_id = ?1
+             ORDER BY id",
+        )?;
+        Ok(stmt
+            .query_map(params![festival_id], |row| {
+                Ok(PendingGroupUpdate {
+                    id: row.get(0)?,
+                    festival_id: row.get(1)?,
+                    group_id: row.get(2)?,
+                    envelope: row.get(3)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn pending_group_update_exists(&self, id: i64) -> Result<bool> {
+        let count: i64 = self.conn.lock().unwrap().query_row(
+            "SELECT COUNT(*) FROM pending_group_updates WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
+    pub fn delete_pending_group_update(&self, id: i64) -> Result<()> {
+        self.conn.lock().unwrap().execute(
+            "DELETE FROM pending_group_updates WHERE id = ?1",
+            params![id],
+        )?;
+        Ok(())
+    }
+
+    /// Replace all older outbound group deltas with one leave tombstone while
+    /// atomically purging local private state and key material.
+    pub fn finalize_group_leave(
+        &self,
+        festival_id: &str,
+        group_id: &str,
+        leave_envelope: &[u8],
+    ) -> Result<i64> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM pending_group_updates WHERE group_id = ?1",
+            params![group_id],
+        )?;
+        tx.execute(
+            "INSERT INTO pending_group_updates (festival_id, group_id, envelope)
+             VALUES (?1, ?2, ?3)",
+            params![festival_id, group_id, leave_envelope],
+        )?;
+        let pending_id = tx.last_insert_rowid();
+        let doc_id = format!("group/{group_id}/state");
+        let chat_topic = format!("group/{group_id}/chat");
+        tx.execute("DELETE FROM doc_updates WHERE doc_id = ?1", params![doc_id])?;
+        tx.execute("DELETE FROM docs WHERE id = ?1", params![doc_id])?;
+        tx.execute(
+            "DELETE FROM chat_messages WHERE topic = ?1",
+            params![chat_topic],
+        )?;
+        tx.execute("DELETE FROM groups WHERE id = ?1", params![group_id])?;
+        tx.commit()?;
+        Ok(pending_id)
+    }
+
     pub fn update_group_name(&self, id: &str, name: &str) -> Result<()> {
         self.conn.lock().unwrap().execute(
             "UPDATE groups SET name = ?2 WHERE id = ?1",
@@ -338,6 +441,14 @@ impl Database {
             }
         }
         tx.commit()?;
+        Ok(())
+    }
+
+    pub fn delete_chat_messages(&self, topic: &str) -> Result<()> {
+        self.conn
+            .lock()
+            .unwrap()
+            .execute("DELETE FROM chat_messages WHERE topic = ?1", params![topic])?;
         Ok(())
     }
 
@@ -693,6 +804,47 @@ mod tests {
     }
 
     #[test]
+    fn test_delete_chat_messages_removes_only_requested_topic() {
+        let db = test_db();
+        for (id, topic) in [("one", "group/g1/chat"), ("two", "group/g2/chat")] {
+            db.save_chat_message(&crate::types::ChatMessage {
+                id: id.to_string(),
+                user_id: "user".to_string(),
+                display_name: "User".to_string(),
+                text: "hello".to_string(),
+                topic: topic.to_string(),
+                stage_id: None,
+                timestamp: "2026-01-01T00:00:00Z".to_string(),
+                writer_seq: 1,
+            })
+            .unwrap();
+        }
+
+        db.delete_chat_messages("group/g1/chat").unwrap();
+        assert!(
+            db.get_chat_messages("group/g1/chat", 10, 0)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            db.get_chat_messages("group/g2/chat", 10, 0)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn test_delete_doc_removes_snapshot_and_updates() {
+        let db = test_db();
+        db.save_doc("group/g1/state", "group", &[1, 2]).unwrap();
+        db.append_doc_update("group/g1/state", &[3, 4]).unwrap();
+        db.delete_doc("group/g1/state").unwrap();
+        assert!(db.load_doc("group/g1/state").unwrap().is_none());
+        assert!(db.load_doc_updates("group/g1/state").unwrap().is_empty());
+    }
+
+    #[test]
     fn test_list_docs() {
         let db = test_db();
         db.save_doc("a", "festival", b"data_a").unwrap();
@@ -736,6 +888,78 @@ mod tests {
         assert_eq!(
             groups,
             vec![("g1".to_string(), [1u8; 32]), ("g2".to_string(), [2u8; 32])]
+        );
+    }
+
+    #[test]
+    fn finalize_group_leave_compacts_queue_and_purges_private_state() {
+        let db = test_db();
+        db.save_group("g1", "festival-a", "Group", &[7; 32])
+            .unwrap();
+        db.save_doc("group/g1/state", "group", &[1]).unwrap();
+        db.append_doc_update("group/g1/state", &[2]).unwrap();
+        db.save_chat_message(&crate::types::ChatMessage {
+            id: "message".to_string(),
+            user_id: "user".to_string(),
+            display_name: "User".to_string(),
+            text: "private".to_string(),
+            topic: "group/g1/chat".to_string(),
+            stage_id: None,
+            timestamp: "2026-01-01T00:00:00Z".to_string(),
+            writer_seq: 1,
+        })
+        .unwrap();
+        db.enqueue_group_update("festival-a", "g1", &[3])
+            .unwrap();
+        db.enqueue_group_update("festival-a", "g1", &[4])
+            .unwrap();
+
+        let leave_id = db
+            .finalize_group_leave("festival-a", "g1", &[9])
+            .unwrap();
+        let pending = db.load_pending_group_updates("festival-a").unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].id, leave_id);
+        assert_eq!(pending[0].envelope, vec![9]);
+        assert!(db.load_group_key("g1").unwrap().is_none());
+        assert!(db.load_doc("group/g1/state").unwrap().is_none());
+        assert!(db.load_doc_updates("group/g1/state").unwrap().is_empty());
+        assert!(
+            db.get_chat_messages("group/g1/chat", 10, 0)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn pending_group_updates_survive_restart_and_are_festival_scoped() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pending-groups.db");
+        let first_id;
+        {
+            let db = Database::new(&path).unwrap();
+            first_id = db
+                .enqueue_group_update("festival-a", "group-a", &[2, 3])
+                .unwrap();
+            db.enqueue_group_update("festival-b", "group-b", &[5])
+                .unwrap();
+        }
+
+        let db = Database::new(&path).unwrap();
+        let pending = db.load_pending_group_updates("festival-a").unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].id, first_id);
+        assert_eq!(pending[0].group_id, "group-a");
+        assert_eq!(pending[0].envelope, vec![2, 3]);
+        db.delete_pending_group_update(first_id).unwrap();
+        assert!(
+            db.load_pending_group_updates("festival-a")
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            db.load_pending_group_updates("festival-b").unwrap().len(),
+            1
         );
     }
 
