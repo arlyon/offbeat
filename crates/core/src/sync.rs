@@ -17,7 +17,7 @@ use crate::gossip_manager::{DispatchResult, GossipManager, GossipMessage, dispat
 use crate::key_cache::GroupKeyCache;
 use crate::notifier::ResourceNotifier;
 use crate::proto;
-use crate::resource::{Priority, ResourceKind, ResourceRegistry};
+use crate::resource::{Priority, Resource, ResourceKind, ResourceRegistry};
 use crate::transport::profile::TransportProfile;
 use crate::types::{ChatMessage, SignedUpdate};
 
@@ -237,10 +237,11 @@ impl SyncOrchestrator {
                         let festival_id = topic_str.split('/').nth(1).unwrap_or("unknown");
                         let is_group = topic_str.starts_with("group/");
 
-                        tracing::info!(topic = %topic_str, "auto-subscribing to gossip topic");
+                        let lane = if is_group { "group" } else { "public" };
+                        tracing::info!(lane, "auto-subscribing to gossip topic");
                         if let Err(e) = gm.subscribe(topic_id, festival_id, is_group, vec![]).await
                         {
-                            tracing::warn!(topic = %topic_str, error = %e, "auto-subscription failed");
+                            tracing::warn!(lane, error = %e, "auto-subscription failed");
                         } else {
                             known_topics.insert(topic_id);
 
@@ -250,7 +251,7 @@ impl SyncOrchestrator {
                                 let verified_peers = cm.list_verified_ble_peers();
                                 if !verified_peers.is_empty() {
                                     tracing::info!(
-                                        topic = %topic_str,
+                                        lane,
                                         count = verified_peers.len(),
                                         "syncing new topic with existing BLE peers"
                                     );
@@ -403,7 +404,20 @@ impl SyncOrchestrator {
     /// Run subscribe→catch-up→live for all resources with a peer.
     pub async fn sync_with_peer<P: PeerConnection>(&self, peer: &P) -> anyhow::Result<SyncReport> {
         self.notify_sync_status(true);
-        let result = self.sync_with_peer_inner(peer).await;
+        let result = self.sync_with_peer_inner(peer, None).await;
+        self.notify_sync_status(false);
+        result
+    }
+
+    /// Sync only resources belonging to one festival. Relay connections use
+    /// this boundary so a Festival DO never learns topics from another event.
+    pub async fn sync_with_peer_for_festival<P: PeerConnection>(
+        &self,
+        peer: &P,
+        festival_id: &str,
+    ) -> anyhow::Result<SyncReport> {
+        self.notify_sync_status(true);
+        let result = self.sync_with_peer_inner(peer, Some(festival_id)).await;
         self.notify_sync_status(false);
         result
     }
@@ -422,6 +436,7 @@ impl SyncOrchestrator {
     async fn sync_with_peer_inner<P: PeerConnection>(
         &self,
         peer: &P,
+        festival_id: Option<&str>,
     ) -> anyhow::Result<SyncReport> {
         let mut report = SyncReport::default();
 
@@ -430,10 +445,30 @@ impl SyncOrchestrator {
                 .registry
                 .read()
                 .map_err(|_| anyhow::anyhow!("registry lock poisoned"))?;
-            reg.by_priority()
-                .iter()
-                .map(|r| (r.id().to_string(), r.kind(), r.topic_string(), r.priority()))
-                .collect()
+            let mut resources = Vec::new();
+            for resource in reg.by_priority() {
+                let matches_festival = match (festival_id, resource) {
+                    (None, _) => true,
+                    (Some(expected), Resource::FestivalState { festival_id, .. })
+                    | (Some(expected), Resource::StageChat { festival_id, .. }) => {
+                        festival_id == expected
+                    }
+                    (Some(expected), Resource::GroupState { group_id, .. })
+                    | (Some(expected), Resource::GroupChat { group_id, .. }) => self
+                        .db
+                        .load_group_festival_id(group_id)?
+                        .is_some_and(|festival_id| festival_id == expected),
+                };
+                if matches_festival {
+                    resources.push((
+                        resource.id(),
+                        resource.kind(),
+                        resource.topic_string(),
+                        resource.priority(),
+                    ));
+                }
+            }
+            resources
         };
 
         let topics: Vec<String> = resources.iter().map(|(_, _, t, _)| t.clone()).collect();
@@ -448,8 +483,8 @@ impl SyncOrchestrator {
                     report.crdt_updates_applied += crdt_count;
                     report.chat_messages_received += chat_count;
                 }
-                Err(e) => {
-                    tracing::warn!("sync_resource {id} failed: {e}");
+                Err(_e) => {
+                    tracing::warn!("one resource failed to sync");
                     report.failed.push(id);
                 }
             }
@@ -1220,6 +1255,57 @@ mod tests {
         let exchanges = peer.sv_exchanges.lock().unwrap();
         assert_eq!(exchanges.len(), 1);
         assert!(exchanges[0].contains("fest1"));
+    }
+
+    #[tokio::test]
+    async fn relay_sync_is_scoped_to_one_festival() {
+        let db = test_db();
+        let group_one_key = [1u8; 32];
+        let group_two_key = [2u8; 32];
+        let group_one_id = crate::crypto::group_id_from_key(&group_one_key);
+        let group_two_id = crate::crypto::group_id_from_key(&group_two_key);
+        db.save_group(&group_one_id, "fest1", "One", &group_one_key)
+            .unwrap();
+        db.save_group(&group_two_id, "fest2", "Two", &group_two_key)
+            .unwrap();
+        let doc_manager = Arc::new(crate::doc_manager::DocManager::new(db.clone()));
+        let chat_manager = Arc::new(crate::chat::ChatManager::new(
+            db.clone(),
+            doc_manager.clone(),
+        ));
+        let registry = Arc::new(RwLock::new(ResourceRegistry::new()));
+        {
+            let mut reg = registry.write().unwrap();
+            reg.register(Resource::festival_state("fest1", [3; 32]));
+            reg.register(Resource::festival_state("fest2", [4; 32]));
+            reg.register_groups(&[
+                (group_one_id.clone(), group_one_key),
+                (group_two_id, group_two_key),
+            ]);
+        }
+        let notifier = Arc::new(ResourceNotifier::new());
+        let orchestrator = SyncOrchestrator::new(registry, doc_manager, chat_manager, db, notifier);
+        let peer = MockPeer::new();
+
+        let report = orchestrator
+            .sync_with_peer_for_festival(&peer, "fest1")
+            .await
+            .unwrap();
+
+        assert_eq!(report.resources_synced, 3);
+        let subscriptions = peer.subscribed.lock().unwrap();
+        assert_eq!(subscriptions.len(), 3);
+        assert!(subscriptions.iter().all(|topic| !topic.contains("fest2")));
+        assert!(
+            subscriptions
+                .iter()
+                .all(|topic| !topic.contains(&crate::crypto::group_id_from_key(&group_two_key)))
+        );
+        assert!(
+            subscriptions
+                .iter()
+                .any(|topic| topic == &format!("group/{group_one_id}/state"))
+        );
     }
 
     #[tokio::test]

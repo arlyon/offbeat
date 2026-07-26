@@ -361,7 +361,7 @@ export class FestivalDO extends DurableObject {
 		}));
 
 		console.log(
-			`[ws] catchup: topic=${topic} sinceSeq=${sinceSeq} sending ${messages.length} messages`,
+			`[ws] catchup: lane=${topic.startsWith("group/") ? "group" : "public"} sending=${messages.length}`,
 		);
 		this.#sendServerMsg(ws, {
 			msg: { case: "catchup", value: { topic, messages } },
@@ -907,7 +907,7 @@ export class FestivalDO extends DurableObject {
 						publicKey: sess.publicKey,
 					}),
 				);
-				console.log(`[ws] subscribed to: ${[...sess.topics].join(", ")}`);
+				console.log(`[ws] subscription count: ${sess.topics.size}`);
 				this.#sendServerMsg(ws, {
 					msg: { case: "subscribed", value: { topics: [...sess.topics] } },
 				});

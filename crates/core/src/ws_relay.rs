@@ -583,7 +583,7 @@ async fn run_receive_loop_with_reconnect(
                     let seqs = sink.last_seen_seq.lock().await.clone();
                     for (topic, seq) in seqs {
                         if let Err(e) = sink.request_catchup(&topic, seq).await {
-                            tracing::warn!("ws_relay: catchup request failed for {topic}: {e}");
+                            tracing::warn!("ws_relay: catchup request failed: {e}");
                         }
                     }
 
@@ -625,7 +625,7 @@ async fn run_receive_loop(
                 tracing::debug!("ws_relay: recv {} binary bytes", data.len());
                 match proto::decode_server_msg(&data) {
                     Ok(server_msg) => {
-                        if let Err(e) = handle_server_message(
+                        if handle_server_message(
                             server_msg,
                             sink,
                             sync_orchestrator,
@@ -634,8 +634,9 @@ async fn run_receive_loop(
                             connection_manager,
                         )
                         .await
+                        .is_err()
                         {
-                            tracing::warn!("ws_relay dispatch error: {e}");
+                            tracing::warn!("ws_relay dispatch failed");
                         }
                     }
                     Err(e) => {
@@ -762,11 +763,12 @@ async fn handle_server_message(
                 }
 
                 if let Some(ref envelope) = entry.message
-                    && let Err(e) = sync_orchestrator
+                    && sync_orchestrator
                         .handle_incoming_envelope(&catchup.topic, envelope)
                         .await
+                        .is_err()
                 {
-                    tracing::warn!("ws_relay catchup dispatch error: {e}");
+                    tracing::warn!("ws_relay catchup dispatch failed");
                 }
             }
             Ok(())
@@ -781,20 +783,24 @@ async fn handle_server_message(
 
         Msg::ChatDiff(chat_diff) => {
             for envelope in &chat_diff.messages {
-                if let Err(e) = sync_orchestrator
+                if sync_orchestrator
                     .handle_incoming_envelope(&chat_diff.topic, envelope)
                     .await
+                    .is_err()
                 {
-                    tracing::warn!("ws_relay chat_diff dispatch error: {e}");
+                    tracing::warn!("ws_relay chat_diff dispatch failed");
                 }
             }
-            tracing::info!("ws_relay: applied chat_diff for topic {}", chat_diff.topic);
+            tracing::info!("ws_relay: applied chat_diff");
             notifier.notify_chat(&chat_diff.topic);
             Ok(())
         }
 
         Msg::Subscribed(subscribed) => {
-            tracing::info!("ws_relay: subscribed to topics: {:?}", subscribed.topics);
+            tracing::info!(
+                "ws_relay: active subscription count={}",
+                subscribed.topics.len()
+            );
             Ok(())
         }
 

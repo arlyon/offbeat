@@ -132,6 +132,9 @@ Exact retries reuse their original server sequence. Leave atomically compacts
 older outbound deltas into its encrypted wire envelope while deleting the local
 group key, chat history, and cached plaintext group document. Moving between
 festivals closes and awaits the previous relay loop before opening another.
+Relay catch-up filters the global resource registry by the active festival, and
+outbound festival/group chat verifies the relay scope before publication. Logs
+report lane/count diagnostics without exposing private group topic identifiers.
 
 ## Public trust boundaries
 

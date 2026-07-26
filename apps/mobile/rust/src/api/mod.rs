@@ -482,16 +482,28 @@ impl AppNode {
         group_id: String,
         festival_id: String,
     ) -> anyhow::Result<Option<String>> {
+        let Some(stored_festival_id) = self.inner.db.load_group_festival_id(&group_id)? else {
+            return Ok(None);
+        };
+        if stored_festival_id != festival_id {
+            anyhow::bail!("group does not belong to the requested festival");
+        }
         let key = self.inner.db.load_group_key(&group_id)?;
-        Ok(key.map(|k| {
-            let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(k);
-            format!("offbeat://group/{festival_id}/{group_id}/{b64}")
+        Ok(key.map(|key| {
+            let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(key);
+            format!("offbeat://group/{stored_festival_id}/{group_id}/{b64}")
         }))
     }
 
     /// Delete a group by ID.
     pub fn delete_group(&self, id: String) -> anyhow::Result<()> {
         self.inner.db.delete_group(&id)
+    }
+
+    fn relay_matches_festival(&self, festival_id: &str) -> bool {
+        self.relay_festival_id
+            .read()
+            .is_ok_and(|active| active.as_deref() == Some(festival_id))
     }
 
     fn ensure_group_chat_access(&self, topic: &str) -> anyhow::Result<()> {
@@ -559,7 +571,9 @@ impl AppNode {
                 let _ = gm.lock().await.broadcast(topic_id, bytes).await;
             }
 
-            if let Some(ws) = { self.inner.ws_relay.read().clone() } {
+            if self.relay_matches_festival(&festival_id)
+                && let Some(ws) = { self.inner.ws_relay.read().clone() }
+            {
                 let topic_str = format!(
                     "festival/{}/chat/{}",
                     festival_id,
@@ -590,6 +604,12 @@ impl AppNode {
         text: String,
     ) -> anyhow::Result<ChatMessageDto> {
         use offbeat_core::auth;
+        let festival_id = self
+            .inner
+            .db
+            .load_group_festival_id(&group_id)?
+            .filter(|festival_id| !festival_id.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("group has no verified festival scope"))?;
         let signing_key = auth::generate_or_load_identity(&self.inner.db)?;
         let user_id = auth::get_user_id(&signing_key);
         let display_name =
@@ -630,7 +650,9 @@ impl AppNode {
                 let _ = gm.lock().await.broadcast(topic_id, bytes).await;
             }
 
-            if let Some(ws) = { self.inner.ws_relay.read().clone() } {
+            if self.relay_matches_festival(&festival_id)
+                && let Some(ws) = { self.inner.ws_relay.read().clone() }
+            {
                 let topic_str = format!("group/{group_id}/chat");
                 let _ = ws.send_gossip(&topic_str, &envelope).await;
             }
@@ -990,6 +1012,9 @@ impl AppNode {
             }
         }
         if let Some(relay) = { self.inner.ws_relay.read().clone() } {
+            if !self.relay_matches_festival(&festival_id) {
+                anyhow::bail!("active relay belongs to another festival");
+            }
             relay
                 .subscribe(chat_topics.iter().map(|(topic, _)| topic.clone()).collect())
                 .await?;
@@ -1112,9 +1137,12 @@ impl AppNode {
 
         // Sync via orchestrator using the WS peer
         if let Some(ws) = { self.inner.ws_relay.read().clone() } {
+            if !self.relay_matches_festival(&festival_id) {
+                anyhow::bail!("active relay belongs to another festival");
+            }
             self.inner
                 .sync_orchestrator
-                .sync_with_peer(ws.as_ref())
+                .sync_with_peer_for_festival(ws.as_ref(), &festival_id)
                 .await?;
         }
 
@@ -1155,11 +1183,12 @@ impl AppNode {
         if let Err(error) = self.flush_pending_group_updates(&festival_id).await {
             tracing::warn!(%error, "queued group updates remain pending");
         }
-        if let Some(ws) = { self.inner.ws_relay.read().clone() }
+        if self.relay_matches_festival(&festival_id)
+            && let Some(ws) = { self.inner.ws_relay.read().clone() }
             && let Err(error) = self
                 .inner
                 .sync_orchestrator
-                .sync_with_peer(ws.as_ref())
+                .sync_with_peer_for_festival(ws.as_ref(), &festival_id)
                 .await
         {
             tracing::warn!(%error, "group relay catch-up will retry");
@@ -1217,7 +1246,9 @@ impl AppNode {
             let _ = gm.lock().await.broadcast(topic_id, bytes).await;
         }
 
-        if let Some(ws) = { self.inner.ws_relay.read().clone() } {
+        if self.relay_matches_festival(parts[1])
+            && let Some(ws) = { self.inner.ws_relay.read().clone() }
+        {
             let _ = ws.send_gossip(&topic, &envelope).await;
         }
 
@@ -1568,7 +1599,12 @@ impl AppNode {
         });
     }
 
-    async fn deregister_group_resources(&self, group_id: &str, group_key: [u8; 32]) {
+    async fn deregister_group_resources(
+        &self,
+        festival_id: &str,
+        group_id: &str,
+        group_key: [u8; 32],
+    ) {
         let state_doc_id = format!("group/{group_id}/state");
         self.inner.notifier.unwatch_doc(&state_doc_id);
         if let Ok(mut registry) = self.inner.resource_registry.write() {
@@ -1581,7 +1617,9 @@ impl AppNode {
             gossip.unsubscribe(offbeat_core::topics::group_topic(&group_key, "state"));
             gossip.unsubscribe(offbeat_core::topics::group_topic(&group_key, "chat"));
         }
-        if let Some(relay) = { self.inner.ws_relay.read().clone() } {
+        if self.relay_matches_festival(festival_id)
+            && let Some(relay) = { self.inner.ws_relay.read().clone() }
+        {
             let _ = relay
                 .unsubscribe(vec![
                     format!("group/{group_id}/state"),
@@ -1621,11 +1659,12 @@ impl AppNode {
         }
 
         // Network catch-up cannot roll back a locally completed create.
-        if let Some(ws) = { self.inner.ws_relay.read().clone() }
+        if self.relay_matches_festival(&festival_id)
+            && let Some(ws) = { self.inner.ws_relay.read().clone() }
             && let Err(error) = self
                 .inner
                 .sync_orchestrator
-                .sync_with_peer(ws.as_ref())
+                .sync_with_peer_for_festival(ws.as_ref(), &festival_id)
                 .await
         {
             tracing::warn!(%error, "group created; relay catch-up will retry");
@@ -1672,11 +1711,12 @@ impl AppNode {
         }
 
         // Network catch-up cannot roll back a locally completed join.
-        if let Some(ws) = { self.inner.ws_relay.read().clone() }
+        if self.relay_matches_festival(&festival_id)
+            && let Some(ws) = { self.inner.ws_relay.read().clone() }
             && let Err(error) = self
                 .inner
                 .sync_orchestrator
-                .sync_with_peer(ws.as_ref())
+                .sync_with_peer_for_festival(ws.as_ref(), &festival_id)
                 .await
         {
             tracing::warn!(%error, "group joined; relay catch-up will retry");
@@ -1732,7 +1772,7 @@ impl AppNode {
         self.inner
             .notifier
             .unwatch_chat(&format!("group/{group_id}/chat"));
-        self.deregister_group_resources(&group_id, result.group_key)
+        self.deregister_group_resources(&festival_id, &group_id, result.group_key)
             .await;
 
         if self
@@ -2565,6 +2605,17 @@ mod tests {
                 .load_group_key(&joined.group_id)
                 .unwrap()
                 .unwrap();
+            *joiner.relay_festival_id.write().unwrap() = Some("other-festival".to_string());
+            assert!(
+                !joiner.relay_matches_festival("fest-1"),
+                "group unsubscribe must not use another festival's relay"
+            );
+            assert!(
+                joiner
+                    .get_invite_payload(joined.group_id.clone(), "other-festival".to_string())
+                    .is_err(),
+                "invite reconstruction must use the stored festival scope"
+            );
             {
                 let registry = joiner.inner.resource_registry.read().unwrap();
                 assert!(
