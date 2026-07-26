@@ -706,15 +706,26 @@ impl AppNode {
             let display_name =
                 auth::get_display_name(&self.inner.db)?.unwrap_or_else(|| user_id.clone());
             let topic = format!("group/{group_id}/chat");
-            let writer_seq = self.inner.db.get_next_writer_seq(&topic, &user_id)?;
             let message_uuid = Uuid::new_v4();
             let timestamp_secs = now_unix_secs();
-            let compact = CompactGroupChat {
-                message_uuid: *message_uuid.as_bytes(),
+            let message = self.inner.db.save_local_chat_message(ChatMessage {
+                id: message_uuid.to_string(),
                 user_id: user_id.clone(),
                 display_name: display_name.clone(),
                 text: text.clone(),
-                writer_seq,
+                topic: topic.clone(),
+                stage_id: None,
+                timestamp: format!("{timestamp_secs}Z"),
+                writer_seq: 0,
+                logical_time: 0,
+            })?;
+            let compact = CompactGroupChat {
+                message_uuid: *message_uuid.as_bytes(),
+                user_id,
+                display_name,
+                text,
+                writer_seq: message.writer_seq,
+                logical_time: message.logical_time,
                 timestamp_secs,
             };
             let encrypted_body = crypto::encrypt(&group_key, &compact.encode()?)?;
@@ -728,17 +739,6 @@ impl AppNode {
                 encrypted_body,
             )?;
 
-            let message = ChatMessage {
-                id: message_uuid.to_string(),
-                user_id,
-                display_name,
-                text,
-                topic: topic.clone(),
-                stage_id: None,
-                timestamp: format!("{timestamp_secs}Z"),
-                writer_seq,
-            };
-            self.inner.db.save_chat_message(&message)?;
             self.inner.notifier.record_sent(&topic);
             self.inner.notifier.notify_chat(&topic);
 
@@ -915,6 +915,7 @@ impl AppNode {
                                     stage_id: None,
                                     timestamp: format!("{}Z", compact.timestamp_secs),
                                     writer_seq: compact.writer_seq,
+                                    logical_time: compact.logical_time,
                                 };
                                 self.inner.db.save_chat_message(&message)?;
                                 self.inner.notifier.record_received(&topic);
@@ -1220,7 +1221,7 @@ impl AppNode {
         use offbeat_core::proto::GossipEnvelope;
         use offbeat_core::types::ChatMessage;
 
-        let chat = ChatMessage {
+        let chat = self.inner.db.save_local_chat_message(ChatMessage {
             id: message.id,
             user_id: message.user_id,
             display_name: message.display_name,
@@ -1229,7 +1230,8 @@ impl AppNode {
             stage_id: message.stage_id,
             timestamp: message.timestamp,
             writer_seq: 0,
-        };
+            logical_time: 0,
+        })?;
 
         let parts: Vec<&str> = topic.splitn(3, '/').collect();
         let topic_id = if parts.len() == 3 && parts[0] == "festival" {
@@ -2686,6 +2688,7 @@ mod tests {
                     stage_id: None,
                     timestamp: "2026-01-01T00:00:00Z".to_string(),
                     writer_seq: 1,
+                    logical_time: 1,
                 })
                 .unwrap();
             assert_eq!(

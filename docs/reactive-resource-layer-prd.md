@@ -152,31 +152,41 @@ The DO must hold the current Yrs doc state (not just a gossip log) so it can com
 
 ### Chat Resources — High-Water Mark Sync
 
-For `AppendLog` resources, catch-up uses a per-writer high-water mark:
+For `AppendLog` resources, catch-up uses a per-writer contiguous high-water
+mark plus the head message commitment:
 
 ```rust
-/// Compact representation of "what chat messages I have."
-/// One entry per unique writer, not per message.
-type ChatStateVector = HashMap<String, u64>;  // user_id → max_seq
+struct ChatWriterHead {
+    sequence: u64,
+    message_id: String, // encoded message-ID + Lamport commitment
+}
+type ChatStateVector = HashMap<String, ChatWriterHead>;
 ```
 
-Each chat message carries a `(user_id, writer_seq)` pair. The writer bumps their counter locally on each send. The sync protocol:
+Each chat message carries `(user_id, writer_seq, logical_time)`. Local creation
+atomically increments the per-writer sequence and per-topic Lamport clock with
+persistence. Receiving a message advances the topic clock. Authoritative order
+is `(logical_time, user_id, writer_seq, message_id)`; wall time is display-only.
+The sync protocol:
 
 ```
   Client                        Peer (DO or P2P)
   ──────                        ────────────────
   1. subscribe(topic)       ──►  (start receiving live gossip)
-  2. send(my_chat_sv)       ──►  {"alice": 12, "bob": 7}
+  2. send(my_chat_sv)       ──►  {"alice": {seq: 12, head: "a12@42"}}
                             ◄──  3. batch of msgs where
-                                    alice.seq > 12 OR
-                                    bob.seq > 7 OR
-                                    writer NOT IN client_sv
-                                    (newest first, paginated)
+                                    writer.seq > client head OR
+                                    same seq has a different head commitment
+                                    (bounded, authoritative order)
   4. INSERT OR IGNORE each       (dedup by message ID)
   5. live gossip continues       (new messages, dedup on insert)
 ```
 
-**Gaps:** A simple high-water mark means if you have alice:1-3 and alice:10-13 but miss 4-9, you'd re-request 10-13. `INSERT OR IGNORE` makes this harmless. Gaps are rare (only if catchup was interrupted) and the waste is minimal.
+The advertised sequence is the highest **contiguous** sequence, so gaps are
+re-requested safely. `INSERT OR IGNORE` removes overlap. Equal sequences with
+different head commitments force variant exchange, allowing legacy Lamport
+fallbacks to repair and the trust layer to detect and converge writer
+equivocation.
 
 **Wire protocol addition:**
 
@@ -347,9 +357,12 @@ The decision may choose native iroh for some routes and resource adapters for ot
 **New tables:**
 
 ```sql
--- Chat messages gain a writer_seq column for HWM sync
+-- Chat messages use writer sequence for HWM and Lamport time for order.
 ALTER TABLE chat_messages ADD COLUMN writer_seq INTEGER NOT NULL DEFAULT 0;
-CREATE INDEX idx_chat_writer_seq ON chat_messages(topic, user_id, writer_seq);
+ALTER TABLE chat_messages ADD COLUMN logical_time INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX idx_chat_topic_order
+    ON chat_messages(topic, logical_time, user_id, writer_seq, id);
+-- Per-topic clocks and per-writer counters are persisted for atomic allocation.
 ```
 
 **Deleted tables:**
@@ -434,10 +447,12 @@ The `gossip_log` table remains for chat catchup but is no longer used for CRDT s
 ## Open Questions
 
 1. **All-iroh scope** — Which routes pass the BLE, WebSocket, and Meshtastic prototypes?
-2. **Offline public trust** — How are MainDO attestations cached, expired, and displayed when unavailable?
-3. **Append-log ordering** — Which causal ordering tuple replaces wall-clock authority while retaining per-writer HWM?
-4. **Stream backpressure** — CRDT streams may coalesce to latest state; chat streams must not silently lose messages.
-5. **Yrs lifecycle** — Any compaction design must prove convergence with peers holding older state vectors.
+2. **Stream backpressure** — CRDT streams may coalesce to latest state; chat streams must not silently lose messages.
+3. **Yrs lifecycle** — Any compaction design must prove convergence with peers holding older state vectors.
+
+Offline public trust is resolved in `auth-protocol.md`. Append-log ordering is a
+persisted per-topic Lamport clock with deterministic writer/sequence/message-ID
+tie-breakers.
 
 ## Future Considerations
 

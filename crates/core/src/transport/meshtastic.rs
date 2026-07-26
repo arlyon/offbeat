@@ -32,7 +32,8 @@ pub const PACKET_HEADER_BYTES: usize = 27;
 pub const MAX_FRAGMENTS: u8 = 4;
 const MAGIC: [u8; 2] = *b"OB";
 const GROUP_CHAT_TAG_CONTEXT: &[u8] = b"offbeat/meshtastic/group/chat/v1";
-const COMPACT_GROUP_CHAT_VERSION: u8 = 1;
+const COMPACT_GROUP_CHAT_VERSION: u8 = 2;
+const LEGACY_COMPACT_GROUP_CHAT_VERSION: u8 = 1;
 
 pub fn group_chat_topic_tag(group_key: &[u8; 32]) -> [u8; TOPIC_TAG_BYTES] {
     let mut hasher = blake3::Hasher::new();
@@ -51,6 +52,7 @@ pub struct CompactGroupChat {
     pub display_name: String,
     pub text: String,
     pub writer_seq: u64,
+    pub logical_time: u64,
     pub timestamp_secs: u64,
 }
 
@@ -60,10 +62,11 @@ impl CompactGroupChat {
         let display_name = bounded_string_bytes("display_name", &self.display_name, 48)?;
         let text = bounded_string_bytes("text", &self.text, 96)?;
 
-        let mut out = Vec::with_capacity(36 + user_id.len() + display_name.len() + text.len());
+        let mut out = Vec::with_capacity(44 + user_id.len() + display_name.len() + text.len());
         out.push(COMPACT_GROUP_CHAT_VERSION);
         out.extend_from_slice(&self.message_uuid);
         out.extend_from_slice(&self.writer_seq.to_be_bytes());
+        out.extend_from_slice(&self.logical_time.to_be_bytes());
         out.extend_from_slice(&self.timestamp_secs.to_be_bytes());
         out.push(user_id.len() as u8);
         out.push(display_name.len() as u8);
@@ -78,21 +81,29 @@ impl CompactGroupChat {
         if raw.len() < 36 {
             anyhow::bail!("compact group chat too short");
         }
-        if raw[0] != COMPACT_GROUP_CHAT_VERSION {
-            anyhow::bail!("unsupported compact group chat version {}", raw[0]);
-        }
         let mut message_uuid = [0u8; 16];
         message_uuid.copy_from_slice(&raw[1..17]);
         let writer_seq = u64::from_be_bytes(raw[17..25].try_into()?);
-        let timestamp_secs = u64::from_be_bytes(raw[25..33].try_into()?);
-        let user_len = raw[33] as usize;
-        let display_len = raw[34] as usize;
-        let text_len = raw[35] as usize;
-        let expected = 36 + user_len + display_len + text_len;
+        let (logical_time, timestamp_secs, lengths_at) = match raw[0] {
+            LEGACY_COMPACT_GROUP_CHAT_VERSION => {
+                (writer_seq, u64::from_be_bytes(raw[25..33].try_into()?), 33)
+            }
+            COMPACT_GROUP_CHAT_VERSION if raw.len() >= 44 => (
+                u64::from_be_bytes(raw[25..33].try_into()?),
+                u64::from_be_bytes(raw[33..41].try_into()?),
+                41,
+            ),
+            version => anyhow::bail!("unsupported compact group chat version {version}"),
+        };
+        let user_len = raw[lengths_at] as usize;
+        let display_len = raw[lengths_at + 1] as usize;
+        let text_len = raw[lengths_at + 2] as usize;
+        let payload_start = lengths_at + 3;
+        let expected = payload_start + user_len + display_len + text_len;
         if raw.len() != expected {
             anyhow::bail!("compact group chat length mismatch");
         }
-        let user_start = 36;
+        let user_start = payload_start;
         let display_start = user_start + user_len;
         let text_start = display_start + display_len;
         Ok(Self {
@@ -101,6 +112,7 @@ impl CompactGroupChat {
             display_name: String::from_utf8(raw[display_start..text_start].to_vec())?,
             text: String::from_utf8(raw[text_start..].to_vec())?,
             writer_seq,
+            logical_time,
             timestamp_secs,
         })
     }
@@ -833,11 +845,22 @@ mod tests {
             display_name: "Alice".to_string(),
             text: "meet left of the main stage".to_string(),
             writer_seq: 42,
+            logical_time: 99,
             timestamp_secs: 123456,
         };
         let encoded = chat.encode().unwrap();
         assert!(encoded.len() < 160);
         assert_eq!(CompactGroupChat::decode(&encoded).unwrap(), chat);
+
+        let mut legacy = vec![LEGACY_COMPACT_GROUP_CHAT_VERSION];
+        legacy.extend_from_slice(&[2u8; 16]);
+        legacy.extend_from_slice(&7u64.to_be_bytes());
+        legacy.extend_from_slice(&123u64.to_be_bytes());
+        legacy.extend_from_slice(&[1, 1, 2]);
+        legacy.extend_from_slice(b"uNhi");
+        let decoded_legacy = CompactGroupChat::decode(&legacy).unwrap();
+        assert_eq!(decoded_legacy.writer_seq, 7);
+        assert_eq!(decoded_legacy.logical_time, 7);
     }
 
     #[test]
@@ -1006,11 +1029,9 @@ mod tests {
             payload_variant: Some(from_radio::PayloadVariant::Packet(packet)),
         }
         .encode_to_vec();
-        assert!(
-            decode_from_radio_private_app(&from_radio)
-                .unwrap()
-                .is_none()
-        );
+        assert!(decode_from_radio_private_app(&from_radio)
+            .unwrap()
+            .is_none());
     }
 
     #[test]

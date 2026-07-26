@@ -66,13 +66,26 @@ Meshtastic group-chat send/apply currently proves a debug path. Production behav
 - restart-safe outbound retries;
 - deduplication across WebSocket, iroh, BLE, Wi-Fi, and Meshtastic.
 
-## P1: append-log ordering relies on wall time
+## P1: append-log ordering is clock-safe
 
 **Tracking:** `offbeat-t6a.11`
 
-Wall-clock timestamps are suitable for display but not authoritative distributed ordering. Offline peers may have skewed clocks, causing unstable order and pagination.
+Chat now uses `(lamport_time, writer_key, writer_sequence, message_id)` for
+stable authoritative order; wall-clock timestamps are display-only. Local
+sequence/time allocation and persistence are atomic, incoming messages advance
+the persisted per-topic clock, legacy rows migrate from writer sequence, and
+history pagination uses the same indexed tuple. Catch-up filters in bounded SQL
+and serves oldest missing entries first. HWM entries retain an ID-plus-Lamport
+head commitment so equal-sequence conflicts are discoverable without starving
+later pages.
+Legacy protobuf and Meshtastic v1 messages derive logical time from writer
+sequence; ID-plus-Lamport head commitments allow a later authoritative duplicate
+to repair that fallback. Legacy zero/terminal counters migrate to bounded stable
+synthetic sequences.
 
-Use a deterministic causal tuple, such as hybrid logical time plus writer key and writer sequence. Migrate DB indexes and test adversarial skew.
+Remaining public/group chat delivery work is tracked by `offbeat-t6a.4` and
+`offbeat-t6a.9`; the trust-layer equivocation proof/quarantine state defined in
+`auth-protocol.md` ships with public chat.
 
 ## P1: offline public-message trust policy is accepted; implementation remains
 

@@ -10,7 +10,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file offbeat/v1/types.proto.
  */
 export const file_offbeat_v1_types: GenFile = /*@__PURE__*/
-  fileDesc("ChZvZmZiZWF0L3YxL3R5cGVzLnByb3RvEgpvZmZiZWF0LnYxIkEKDFNpZ25lZFVwZGF0ZRIOCgZ1cGRhdGUYASABKAwSDgoGYXV0aG9yGAIgASgJEhEKCXNpZ25hdHVyZRgDIAEoDCKoAQoLQ2hhdE1lc3NhZ2USCgoCaWQYASABKAkSDwoHdXNlcl9pZBgCIAEoCRIUCgxkaXNwbGF5X25hbWUYAyABKAkSDAoEdGV4dBgEIAEoCRINCgV0b3BpYxgFIAEoCRIVCghzdGFnZV9pZBgGIAEoCUgAiAEBEhEKCXRpbWVzdGFtcBgHIAEoCRISCgp3cml0ZXJfc2VxGAggASgEQgsKCV9zdGFnZV9pZGIGcHJvdG8z");
+  fileDesc("ChZvZmZiZWF0L3YxL3R5cGVzLnByb3RvEgpvZmZiZWF0LnYxIkEKDFNpZ25lZFVwZGF0ZRIOCgZ1cGRhdGUYASABKAwSDgoGYXV0aG9yGAIgASgJEhEKCXNpZ25hdHVyZRgDIAEoDCK+AQoLQ2hhdE1lc3NhZ2USCgoCaWQYASABKAkSDwoHdXNlcl9pZBgCIAEoCRIUCgxkaXNwbGF5X25hbWUYAyABKAkSDAoEdGV4dBgEIAEoCRINCgV0b3BpYxgFIAEoCRIVCghzdGFnZV9pZBgGIAEoCUgAiAEBEhEKCXRpbWVzdGFtcBgHIAEoCRISCgp3cml0ZXJfc2VxGAggASgEEhQKDGxvZ2ljYWxfdGltZRgJIAEoBEILCglfc3RhZ2VfaWRiBnByb3RvMw");
 
 /**
  * @generated from message offbeat.v1.SignedUpdate
@@ -78,7 +78,7 @@ export type ChatMessage = Message<"offbeat.v1.ChatMessage"> & {
   stageId?: string | undefined;
 
   /**
-   * ISO 8601
+   * ISO 8601 display metadata only
    *
    * @generated from field: string timestamp = 7;
    */
@@ -88,6 +88,13 @@ export type ChatMessage = Message<"offbeat.v1.ChatMessage"> & {
    * @generated from field: uint64 writer_seq = 8;
    */
   writerSeq: bigint;
+
+  /**
+   * per-topic Lamport clock; authoritative order
+   *
+   * @generated from field: uint64 logical_time = 9;
+   */
+  logicalTime: bigint;
 };
 
 /**

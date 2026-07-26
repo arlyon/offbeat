@@ -7,16 +7,80 @@ import {
 	type RelayClientMessage,
 	RelayClientMessageSchema,
 	RelayServerMessageSchema,
+	type ChatMessage as WireChatMessage,
 } from "@offbeat/protocol";
 import * as Y from "yjs";
 import { generateKeypair, sign, signFestivalUpdate, verify } from "./signing";
 
 const RELAY_ACK_CAPABILITY_TOPIC = "__offbeat/relay-ack/v1";
+const MAX_CHAT_CATCHUP = 100;
+const MAX_CHAT_STATE_WRITERS = 4096;
+const MAX_CHAT_MESSAGE_BYTES = 64 * 1024;
+const MAX_CHAT_CATCHUP_BYTES = 512 * 1024;
+const MAX_SEQUENCE_CATCHUP = 100;
+const MAX_SEQUENCE_CATCHUP_BYTES = 1024 * 1024;
+const MAX_CLIENT_FRAME_BYTES = 512 * 1024;
+const MAX_REMOTE_LAMPORT_ADVANCE = 1_000_000n;
+const EQUIVOCATED_HEAD_ID = "__offbeat/equivocated__";
 
 interface Session {
 	topics: Set<string>;
 	authenticated: boolean;
 	publicKey: string | null;
+}
+
+interface ChatMetadata {
+	writerId: string;
+	writerSeq: number;
+	messageId: string;
+	logicalTime: number;
+}
+
+interface LegacyPublicRow {
+	seq: number;
+	topic: string;
+	message: ArrayBuffer;
+}
+
+type ChatValidation = { metadata: ChatMetadata } | { error: string; code: ErrorCode };
+
+function checkStableChatRepair(stored: ArrayBuffer, incoming: WireChatMessage) {
+	const envelope = fromBinary(GossipEnvelopeSchema, new Uint8Array(stored));
+	const current = envelope.payload.case === "chat" ? envelope.payload.value : undefined;
+	const immutableFieldsMatch =
+		current !== undefined &&
+		current.id === incoming.id &&
+		current.userId === incoming.userId &&
+		current.writerSeq === incoming.writerSeq &&
+		current.displayName === incoming.displayName &&
+		current.text === incoming.text &&
+		current.topic === incoming.topic &&
+		current.stageId === incoming.stageId &&
+		current.timestamp === incoming.timestamp;
+	const repairsFallback = current?.logicalTime === 0n && incoming.logicalTime > 0n;
+	const retriesFallback =
+		current !== undefined && current.logicalTime > 0n && incoming.logicalTime === 0n;
+	return {
+		envelope,
+		repairsFallback,
+		valid:
+			immutableFieldsMatch &&
+			(current.logicalTime === incoming.logicalTime || repairsFallback || retriesFallback),
+	};
+}
+
+function isPublicChatTopic(topic: string, festivalId: string | null) {
+	return festivalId !== null && topic.startsWith(`festival/${festivalId}/chat/`);
+}
+
+function committedLogicalTime(commitment: string) {
+	const separator = commitment.lastIndexOf("@");
+	if (separator < 0) return 0n;
+	try {
+		return BigInt(commitment.slice(separator + 1));
+	} catch {
+		return 0n;
+	}
 }
 
 export class FestivalDO extends DurableObject {
@@ -53,11 +117,23 @@ export class FestivalDO extends DurableObject {
 				seq INTEGER PRIMARY KEY AUTOINCREMENT,
 				topic TEXT NOT NULL,
 				message BLOB NOT NULL,
-				timestamp TEXT NOT NULL DEFAULT (datetime('now'))
+				timestamp TEXT NOT NULL DEFAULT (datetime('now')),
+				writer_id TEXT,
+				writer_seq INTEGER,
+				message_id TEXT,
+				logical_time INTEGER
 			);
 
 			CREATE INDEX IF NOT EXISTS idx_public_gossip_topic_seq
 				ON public_gossip_log(topic, seq);
+
+			CREATE TABLE IF NOT EXISTS chat_catchup_heads (
+				request_id TEXT NOT NULL,
+				writer_id TEXT NOT NULL,
+				writer_seq INTEGER NOT NULL,
+				head_id TEXT NOT NULL,
+				PRIMARY KEY(request_id, writer_id)
+			);
 
 			CREATE TABLE IF NOT EXISTS group_gossip_log (
 				seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -112,6 +188,117 @@ export class FestivalDO extends DurableObject {
 
 			DROP TABLE IF EXISTS gossip_log;
 		`);
+		this.#migratePublicChatMetadata();
+	}
+
+	#migratePublicChatMetadata() {
+		const columns = new Set(
+			(this.sql.exec("PRAGMA table_info(public_gossip_log)").toArray() as { name: string }[]).map(
+				(column) => column.name,
+			),
+		);
+		if (!columns.has("writer_id")) {
+			this.sql.exec("ALTER TABLE public_gossip_log ADD COLUMN writer_id TEXT");
+		}
+		if (!columns.has("writer_seq")) {
+			this.sql.exec("ALTER TABLE public_gossip_log ADD COLUMN writer_seq INTEGER");
+		}
+		if (!columns.has("message_id")) {
+			this.sql.exec("ALTER TABLE public_gossip_log ADD COLUMN message_id TEXT");
+		}
+		if (!columns.has("logical_time")) {
+			this.sql.exec("ALTER TABLE public_gossip_log ADD COLUMN logical_time INTEGER");
+		}
+		this.sql.exec(
+			"CREATE INDEX IF NOT EXISTS idx_public_chat_order ON public_gossip_log(topic, logical_time, writer_id, writer_seq, message_id)",
+		);
+
+		const legacy = this.sql
+			.exec(
+				"SELECT seq, topic, message FROM public_gossip_log WHERE writer_id IS NULL ORDER BY seq",
+			)
+			.toArray() as unknown as LegacyPublicRow[];
+		const writerMax = this.#collectLegacyWriterMax(legacy);
+		for (const row of legacy) this.#migrateLegacyPublicChat(row, writerMax);
+		this.sql.exec(`
+			DELETE FROM public_gossip_log AS stale
+			WHERE stale.message_id IS NOT NULL AND EXISTS (
+				SELECT 1 FROM public_gossip_log AS preferred
+				WHERE preferred.topic = stale.topic
+				  AND preferred.message_id = stale.message_id
+				  AND (
+					preferred.logical_time > stale.logical_time OR
+					(preferred.logical_time = stale.logical_time AND preferred.seq > stale.seq)
+				  )
+			);
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_public_chat_message_id
+				ON public_gossip_log(topic, message_id) WHERE message_id IS NOT NULL;
+		`);
+	}
+
+	#decodeLegacyPublicChat(row: LegacyPublicRow) {
+		try {
+			const envelope = fromBinary(GossipEnvelopeSchema, new Uint8Array(row.message));
+			if (envelope.payload.case !== "chat" || envelope.payload.value.topic !== row.topic) {
+				return undefined;
+			}
+			return { envelope, chat: envelope.payload.value };
+		} catch {
+			return undefined;
+		}
+	}
+
+	#collectLegacyWriterMax(rows: LegacyPublicRow[]) {
+		const writerMax = new Map<string, bigint>();
+		for (const row of rows) {
+			const decoded = this.#decodeLegacyPublicChat(row);
+			if (!decoded) continue;
+			const { chat } = decoded;
+			if (chat.writerSeq === 0n || chat.writerSeq > MAX_REMOTE_LAMPORT_ADVANCE) continue;
+			const key = `${row.topic}\u0000${chat.userId}`;
+			const current = writerMax.get(key) ?? 0n;
+			if (chat.writerSeq > current) writerMax.set(key, chat.writerSeq);
+		}
+		return writerMax;
+	}
+
+	#migrateLegacyPublicChat(row: LegacyPublicRow, writerMax: Map<string, bigint>) {
+		const decoded = this.#decodeLegacyPublicChat(row);
+		if (!decoded) return;
+		const { envelope, chat } = decoded;
+		if (chat.writerSeq === 0n) {
+			const key = `${row.topic}\u0000${chat.userId}`;
+			chat.writerSeq = (writerMax.get(key) ?? 0n) + 1n;
+			writerMax.set(key, chat.writerSeq);
+			if (chat.logicalTime === 0n) chat.logicalTime = chat.writerSeq;
+		}
+		const logicalTime = chat.logicalTime === 0n ? chat.writerSeq : chat.logicalTime;
+		if (
+			chat.writerSeq > BigInt(Number.MAX_SAFE_INTEGER) ||
+			logicalTime > BigInt(Number.MAX_SAFE_INTEGER)
+		) {
+			return;
+		}
+		const currentLogicalTime = BigInt(
+			(
+				this.sql
+					.exec(
+						"SELECT COALESCE(MAX(logical_time), 0) AS value FROM public_gossip_log WHERE topic = ?",
+						row.topic,
+					)
+					.one() as { value: number }
+			).value,
+		);
+		if (logicalTime > currentLogicalTime + MAX_REMOTE_LAMPORT_ADVANCE) return;
+		this.sql.exec(
+			"UPDATE public_gossip_log SET message = ?, writer_id = ?, writer_seq = ?, message_id = ?, logical_time = ? WHERE seq = ?",
+			toBinary(GossipEnvelopeSchema, envelope),
+			chat.userId,
+			Number(chat.writerSeq),
+			chat.id,
+			Number(logicalTime),
+			row.seq,
+		);
 	}
 
 	/** Load the public state doc from yrs_docs into memory at boot. */
@@ -340,25 +527,95 @@ export class FestivalDO extends DurableObject {
 		return now >= this.#opensAt && now <= this.#closesAt;
 	}
 
+	#validatePublicChat(topic: string, chat: WireChatMessage, session: Session): ChatValidation {
+		const expectedPrefix = session.publicKey?.slice(0, 16);
+		if (chat.topic !== topic || !topic.startsWith(`festival/${this.#festivalId}/chat/`)) {
+			return { error: "Chat topic mismatch", code: ErrorCode.MALFORMED };
+		}
+		if (chat.userId !== session.publicKey && chat.userId !== expectedPrefix) {
+			return { error: "Chat writer does not match session", code: ErrorCode.UNAUTHORIZED };
+		}
+		const logicalTime = chat.logicalTime === 0n ? chat.writerSeq : chat.logicalTime;
+		if (
+			chat.writerSeq === 0n ||
+			chat.writerSeq > BigInt(Number.MAX_SAFE_INTEGER) ||
+			logicalTime > BigInt(Number.MAX_SAFE_INTEGER)
+		) {
+			return { error: "Chat order exceeds relay range", code: ErrorCode.MALFORMED };
+		}
+		const currentWriterSequence = BigInt(
+			(
+				this.sql
+					.exec(
+						"SELECT COALESCE(MAX(writer_seq), 0) AS value FROM public_gossip_log WHERE topic = ? AND writer_id = ?",
+						topic,
+						chat.userId,
+					)
+					.one() as { value: number }
+			).value,
+		);
+		if (chat.writerSeq > currentWriterSequence + MAX_REMOTE_LAMPORT_ADVANCE) {
+			return { error: "Chat writer sequence advance is too large", code: ErrorCode.MALFORMED };
+		}
+		const currentLogicalTime = BigInt(
+			(
+				this.sql
+					.exec(
+						"SELECT COALESCE(MAX(logical_time), 0) AS value FROM public_gossip_log WHERE topic = ?",
+						topic,
+					)
+					.one() as { value: number }
+			).value,
+		);
+		if (logicalTime > currentLogicalTime + MAX_REMOTE_LAMPORT_ADVANCE) {
+			return { error: "Chat Lamport advance is too large", code: ErrorCode.MALFORMED };
+		}
+		return {
+			metadata: {
+				writerId: chat.userId,
+				writerSeq: Number(chat.writerSeq),
+				messageId: chat.id,
+				logicalTime: Number(logicalTime),
+			},
+		};
+	}
+
 	#sendCatchup(ws: WebSocket, topic: string, sinceSeq: bigint) {
+		if (sinceSeq > BigInt(Number.MAX_SAFE_INTEGER)) {
+			this.#sendError(ws, "Catch-up sequence exceeds relay range", ErrorCode.MALFORMED);
+			return;
+		}
+		if (isPublicChatTopic(topic, this.#festivalId)) {
+			this.#sendError(ws, "Public chat requires committed-head catch-up", ErrorCode.MALFORMED);
+			return;
+		}
 		const rows = (
 			topic.startsWith("festival/")
 				? this.sql.exec(
-						"SELECT seq, message, timestamp FROM public_gossip_log WHERE topic = ? AND seq > ? ORDER BY seq",
+						"SELECT seq, message, timestamp FROM public_gossip_log WHERE topic = ? AND seq > ? ORDER BY seq LIMIT ?",
 						topic,
 						Number(sinceSeq),
+						MAX_SEQUENCE_CATCHUP,
 					)
 				: this.sql.exec(
-						"SELECT seq, message, timestamp FROM group_gossip_log WHERE group_id = ? AND seq > ? ORDER BY seq",
+						"SELECT seq, message, timestamp FROM group_gossip_log WHERE group_id = ? AND seq > ? ORDER BY seq LIMIT ?",
 						topic,
 						Number(sinceSeq),
+						MAX_SEQUENCE_CATCHUP,
 					)
 		).toArray() as { seq: number; message: ArrayBuffer; timestamp: string }[];
-		const messages = rows.map((row) => ({
-			seq: BigInt(row.seq),
-			message: fromBinary(GossipEnvelopeSchema, new Uint8Array(row.message)),
-			timestamp: row.timestamp,
-		}));
+		const messages = [];
+		let encodedBytes = 0;
+		const payloadBudget = MAX_SEQUENCE_CATCHUP_BYTES - 8 * 1024;
+		for (const row of rows) {
+			encodedBytes += row.message.byteLength;
+			if (encodedBytes > payloadBudget) break;
+			messages.push({
+				seq: BigInt(row.seq),
+				message: fromBinary(GossipEnvelopeSchema, new Uint8Array(row.message)),
+				timestamp: row.timestamp,
+			});
+		}
 
 		console.log(
 			`[ws] catchup: lane=${topic.startsWith("group/") ? "group" : "public"} sending=${messages.length}`,
@@ -368,44 +625,104 @@ export class FestivalDO extends DurableObject {
 		});
 	}
 
-	#sendChatCatchup(ws: WebSocket, topic: string, chatSv: Record<string, bigint>, limit: number) {
+	#sendChatCatchup(
+		ws: WebSocket,
+		topic: string,
+		chatSv: Record<string, bigint>,
+		headIds: Record<string, string>,
+		requestedLimit: number,
+	) {
+		const limit = Math.max(1, Math.min(requestedLimit, MAX_CHAT_CATCHUP));
+		const heads = Object.entries(chatSv);
+		if (
+			heads.length > MAX_CHAT_STATE_WRITERS ||
+			Object.keys(headIds).length > MAX_CHAT_STATE_WRITERS ||
+			heads.some(([writerId]) => writerId.length > 128 || (headIds[writerId]?.length ?? 0) > 512)
+		) {
+			this.#sendError(ws, "chat state vector is too large", ErrorCode.MALFORMED);
+			return;
+		}
+		if (heads.some(([, writerSeq]) => writerSeq > BigInt(Number.MAX_SAFE_INTEGER))) {
+			this.#sendError(ws, "chat writer sequence exceeds relay range", ErrorCode.MALFORMED);
+			return;
+		}
+		const logicalFloor = Object.values(headIds).reduce((maximum, commitment) => {
+			const logicalTime = committedLogicalTime(commitment);
+			return logicalTime > maximum ? logicalTime : maximum;
+		}, 0n);
+		const logicalCeiling = logicalFloor + MAX_REMOTE_LAMPORT_ADVANCE;
+		if (logicalCeiling > BigInt(Number.MAX_SAFE_INTEGER)) {
+			this.#sendError(ws, "chat logical time exceeds relay range", ErrorCode.MALFORMED);
+			return;
+		}
 		if (!topic.startsWith("festival/")) {
 			const rows = this.sql
 				.exec(
-					"SELECT message FROM group_gossip_log WHERE group_id = ? ORDER BY seq DESC LIMIT ?",
+					"SELECT message FROM group_gossip_log WHERE group_id = ? ORDER BY seq ASC LIMIT ?",
 					topic,
 					limit,
 				)
 				.toArray() as { message: ArrayBuffer }[];
-			const messages = rows.map((row) =>
-				fromBinary(GossipEnvelopeSchema, new Uint8Array(row.message)),
-			);
+			const messages = this.#decodeChatRowsWithinBudget(rows);
 			this.#sendServerMsg(ws, {
 				msg: { case: "chatDiff", value: { topic, messages } },
 			});
 			return;
 		}
 
-		const rows = this.sql
-			.exec(
-				"SELECT message FROM public_gossip_log WHERE topic = ? ORDER BY seq DESC LIMIT ?",
-				topic,
-				limit * 10,
-			)
-			.toArray() as { message: ArrayBuffer }[];
-		const messages = [];
-		for (const row of rows) {
-			const envelope = fromBinary(GossipEnvelopeSchema, new Uint8Array(row.message));
-			if (envelope.payload.case === "chat") {
-				const chat = envelope.payload.value;
-				const knownSeq = chatSv[chat.userId];
-				if (knownSeq === undefined || chat.writerSeq > knownSeq) messages.push(envelope);
+		const requestId = crypto.randomUUID();
+		let rows: { message: ArrayBuffer }[] = [];
+		this.ctx.storage.transactionSync(() => {
+			for (const [writerId, writerSeq] of heads) {
+				this.sql.exec(
+					"INSERT INTO chat_catchup_heads(request_id, writer_id, writer_seq, head_id) VALUES (?, ?, ?, ?)",
+					requestId,
+					writerId,
+					Number(writerSeq),
+					headIds[writerId] ?? "",
+				);
 			}
-			if (messages.length >= limit) break;
-		}
+			rows = this.sql
+				.exec(
+					`SELECT p.message FROM public_gossip_log p
+					 LEFT JOIN chat_catchup_heads h
+					   ON h.request_id = ? AND h.writer_id = p.writer_id
+					 WHERE p.topic = ? AND p.writer_id IS NOT NULL
+					   AND p.logical_time <= ?
+					   AND p.writer_seq <= COALESCE(h.writer_seq, 0) + ?
+					   AND (
+					   h.writer_id IS NULL OR p.writer_seq > h.writer_seq OR
+					   (p.writer_seq = h.writer_seq AND h.head_id <> '' AND h.head_id <> ?
+					    AND (p.message_id || '@' || p.logical_time) <> h.head_id)
+					 )
+					 ORDER BY p.logical_time ASC, p.writer_id ASC, p.writer_seq ASC, p.message_id ASC
+					 LIMIT ?`,
+					requestId,
+					topic,
+					Number(logicalCeiling),
+					Number(MAX_REMOTE_LAMPORT_ADVANCE),
+					EQUIVOCATED_HEAD_ID,
+					limit,
+				)
+				.toArray() as { message: ArrayBuffer }[];
+			this.sql.exec("DELETE FROM chat_catchup_heads WHERE request_id = ?", requestId);
+		});
+		const messages = this.#decodeChatRowsWithinBudget(rows);
 		this.#sendServerMsg(ws, {
 			msg: { case: "chatDiff", value: { topic, messages } },
 		});
+	}
+
+	#decodeChatRowsWithinBudget(rows: { message: ArrayBuffer }[]) {
+		const messages = [];
+		let encodedBytes = 0;
+		const payloadBudget = MAX_CHAT_CATCHUP_BYTES - 8 * 1024;
+		for (const row of rows) {
+			encodedBytes += row.message.byteLength;
+			if (encodedBytes > payloadBudget) break;
+			messages.push(fromBinary(GossipEnvelopeSchema, new Uint8Array(row.message)));
+		}
+		return messages;
 	}
 
 	/** Send a binary RelayServerMessage to a WebSocket. */
@@ -780,10 +1097,6 @@ export class FestivalDO extends DurableObject {
 			});
 		}
 
-		// Store-and-forward: replay last N public chat messages
-		// so late joiners get caught up immediately on connect.
-		this.#replayRecentMessages(server);
-
 		return new Response(null, { status: 101, webSocket: client });
 	}
 
@@ -795,6 +1108,10 @@ export class FestivalDO extends DurableObject {
 		}
 
 		const raw = new Uint8Array(message);
+		if (raw.byteLength > MAX_CLIENT_FRAME_BYTES) {
+			this.#sendError(ws, "Client frame exceeds relay size limit", ErrorCode.MALFORMED);
+			return;
+		}
 		console.log(`[ws] recv binary: ${raw.byteLength} bytes`);
 
 		let parsed: RelayClientMessage;
@@ -831,6 +1148,7 @@ export class FestivalDO extends DurableObject {
 		}
 
 		const { msg } = parsed;
+		let stableChatCheck: ReturnType<typeof checkStableChatRepair> | undefined;
 
 		switch (msg.case) {
 			case "auth": {
@@ -892,12 +1210,7 @@ export class FestivalDO extends DurableObject {
 			}
 
 			case "subscribe": {
-				// Track which topics are genuinely new for this session
-				const newTopics: string[] = [];
 				for (const topic of msg.value.topics) {
-					if (!sess.topics.has(topic)) {
-						newTopics.push(topic);
-					}
 					sess.topics.add(topic);
 				}
 				ws.serializeAttachment(
@@ -911,10 +1224,6 @@ export class FestivalDO extends DurableObject {
 				this.#sendServerMsg(ws, {
 					msg: { case: "subscribed", value: { topics: [...sess.topics] } },
 				});
-				// Replay recent messages for newly subscribed topics
-				if (newTopics.length > 0) {
-					this.#replayTopicMessages(ws, newTopics);
-				}
 				break;
 			}
 
@@ -954,9 +1263,53 @@ export class FestivalDO extends DurableObject {
 					return;
 				}
 
+				const envelopeBytes = toBinary(GossipEnvelopeSchema, envelope);
+				if (
+					(envelope.payload.case === "chat" || envelope.payload.case === "encryptedChat") &&
+					envelopeBytes.byteLength > MAX_CHAT_MESSAGE_BYTES
+				) {
+					this.#sendError(ws, "Chat message exceeds relay size limit", ErrorCode.MALFORMED);
+					break;
+				}
+				let chatMetadata: ChatMetadata | undefined;
+				let chatValidation: ChatValidation | undefined;
+				if (envelope.payload.case === "chat") {
+					chatValidation = this.#validatePublicChat(topic, envelope.payload.value, sess);
+					if ("error" in chatValidation) {
+						this.#sendError(ws, chatValidation.error, chatValidation.code);
+						break;
+					}
+					chatMetadata = chatValidation.metadata;
+				}
+				const existingChat = chatMetadata
+					? ((
+							this.sql
+								.exec(
+									"SELECT seq, writer_id, writer_seq, logical_time, message FROM public_gossip_log WHERE topic = ? AND message_id = ? LIMIT 1",
+									topic,
+									chatMetadata.messageId,
+								)
+								.toArray() as {
+								seq: number;
+								writer_id: string;
+								writer_seq: number;
+								logical_time: number;
+								message: ArrayBuffer;
+							}[]
+						)[0] ?? undefined)
+					: undefined;
+				let broadcastEnvelope = envelope;
+				if (existingChat && chatMetadata && envelope.payload.case === "chat") {
+					stableChatCheck = checkStableChatRepair(existingChat.message, envelope.payload.value);
+					if (!stableChatCheck.valid) {
+						this.#sendError(ws, "Chat message ID collision", ErrorCode.MALFORMED);
+						break;
+					}
+					if (!stableChatCheck.repairsFallback) broadcastEnvelope = stableChatCheck.envelope;
+				}
+
 				// Receipt lookup, lane writes, and receipt creation form one atomic
 				// storage transaction. Exact retries reuse the durable sequence.
-				const envelopeBytes = toBinary(GossipEnvelopeSchema, envelope);
 				let seq = 0;
 				this.ctx.storage.transactionSync(() => {
 					seq =
@@ -971,63 +1324,81 @@ export class FestivalDO extends DurableObject {
 						)[0]?.seq ?? 0;
 					if (seq !== 0) return;
 
-					switch (envelope.payload.case) {
-						case "chat":
-							seq = (
-								this.sql
-									.exec(
-										"INSERT INTO public_gossip_log (topic, message) VALUES (?, ?) RETURNING seq",
-										topic,
-										envelopeBytes,
-									)
-									.one() as { seq: number }
-							).seq;
-							break;
-
-						case "encryptedChat":
-							seq = (
-								this.sql
-									.exec(
-										"INSERT INTO group_gossip_log (group_id, message) VALUES (?, ?) RETURNING seq",
-										topic,
-										envelopeBytes,
-									)
-									.one() as { seq: number }
-							).seq;
-							break;
-
-						case "groupUpdate":
-						case "syncRequest":
-						case "syncResponse":
-						case "syncUpdate":
+					if (existingChat && chatMetadata) {
+						seq = existingChat.seq;
+						if (stableChatCheck?.repairsFallback) {
 							this.sql.exec(
-								"INSERT INTO group_yrs_updates (group_id, update_data) VALUES (?, ?)",
-								topic,
+								"UPDATE public_gossip_log SET message = ?, logical_time = ? WHERE seq = ?",
 								envelopeBytes,
+								chatMetadata.logicalTime,
+								seq,
 							);
-							seq = (
-								this.sql
-									.exec(
-										"INSERT INTO group_gossip_log (group_id, message) VALUES (?, ?) RETURNING seq",
-										topic,
-										envelopeBytes,
-									)
-									.one() as { seq: number }
-							).seq;
-							break;
+						}
+					} else
+						switch (envelope.payload.case) {
+							case "chat":
+								if (!chatMetadata) throw new Error("validated chat metadata missing");
+								seq = (
+									this.sql
+										.exec(
+											`INSERT INTO public_gossip_log
+										 (topic, message, writer_id, writer_seq, message_id, logical_time)
+										 VALUES (?, ?, ?, ?, ?, ?) RETURNING seq`,
+											topic,
+											envelopeBytes,
+											chatMetadata.writerId,
+											chatMetadata.writerSeq,
+											chatMetadata.messageId,
+											chatMetadata.logicalTime,
+										)
+										.one() as { seq: number }
+								).seq;
+								break;
 
-						default:
-							seq = (
-								this.sql
-									.exec(
-										"INSERT INTO public_gossip_log (topic, message) VALUES (?, ?) RETURNING seq",
-										topic,
-										envelopeBytes,
-									)
-									.one() as { seq: number }
-							).seq;
-							break;
-					}
+							case "encryptedChat":
+								seq = (
+									this.sql
+										.exec(
+											"INSERT INTO group_gossip_log (group_id, message) VALUES (?, ?) RETURNING seq",
+											topic,
+											envelopeBytes,
+										)
+										.one() as { seq: number }
+								).seq;
+								break;
+
+							case "groupUpdate":
+							case "syncRequest":
+							case "syncResponse":
+							case "syncUpdate":
+								this.sql.exec(
+									"INSERT INTO group_yrs_updates (group_id, update_data) VALUES (?, ?)",
+									topic,
+									envelopeBytes,
+								);
+								seq = (
+									this.sql
+										.exec(
+											"INSERT INTO group_gossip_log (group_id, message) VALUES (?, ?) RETURNING seq",
+											topic,
+											envelopeBytes,
+										)
+										.one() as { seq: number }
+								).seq;
+								break;
+
+							default:
+								seq = (
+									this.sql
+										.exec(
+											"INSERT INTO public_gossip_log (topic, message) VALUES (?, ?) RETURNING seq",
+											topic,
+											envelopeBytes,
+										)
+										.one() as { seq: number }
+								).seq;
+								break;
+						}
 
 					this.sql.exec(
 						"INSERT INTO relay_receipts (topic, message, seq) VALUES (?, ?, ?)",
@@ -1045,7 +1416,7 @@ export class FestivalDO extends DurableObject {
 						value: {
 							topic,
 							seq: BigInt(seq),
-							message: envelope,
+							message: broadcastEnvelope,
 						},
 					},
 				});
@@ -1097,12 +1468,12 @@ export class FestivalDO extends DurableObject {
 			}
 
 			case "chatCatchup": {
-				const { topic: chatTopic, sv: chatSv, limit: chatLimit } = msg.value;
+				const { topic: chatTopic, sv: chatSv, headIds, limit: chatLimit } = msg.value;
 				if (!chatTopic) {
 					this.#sendError(ws, "chat_catchup requires topic", ErrorCode.MALFORMED);
 					break;
 				}
-				this.#sendChatCatchup(ws, chatTopic, chatSv, chatLimit || 50);
+				this.#sendChatCatchup(ws, chatTopic, chatSv, headIds, chatLimit || 50);
 				break;
 			}
 
@@ -1117,73 +1488,6 @@ export class FestivalDO extends DurableObject {
 
 	webSocketError(ws: WebSocket): void {
 		this.#sessions.delete(ws);
-	}
-
-	// -----------------------------------------------------------------------
-	// Store-and-forward: replay recent public chat on new connection / subscribe
-	// -----------------------------------------------------------------------
-
-	/**
-	 * Replay the last 100 public chat messages (across all topics) to a newly
-	 * connected WebSocket. Festival state uses svExchange, not replay.
-	 */
-	#replayRecentMessages(ws: WebSocket) {
-		const rows = this.sql
-			.exec("SELECT topic, seq, message FROM public_gossip_log ORDER BY seq DESC LIMIT 100")
-			.toArray() as { topic: string; seq: number; message: ArrayBuffer }[];
-
-		if (rows.length === 0) return;
-
-		// Send oldest first (reverse the DESC order)
-		for (let i = rows.length - 1; i >= 0; i--) {
-			const row = rows[i];
-			const envelope = fromBinary(GossipEnvelopeSchema, new Uint8Array(row.message));
-			this.#sendServerMsg(ws, {
-				msg: {
-					case: "gossip",
-					value: {
-						topic: row.topic,
-						seq: BigInt(row.seq),
-						message: envelope,
-					},
-				},
-			});
-		}
-
-		console.log(`[ws] replayed ${rows.length} recent messages to new connection`);
-	}
-
-	/**
-	 * Replay recent public chat messages for specific topics to a WebSocket.
-	 * Called when a client subscribes to new topics.
-	 */
-	#replayTopicMessages(ws: WebSocket, topics: string[]) {
-		if (topics.length === 0) return;
-
-		for (const topic of topics) {
-			const rows = this.sql
-				.exec(
-					"SELECT seq, message FROM public_gossip_log WHERE topic = ? ORDER BY seq DESC LIMIT 100",
-					topic,
-				)
-				.toArray() as { seq: number; message: ArrayBuffer }[];
-
-			// Send oldest first
-			for (let i = rows.length - 1; i >= 0; i--) {
-				const row = rows[i];
-				const envelope = fromBinary(GossipEnvelopeSchema, new Uint8Array(row.message));
-				this.#sendServerMsg(ws, {
-					msg: {
-						case: "gossip",
-						value: {
-							topic,
-							seq: BigInt(row.seq),
-							message: envelope,
-						},
-					},
-				});
-			}
-		}
 	}
 
 	/**

@@ -57,6 +57,58 @@ const MIGRATIONS: &[(u32, &str)] = &[
     CREATE INDEX IF NOT EXISTS idx_pending_group_updates_festival
         ON pending_group_updates(festival_id, id);",
     ),
+    (
+        6,
+        "ALTER TABLE chat_messages
+            ADD COLUMN logical_time INTEGER NOT NULL DEFAULT 0;
+        UPDATE chat_messages
+            SET writer_seq = 0
+            WHERE writer_seq < 0 OR writer_seq > 1000000;
+        WITH writer_max AS (
+            SELECT topic, user_id, COALESCE(MAX(writer_seq), 0) AS max_seq
+            FROM chat_messages
+            GROUP BY topic, user_id
+        ), legacy_rank AS (
+            SELECT c.id,
+                   w.max_seq + ROW_NUMBER() OVER (
+                       PARTITION BY c.topic, c.user_id
+                       ORDER BY c.received_at, c.id
+                   ) AS assigned_seq
+            FROM chat_messages c
+            JOIN writer_max w ON w.topic = c.topic AND w.user_id = c.user_id
+            WHERE c.writer_seq = 0
+        )
+        UPDATE chat_messages
+        SET writer_seq = (
+            SELECT assigned_seq FROM legacy_rank WHERE legacy_rank.id = chat_messages.id
+        )
+        WHERE writer_seq = 0;
+        UPDATE chat_messages SET logical_time = writer_seq;
+        CREATE TABLE chat_topic_clocks (
+            topic TEXT PRIMARY KEY,
+            logical_time INTEGER NOT NULL
+        );
+        INSERT INTO chat_topic_clocks(topic, logical_time)
+            SELECT topic, MAX(logical_time) FROM chat_messages GROUP BY topic;
+        CREATE TABLE chat_writer_sequences (
+            topic TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            writer_seq INTEGER NOT NULL,
+            PRIMARY KEY(topic, user_id)
+        );
+        CREATE TABLE chat_sequence_conflicts (
+            topic TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            writer_seq INTEGER NOT NULL,
+            PRIMARY KEY(topic, user_id, writer_seq)
+        );
+        INSERT INTO chat_writer_sequences(topic, user_id, writer_seq)
+            SELECT topic, user_id, MAX(writer_seq)
+            FROM chat_messages GROUP BY topic, user_id;
+        DROP INDEX IF EXISTS idx_chat_topic_ts;
+        CREATE INDEX idx_chat_topic_order
+            ON chat_messages(topic, logical_time, user_id, writer_seq, id);",
+    ),
 ];
 
 /// Ensure the `_migrations` table exists and apply any pending migrations.
@@ -78,8 +130,10 @@ pub fn apply_migrations(conn: &Connection) -> Result<()> {
         )? > 0;
 
         if !applied {
-            conn.execute_batch(sql)?;
-            conn.execute("INSERT INTO _migrations (version) VALUES (?1)", [version])?;
+            let tx = conn.unchecked_transaction()?;
+            tx.execute_batch(sql)?;
+            tx.execute("INSERT INTO _migrations (version) VALUES (?1)", [version])?;
+            tx.commit()?;
             tracing::info!("applied migration v{version}");
         }
     }
@@ -106,6 +160,109 @@ mod tests {
     }
 
     #[test]
+    fn legacy_chat_rows_seed_lamport_state() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE _migrations (
+                version INTEGER PRIMARY KEY,
+                applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );",
+        )
+        .unwrap();
+        for &(version, sql) in MIGRATIONS.iter().take(5) {
+            conn.execute_batch(sql).unwrap();
+            conn.execute("INSERT INTO _migrations(version) VALUES (?1)", [version])
+                .unwrap();
+        }
+        conn.execute(
+            "INSERT INTO chat_messages
+             (id, topic, user_id, display_name, text, timestamp, writer_seq)
+             VALUES ('legacy', 'festival/f/chat/general', 'alice', 'Alice', 'hi',
+                     '2099-01-01T00:00:00Z', 7)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO chat_messages
+             (id, topic, user_id, display_name, text, timestamp, writer_seq)
+             VALUES ('corrupt', 'festival/f/chat/other', 'mallory', 'Mallory', 'bad',
+                     '1970-01-01T00:00:00Z', -9)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO chat_messages
+             (id, topic, user_id, display_name, text, timestamp, writer_seq)
+             VALUES ('terminal', 'festival/f/chat/terminal', 'mallory', 'Mallory', 'bad',
+                     '1970-01-01T00:00:00Z', 9223372036854775807)",
+            [],
+        )
+        .unwrap();
+        for index in 0..120 {
+            conn.execute(
+                "INSERT INTO chat_messages
+                 (id, topic, user_id, display_name, text, timestamp, writer_seq)
+                 VALUES (?1, 'festival/f/chat/page', 'legacy-writer', 'Legacy', 'old',
+                         '1970-01-01T00:00:00Z', 0)",
+                [format!("page-{index:03}")],
+            )
+            .unwrap();
+        }
+
+        apply_migrations(&conn).unwrap();
+
+        let logical_time: i64 = conn
+            .query_row(
+                "SELECT logical_time FROM chat_messages WHERE id = 'legacy'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let topic_clock: i64 = conn
+            .query_row(
+                "SELECT logical_time FROM chat_topic_clocks
+                 WHERE topic = 'festival/f/chat/general'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let writer_seq: i64 = conn
+            .query_row(
+                "SELECT writer_seq FROM chat_writer_sequences
+                 WHERE topic = 'festival/f/chat/general' AND user_id = 'alice'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!((logical_time, topic_clock, writer_seq), (7, 7, 7));
+        let normalized: (i64, i64) = conn
+            .query_row(
+                "SELECT writer_seq, logical_time FROM chat_messages WHERE id = 'corrupt'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(normalized, (1, 1));
+        let terminal: (i64, i64) = conn
+            .query_row(
+                "SELECT writer_seq, logical_time FROM chat_messages WHERE id = 'terminal'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(terminal, (1, 1));
+        let page_sequences: (i64, i64, i64) = conn
+            .query_row(
+                "SELECT COUNT(*), MIN(writer_seq), MAX(writer_seq)
+                 FROM chat_messages WHERE topic = 'festival/f/chat/page'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(page_sequences, (120, 1, 120));
+    }
+
+    #[test]
     fn test_tables_created() {
         let conn = Connection::open_in_memory().unwrap();
         apply_migrations(&conn).unwrap();
@@ -129,6 +286,9 @@ mod tests {
         assert!(tables.contains(&"festival_peers".to_string()));
         assert!(tables.contains(&"verified_festival_updates".to_string()));
         assert!(tables.contains(&"pending_group_updates".to_string()));
+        assert!(tables.contains(&"chat_topic_clocks".to_string()));
+        assert!(tables.contains(&"chat_writer_sequences".to_string()));
+        assert!(tables.contains(&"chat_sequence_conflicts".to_string()));
         assert!(tables.contains(&"_migrations".to_string()));
     }
 }

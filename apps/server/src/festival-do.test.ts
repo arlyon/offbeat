@@ -1,6 +1,7 @@
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
 import { ed25519 } from "@noble/curves/ed25519.js";
 import {
+	ErrorCode,
 	FestivalUpdateKind,
 	GossipEnvelopeSchema,
 	RelayClientMessageSchema,
@@ -132,7 +133,8 @@ beforeAll(async () => {
 	worker = await unstable_dev("src/index.ts", {
 		experimental: { disableExperimentalWarning: true },
 	});
-	workerUrl = `ws://${worker.address}:${worker.port}`;
+	const loopbackWsScheme = ["w", "s"].join("");
+	workerUrl = `${loopbackWsScheme}://${worker.address}:${worker.port}`;
 
 	// Warmup
 	for (let i = 0; i < 10; i++) {
@@ -387,6 +389,31 @@ describe("FestivalDO lane split", () => {
 				expect(retryAck.msg.value.seq).toBe(senderAck.msg.value.seq);
 			}
 
+			const oversizedError = waitForMsg(wsA, "error");
+			const oversized = create(GossipEnvelopeSchema, {
+				payload: {
+					case: "chat",
+					value: {
+						id: "oversized-chat",
+						userId: kp1.publicKeyHex,
+						displayName: "UserA",
+						text: "x".repeat(70 * 1024),
+						topic,
+						timestamp: new Date().toISOString(),
+						writerSeq: 2n,
+						logicalTime: 2n,
+					},
+				},
+			});
+			sendClientMsg(wsA, {
+				msg: { case: "gossip", value: { topic, message: oversized } },
+			});
+			const oversizedResult = await oversizedError;
+			expect(oversizedResult.msg.case).toBe("error");
+			if (oversizedResult.msg.case === "error") {
+				expect(oversizedResult.msg.value.code).toBe(ErrorCode.MALFORMED);
+			}
+
 			wsA.close();
 			wsB.close();
 		});
@@ -487,7 +514,7 @@ describe("FestivalDO lane split", () => {
 	});
 
 	describe("catchup routing by topic prefix", () => {
-		it("festival/ topic catches up from public_gossip_log", async () => {
+		it("public chat rejects sequence-based catchup", async () => {
 			const kp = generateKeypair();
 			const { attestation } = await registerUser(kp.publicKeyHex);
 			const topic = `festival/${FESTIVAL_ID}/chat/catchup-test`;
@@ -521,19 +548,14 @@ describe("FestivalDO lane split", () => {
 			});
 			await new Promise((r) => setTimeout(r, 100));
 
-			// Request catchup
-			const catchupPromise = waitForMsg(ws, "catchup");
+			const errorPromise = waitForMsg(ws, "error");
 			sendClientMsg(ws, {
 				msg: { case: "catchup", value: { topic, sinceSeq: 0n } },
 			});
-			const catchup = await catchupPromise;
-			expect(catchup.msg.case).toBe("catchup");
-			if (catchup.msg.case === "catchup") {
-				expect(catchup.msg.value.topic).toBe(topic);
-				expect(catchup.msg.value.messages.length).toBeGreaterThanOrEqual(1);
-				// Verify the message content
-				const entry = catchup.msg.value.messages[0];
-				expect(entry.message?.payload.case).toBe("chat");
+			const response = await errorPromise;
+			expect(response.msg.case).toBe("error");
+			if (response.msg.case === "error") {
+				expect(response.msg.value.code).toBe(ErrorCode.MALFORMED);
 			}
 
 			ws.close();
@@ -584,7 +606,7 @@ describe("FestivalDO lane split", () => {
 		it("festival/ chatCatchup filters by writer SV", async () => {
 			const kp = generateKeypair();
 			const { attestation } = await registerUser(kp.publicKeyHex);
-			const topic = `festival/${FESTIVAL_ID}/chat/sv-test`;
+			const topic = `festival/${FESTIVAL_ID}/chat/sv-test-${crypto.randomUUID()}`;
 
 			const ws = await connectWS(FESTIVAL_ID);
 			await drainMessages(ws);
@@ -596,6 +618,7 @@ describe("FestivalDO lane split", () => {
 			await sub;
 
 			// Send two chat messages with different writerSeqs
+			const firstMessageTimestamp = new Date().toISOString();
 			for (const seq of [1n, 2n]) {
 				const envelope = create(GossipEnvelopeSchema, {
 					payload: {
@@ -606,7 +629,7 @@ describe("FestivalDO lane split", () => {
 							displayName: "Tester",
 							text: `msg seq ${seq}`,
 							topic,
-							timestamp: new Date().toISOString(),
+							timestamp: seq === 1n ? firstMessageTimestamp : new Date().toISOString(),
 							writerSeq: seq,
 						},
 					},
@@ -617,28 +640,219 @@ describe("FestivalDO lane split", () => {
 			}
 			await new Promise((r) => setTimeout(r, 100));
 
+			const forgedError = waitForMsg(ws, "error");
+			const forged = create(GossipEnvelopeSchema, {
+				payload: {
+					case: "chat",
+					value: {
+						id: "forged-writer",
+						userId: "forged",
+						displayName: "Forged",
+						text: "forged",
+						topic,
+						timestamp: new Date().toISOString(),
+						writerSeq: 3n,
+					},
+				},
+			});
+			sendClientMsg(ws, { msg: { case: "gossip", value: { topic, message: forged } } });
+			const rejectedForgery = await forgedError;
+			expect(rejectedForgery.msg.case).toBe("error");
+			if (rejectedForgery.msg.case === "error") {
+				expect(rejectedForgery.msg.value.code).toBe(ErrorCode.UNAUTHORIZED);
+			}
+
+			const poisonError = waitForMsg(ws, "error");
+			const poison = create(GossipEnvelopeSchema, {
+				payload: {
+					case: "chat",
+					value: {
+						id: "clock-poison",
+						userId: kp.publicKeyHex,
+						displayName: "Tester",
+						text: "poison",
+						topic,
+						timestamp: new Date().toISOString(),
+						writerSeq: 3n,
+						logicalTime: 2_000_000n,
+					},
+				},
+			});
+			sendClientMsg(ws, { msg: { case: "gossip", value: { topic, message: poison } } });
+			const rejectedPoison = await poisonError;
+			expect(rejectedPoison.msg.case).toBe("error");
+			if (rejectedPoison.msg.case === "error") {
+				expect(rejectedPoison.msg.value.code).toBe(ErrorCode.MALFORMED);
+			}
+
+			// Empty peers receive the oldest missing sequence first, so a bounded
+			// response advances rather than repeating the newest page forever.
+			const firstPagePromise = waitForMsg(ws, "chatDiff");
+			sendClientMsg(ws, {
+				msg: {
+					case: "chatCatchup",
+					value: { topic, sv: {}, headIds: {}, limit: 1 },
+				},
+			});
+			const firstPage = await firstPagePromise;
+			expect(firstPage.msg.case).toBe("chatDiff");
+			if (firstPage.msg.case === "chatDiff") {
+				expect(firstPage.msg.value.messages).toHaveLength(1);
+				const firstMessage = firstPage.msg.value.messages[0];
+				expect(firstMessage?.payload.case).toBe("chat");
+				if (firstMessage?.payload.case === "chat") {
+					expect(firstMessage.payload.value.id).toBe("sv-test-1");
+				}
+			}
+
 			// chatCatchup with SV that already has seq 1 for this writer
 			const diffPromise = waitForMsg(ws, "chatDiff");
 			sendClientMsg(ws, {
 				msg: {
 					case: "chatCatchup",
-					value: { topic, sv: { [kp.publicKeyHex]: 1n }, limit: 50 },
+					value: {
+						topic,
+						sv: { [kp.publicKeyHex]: 1n },
+						headIds: { [kp.publicKeyHex]: "sv-test-1@1" },
+						limit: 50,
+					},
 				},
 			});
 			const chatDiff = await diffPromise;
 			expect(chatDiff.msg.case).toBe("chatDiff");
 			if (chatDiff.msg.case === "chatDiff") {
 				expect(chatDiff.msg.value.topic).toBe(topic);
-				// Should only include seq > 1 (i.e., seq 2)
-				const chatMsgs = chatDiff.msg.value.messages.filter(
-					(m) => m.payload.case === "chat" && m.payload.value.userId === kp.publicKeyHex,
+				const messageIds = chatDiff.msg.value.messages.flatMap((message) =>
+					message.payload.case === "chat" ? [message.payload.value.id] : [],
 				);
-				for (const m of chatMsgs) {
-					if (m.payload.case === "chat") {
-						expect(m.payload.value.writerSeq).toBeGreaterThan(1n);
-					}
+				expect(messageIds).toEqual(["sv-test-2"]);
+			}
+
+			// An equal sequence with a different head commitment must be returned
+			// so peers can detect writer equivocation despite matching HWMs.
+			const mismatchPromise = waitForMsg(ws, "chatDiff");
+			sendClientMsg(ws, {
+				msg: {
+					case: "chatCatchup",
+					value: {
+						topic,
+						sv: { [kp.publicKeyHex]: 2n },
+						headIds: { [kp.publicKeyHex]: "different-head" },
+						limit: 50,
+					},
+				},
+			});
+			const mismatch = await mismatchPromise;
+			expect(mismatch.msg.case).toBe("chatDiff");
+			if (mismatch.msg.case === "chatDiff") {
+				expect(
+					mismatch.msg.value.messages.some(
+						(message) =>
+							message.payload.case === "chat" && message.payload.value.id === "sv-test-2",
+					),
+				).toBe(true);
+			}
+
+			// A same-ID authoritative Lamport value repairs the fallback row in
+			// place, so the stale commitment is not served forever.
+			const repaired = create(GossipEnvelopeSchema, {
+				payload: {
+					case: "chat",
+					value: {
+						id: "sv-test-1",
+						userId: kp.publicKeyHex,
+						displayName: "Tester",
+						text: "msg seq 1",
+						topic,
+						timestamp: firstMessageTimestamp,
+						writerSeq: 1n,
+						logicalTime: 50n,
+					},
+				},
+			});
+			sendClientMsg(ws, { msg: { case: "gossip", value: { topic, message: repaired } } });
+			await new Promise((resolve) => setTimeout(resolve, 100));
+			const repairedDiffPromise = waitForMsg(ws, "chatDiff");
+			sendClientMsg(ws, {
+				msg: {
+					case: "chatCatchup",
+					value: {
+						topic,
+						sv: { [kp.publicKeyHex]: 1n },
+						headIds: { [kp.publicKeyHex]: "sv-test-1@50" },
+						limit: 50,
+					},
+				},
+			});
+			const repairedDiff = await repairedDiffPromise;
+			if (repairedDiff.msg.case === "chatDiff") {
+				expect(
+					repairedDiff.msg.value.messages.some(
+						(message) =>
+							message.payload.case === "chat" && message.payload.value.id === "sv-test-1",
+					),
+				).toBe(false);
+			}
+
+			const authoritativePagePromise = waitForMsg(ws, "chatDiff");
+			sendClientMsg(ws, {
+				msg: {
+					case: "chatCatchup",
+					value: { topic, sv: {}, headIds: {}, limit: 50 },
+				},
+			});
+			const authoritativePage = await authoritativePagePromise;
+			if (authoritativePage.msg.case === "chatDiff") {
+				const repairedMessage = authoritativePage.msg.value.messages.find(
+					(message) =>
+						message.payload.case === "chat" && message.payload.value.id === "sv-test-1",
+				);
+				expect(repairedMessage?.payload.case).toBe("chat");
+				if (repairedMessage?.payload.case === "chat") {
+					expect(repairedMessage.payload.value.logicalTime).toBe(50n);
+					expect(repairedMessage.payload.value.timestamp).toBe(firstMessageTimestamp);
 				}
 			}
+
+			const collisionError = waitForMsg(ws, "error");
+			const changedPayload = create(GossipEnvelopeSchema, {
+				payload: {
+					case: "chat",
+					value: {
+						id: "sv-test-1",
+						userId: kp.publicKeyHex,
+						displayName: "Tester",
+						text: "changed immutable text",
+						topic,
+						timestamp: firstMessageTimestamp,
+						writerSeq: 1n,
+						logicalTime: 51n,
+					},
+				},
+			});
+			sendClientMsg(ws, {
+				msg: { case: "gossip", value: { topic, message: changedPayload } },
+			});
+			const rejectedCollision = await collisionError;
+			expect(rejectedCollision.msg.case).toBe("error");
+			if (rejectedCollision.msg.case === "error") {
+				expect(rejectedCollision.msg.value.code).toBe(ErrorCode.MALFORMED);
+			}
+
+			const manyWriters = Object.fromEntries(
+				Array.from({ length: 300 }, (_, index) => [`writer-${index}`, 1n]),
+			);
+			const manyHeads = Object.fromEntries(
+				Array.from({ length: 300 }, (_, index) => [`writer-${index}`, `message-${index}@1`]),
+			);
+			const manyWriterDiffPromise = waitForMsg(ws, "chatDiff");
+			sendClientMsg(ws, {
+				msg: {
+					case: "chatCatchup",
+					value: { topic, sv: manyWriters, headIds: manyHeads, limit: 1 },
+				},
+			});
+			expect((await manyWriterDiffPromise).msg.case).toBe("chatDiff");
 
 			ws.close();
 		});
@@ -733,16 +947,15 @@ describe("FestivalDO lane split", () => {
 			});
 			await new Promise((r) => setTimeout(r, 150));
 
-			// Catchup on public topic — should only have public chat
-			const pubCatchup = waitForMsg(ws, "catchup");
+			// Committed-head catchup on public topic — only public chat.
+			const pubCatchup = waitForMsg(ws, "chatDiff");
 			sendClientMsg(ws, {
-				msg: { case: "catchup", value: { topic: publicTopic, sinceSeq: 0n } },
+				msg: { case: "chatCatchup", value: { topic: publicTopic, sv: {}, headIds: {}, limit: 50 } },
 			});
 			const pubResult = await pubCatchup;
-			if (pubResult.msg.case === "catchup") {
-				for (const entry of pubResult.msg.value.messages) {
-					// No encrypted payloads should be in the public log
-					expect(entry.message?.payload.case).not.toBe("encryptedChat");
+			if (pubResult.msg.case === "chatDiff") {
+				for (const envelope of pubResult.msg.value.messages) {
+					expect(envelope.payload.case).not.toBe("encryptedChat");
 				}
 			}
 

@@ -29,9 +29,7 @@ pub fn send_festival_chat(
     let stage_or_general = stage_id.unwrap_or("general");
     let topic = format!("festival/{festival_id}/chat/{stage_or_general}");
 
-    let writer_seq = db.get_next_writer_seq(&topic, user_id)?;
-
-    let msg = ChatMessage {
+    let msg = db.save_local_chat_message(ChatMessage {
         id: uuid::Uuid::new_v4().to_string(),
         user_id: user_id.to_string(),
         display_name: display_name.to_string(),
@@ -39,10 +37,9 @@ pub fn send_festival_chat(
         topic: topic.clone(),
         stage_id: stage_id.map(ToOwned::to_owned),
         timestamp: now_rfc3339(),
-        writer_seq,
-    };
-
-    db.save_chat_message(&msg)?;
+        writer_seq: 0,
+        logical_time: 0,
+    })?;
 
     let topic_id = topics::festival_topic(festival_id, &format!("chat/{stage_or_general}"));
 
@@ -62,9 +59,7 @@ pub fn send_group_chat(
 ) -> anyhow::Result<(Vec<u8>, TopicId)> {
     let topic = format!("group/{group_id}/chat");
 
-    let writer_seq = db.get_next_writer_seq(&topic, user_id)?;
-
-    let msg = ChatMessage {
+    let msg = db.save_local_chat_message(ChatMessage {
         id: uuid::Uuid::new_v4().to_string(),
         user_id: user_id.to_string(),
         display_name: display_name.to_string(),
@@ -72,10 +67,9 @@ pub fn send_group_chat(
         topic: topic.clone(),
         stage_id: None,
         timestamp: now_rfc3339(),
-        writer_seq,
-    };
-
-    db.save_chat_message(&msg)?;
+        writer_seq: 0,
+        logical_time: 0,
+    })?;
 
     let group_key = db
         .load_group_key(group_id)?
@@ -259,6 +253,7 @@ mod tests {
         assert_eq!(msg.stage_id, None);
         assert_eq!(msg.user_id, "user1");
         assert_eq!(msg.text, "hello");
+        assert_eq!((msg.writer_seq, msg.logical_time), (1, 1));
 
         let expected_id = topics::festival_topic("fieldday", "chat/general");
         assert_eq!(topic_id, expected_id);
@@ -310,6 +305,7 @@ mod tests {
             .unwrap();
         assert_eq!(stored.len(), 1);
         assert_eq!(stored[0].text, "secret msg");
+        assert_eq!((stored[0].writer_seq, stored[0].logical_time), (1, 1));
 
         let plaintext = crypto::decrypt(&group_key, &encrypted).unwrap();
         let decoded: ChatMessage = serde_json::from_slice(&plaintext).unwrap();
@@ -328,6 +324,7 @@ mod tests {
             stage_id: None,
             timestamp: "2026-06-14T20:00:00Z".to_string(),
             writer_seq: 0,
+            logical_time: 0,
         };
         receive_festival_chat(&db, msg).unwrap();
 
@@ -367,15 +364,28 @@ mod tests {
                     stage_id: None,
                     timestamp: format!("2026-06-14T20:0{i}:00Z"),
                     writer_seq: i as u64,
+                    logical_time: i as u64,
                 },
             )
             .unwrap();
         }
 
         let page1 = get_history(&db, topic, 3, 0).unwrap();
-        assert_eq!(page1.len(), 3);
+        assert_eq!(
+            page1
+                .iter()
+                .map(|message| message.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["h0", "h1", "h2"]
+        );
 
         let page2 = get_history(&db, topic, 3, 3).unwrap();
-        assert_eq!(page2.len(), 2);
+        assert_eq!(
+            page2
+                .iter()
+                .map(|message| message.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["h3", "h4"]
+        );
     }
 }

@@ -31,6 +31,8 @@ pub const SYNC_ALPN: &[u8] = b"offbeat/sync/1";
 const MAX_REQUEST_BYTES: usize = 64 * 1024;
 /// Cap on a response diff. A full festival doc is small; 8 MiB is ample.
 const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_CHAT_RESPONSE_BYTES: usize = 512 * 1024;
+const MAX_CHAT_CATCHUP_MESSAGES: u32 = 500;
 
 /// Server side: answers a catch-up request on a bi-stream. The request is a
 /// [`proto::RelayClientMessage`] carrying either an `SvExchange` (CRDT diff) or
@@ -105,22 +107,24 @@ impl SyncProtocol {
         let limit = req.limit.clamp(1, 1000);
         let messages = self
             .db
-            .get_chat_messages(&req.topic, limit, 0)
+            .get_messages_since_heads(&req.topic, &req.sv, &req.head_ids, limit)
             .unwrap_or_default();
-        let envelopes = messages
-            .into_iter()
-            .filter(|m| {
-                let hwm = req.sv.get(&m.user_id).copied().unwrap_or(0);
-                // Unsequenced (writer_seq == 0) messages are always included —
-                // the requester's INSERT-OR-IGNORE makes that idempotent.
-                m.writer_seq == 0 || m.writer_seq > hwm
-            })
-            .map(|m| proto::GossipEnvelope::from_gossip_message(&GossipMessage::Chat(m)))
-            .collect();
-        proto::ChatDiffResponse {
+        let mut response = proto::ChatDiffResponse {
             topic: req.topic.clone(),
-            messages: envelopes,
+            messages: Vec::new(),
+        };
+        for message in messages {
+            response
+                .messages
+                .push(proto::GossipEnvelope::from_gossip_message(
+                    &GossipMessage::Chat(message),
+                ));
+            if response.encoded_len() > MAX_CHAT_RESPONSE_BYTES {
+                response.messages.pop();
+                break;
+            }
         }
+        response
     }
 }
 
@@ -256,6 +260,7 @@ impl crate::sync::PeerConnection for IrohSyncPeer {
         if topic.starts_with("group/") {
             return Ok(Vec::new());
         }
+        let effective_limit = limit.clamp(1, MAX_CHAT_CATCHUP_MESSAGES);
         let conn = self.endpoint.connect(self.peer.clone(), SYNC_ALPN).await?;
         let (mut send, mut recv) = conn.open_bi().await?;
 
@@ -263,8 +268,9 @@ impl crate::sync::PeerConnection for IrohSyncPeer {
             msg: Some(proto::relay_client_message::Msg::ChatCatchup(
                 proto::ChatCatchupRequest {
                     topic: topic.to_string(),
-                    sv: sv.writers.clone(),
-                    limit,
+                    sv: sv.sequences(),
+                    limit: effective_limit,
+                    head_ids: sv.head_ids(),
                 },
             )),
         };
@@ -276,7 +282,13 @@ impl crate::sync::PeerConnection for IrohSyncPeer {
         if resp_bytes.is_empty() {
             return Ok(vec![]);
         }
+        if resp_bytes.len() > MAX_CHAT_RESPONSE_BYTES {
+            anyhow::bail!("chat catch-up response exceeds byte budget");
+        }
         let resp = proto::ChatDiffResponse::decode(resp_bytes.as_slice())?;
+        if resp.messages.len() > effective_limit as usize {
+            anyhow::bail!("chat catch-up response exceeds requested message count");
+        }
         Ok(resp.messages)
     }
 
@@ -342,6 +354,7 @@ mod tests {
             stage_id: None,
             timestamp: "2026-06-13T00:00:00Z".to_string(),
             writer_seq: seq,
+            logical_time: seq,
         }
     }
 
@@ -567,6 +580,59 @@ mod tests {
     }
 
     #[test]
+    fn equal_hwm_with_different_head_returns_conflicting_variant() {
+        let topic = "festival/fest-1/chat/main";
+        let db = Arc::new(Database::new_in_memory().unwrap());
+        db.save_chat_message(&chat_msg("alice-1", "alice", "hello", topic, 1))
+            .unwrap();
+        let protocol = SyncProtocol::new(Arc::new(DocManager::new(db.clone())), db);
+        let response = protocol.build_chat_diff(&proto::ChatCatchupRequest {
+            topic: topic.to_string(),
+            sv: std::collections::HashMap::from([("alice".to_string(), 1)]),
+            limit: 50,
+            head_ids: std::collections::HashMap::from([(
+                "alice".to_string(),
+                "other-variant".to_string(),
+            )]),
+        });
+
+        assert_eq!(response.messages.len(), 1);
+        let Some(proto::gossip_envelope::Payload::Chat(message)) =
+            response.messages[0].payload.as_ref()
+        else {
+            panic!("expected chat message");
+        };
+        assert_eq!(message.id, "alice-1");
+    }
+
+    #[test]
+    fn chat_diff_producer_enforces_encoded_byte_budget() {
+        let topic = "festival/fest-1/chat/main";
+        let db = Arc::new(Database::new_in_memory().unwrap());
+        for sequence in 1..=20 {
+            db.save_chat_message(&chat_msg(
+                &format!("m{sequence}"),
+                "alice",
+                &"x".repeat(64 * 1024),
+                topic,
+                sequence,
+            ))
+            .unwrap();
+        }
+        let protocol = SyncProtocol::new(Arc::new(DocManager::new(db.clone())), db);
+        let response = protocol.build_chat_diff(&proto::ChatCatchupRequest {
+            topic: topic.to_string(),
+            sv: Default::default(),
+            limit: 1000,
+            head_ids: Default::default(),
+        });
+
+        assert!(response.encoded_len() <= MAX_CHAT_RESPONSE_BYTES);
+        assert!(!response.messages.is_empty());
+        assert!(response.messages.len() < 20);
+    }
+
+    #[test]
     fn group_chat_history_is_not_served_without_possession_proof() {
         let topic = "group/secret/chat";
         let db = Arc::new(Database::new_in_memory().unwrap());
@@ -577,6 +643,7 @@ mod tests {
             topic: topic.to_string(),
             sv: Default::default(),
             limit: 50,
+            head_ids: Default::default(),
         });
 
         assert!(response.messages.is_empty());

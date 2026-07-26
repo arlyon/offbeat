@@ -121,6 +121,9 @@ pub struct ChatMessage {
     pub timestamp: String,
     #[serde(default)]
     pub writer_seq: u64,
+    /// Per-topic Lamport clock used for authoritative ordering.
+    #[serde(default)]
+    pub logical_time: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

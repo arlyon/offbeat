@@ -25,11 +25,17 @@ use crate::types::{ChatMessage, SignedUpdate};
 // ChatStateVector — per-writer high water marks for chat sync
 // ---------------------------------------------------------------------------
 
-/// Per-writer sequence numbers for chat catch-up.
+/// A writer's highest observed sequence and the message at that sequence.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct ChatWriterHead {
+    pub sequence: u64,
+    pub message_id: String,
+}
+
+/// Per-writer heads for append-log catch-up.
 #[derive(Debug, Clone, Default)]
 pub struct ChatStateVector {
-    /// Map of writer_id → highest seen sequence number.
-    pub writers: HashMap<String, u64>,
+    pub writers: HashMap<String, ChatWriterHead>,
 }
 
 fn group_id_from_state_doc(doc_id: &str) -> Option<&str> {
@@ -42,27 +48,107 @@ impl ChatStateVector {
         Self::default()
     }
 
-    /// Build from existing chat messages.
+    /// Build highest contiguous per-writer heads. Equal-sequence variants choose
+    /// a deterministic ID so complete histories advertise the same commitment.
     pub fn from_messages(messages: &[ChatMessage]) -> Self {
-        let mut writers = HashMap::new();
-        for msg in messages {
-            let entry = writers.entry(msg.user_id.clone()).or_insert(0u64);
-            if msg.writer_seq > *entry {
-                *entry = msg.writer_seq;
-            }
+        let mut sequences: HashMap<String, std::collections::BTreeMap<u64, (String, u64)>> =
+            HashMap::new();
+        for message in messages {
+            sequences
+                .entry(message.user_id.clone())
+                .or_default()
+                .entry(message.writer_seq)
+                .and_modify(|(id, logical_time)| {
+                    if message.id.as_str() < id.as_str() {
+                        id.clone_from(&message.id);
+                        *logical_time = message.logical_time;
+                    } else if message.id == *id {
+                        *logical_time = (*logical_time).max(message.logical_time);
+                    }
+                })
+                .or_insert_with(|| (message.id.clone(), message.logical_time));
         }
+
+        let writers = sequences
+            .into_iter()
+            .map(|(writer, messages)| {
+                let mut sequence = 0;
+                let mut message_id = messages
+                    .get(&0)
+                    .map(|(id, logical_time)| crate::db::chat_head_commitment(id, *logical_time))
+                    .unwrap_or_default();
+                while let Some((id, logical_time)) = messages.get(&(sequence + 1)) {
+                    sequence += 1;
+                    message_id = crate::db::chat_head_commitment(id, *logical_time);
+                }
+                (
+                    writer,
+                    ChatWriterHead {
+                        sequence,
+                        message_id,
+                    },
+                )
+            })
+            .collect();
         Self { writers }
     }
 
-    /// Encode as JSON for wire transport.
+    pub fn from_heads(heads: Vec<(String, u64, String)>) -> Self {
+        Self {
+            writers: heads
+                .into_iter()
+                .map(|(writer, sequence, message_id)| {
+                    (
+                        writer,
+                        ChatWriterHead {
+                            sequence,
+                            message_id,
+                        },
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    pub fn sequences(&self) -> HashMap<String, u64> {
+        self.writers
+            .iter()
+            .map(|(writer, head)| (writer.clone(), head.sequence))
+            .collect()
+    }
+
+    pub fn head_ids(&self) -> HashMap<String, String> {
+        self.writers
+            .iter()
+            .map(|(writer, head)| (writer.clone(), head.message_id.clone()))
+            .collect()
+    }
+
+    /// Encode as JSON for direct transports.
     pub fn encode(&self) -> Vec<u8> {
         serde_json::to_vec(&self.writers).unwrap_or_default()
     }
 
-    /// Decode from JSON bytes.
+    /// Decode current head objects or the legacy `{writer: sequence}` map.
     pub fn decode(bytes: &[u8]) -> anyhow::Result<Self> {
-        let writers: HashMap<String, u64> = serde_json::from_slice(bytes)?;
-        Ok(Self { writers })
+        if let Ok(writers) = serde_json::from_slice::<HashMap<String, ChatWriterHead>>(bytes) {
+            return Ok(Self { writers });
+        }
+        let legacy: HashMap<String, u64> = serde_json::from_slice(bytes)?;
+        Ok(Self {
+            writers: legacy
+                .into_iter()
+                .map(|(writer, sequence)| {
+                    (
+                        writer,
+                        ChatWriterHead {
+                            sequence,
+                            message_id: String::new(),
+                        },
+                    )
+                })
+                .collect(),
+        })
     }
 }
 
@@ -542,26 +628,14 @@ impl SyncOrchestrator {
                     return Ok((0, 0));
                 }
 
-                let messages = self.db.get_chat_messages(topic, 1000, 0)?;
-                let csv = ChatStateVector::from_messages(&messages);
+                let csv = ChatStateVector::from_heads(self.db.get_chat_writer_heads(topic)?);
                 let envelopes = peer
                     .chat_catchup(topic, &csv, profile.chat_catchup_limit())
                     .await?;
-                // Peers that answer synchronously (the iroh ALPN catch-up) hand
-                // back the history we were missing; decode + persist it here,
-                // where the group-key cache lives. INSERT-OR-IGNORE in the DB
-                // makes re-delivery idempotent, so this is safe to repeat.
-                let mut applied = 0u32;
-                for env in &envelopes {
-                    match self.handle_incoming_envelope(topic, env).await {
-                        Ok(()) => applied += 1,
-                        Err(e) => tracing::debug!(topic, "chat_catchup apply error: {e}"),
-                    }
-                }
-                if applied > 0 {
-                    self.notifier.notify_chat(topic);
-                }
-                Ok((0, applied))
+                // Validate and persist the complete page against one clock floor
+                // so a malicious peer cannot ratchet Lamport time per envelope.
+                self.handle_incoming_chat_batch(topic, &envelopes)?;
+                Ok((0, envelopes.len() as u32))
             }
         }
     }
@@ -573,6 +647,48 @@ impl SyncOrchestrator {
     }
 
     /// Handle an incoming GossipEnvelope, routing to the correct handler.
+    pub fn chat_state_vector(&self, topic: &str) -> anyhow::Result<ChatStateVector> {
+        Ok(ChatStateVector::from_heads(
+            self.db.get_chat_writer_heads(topic)?,
+        ))
+    }
+
+    pub fn handle_incoming_chat_batch(
+        &self,
+        topic: &str,
+        envelopes: &[proto::GossipEnvelope],
+    ) -> anyhow::Result<()> {
+        let mut messages = Vec::with_capacity(envelopes.len());
+        for envelope in envelopes {
+            let message = match self.decode_envelope(envelope)? {
+                Some(GossipMessage::Chat(message)) => message,
+                Some(GossipMessage::EncryptedChat {
+                    group_key,
+                    encrypted,
+                }) => {
+                    let plaintext = crate::crypto::decrypt(&group_key, &encrypted)?;
+                    serde_json::from_slice(&plaintext)
+                        .map_err(|error| anyhow::anyhow!("deserialise chat: {error}"))?
+                }
+                _ => anyhow::bail!("chat catch-up contained a non-chat envelope"),
+            };
+            if message.topic != topic {
+                anyhow::bail!("chat topic mismatch");
+            }
+            if message.writer_seq == 0 {
+                anyhow::bail!("chat message is missing a writer sequence");
+            }
+            messages.push(message);
+        }
+        self.db.save_chat_messages_batch(&messages)?;
+        for _ in &messages {
+            self.notifier.record_received(topic);
+        }
+        self.notifier.notify_chat(topic);
+        self.notify_sync_status(false);
+        Ok(())
+    }
+
     pub async fn handle_incoming_envelope(
         &self,
         topic: &str,
@@ -608,6 +724,12 @@ impl SyncOrchestrator {
                     anyhow::bail!("festival topic/document mismatch: {topic} != {doc_id}");
                 }
                 self.extract_festival_public_key(doc_id)
+            }
+            GossipMessage::Chat(message) => {
+                if message.topic != topic {
+                    anyhow::bail!("chat topic mismatch");
+                }
+                None
             }
             _ => None,
         };
@@ -809,6 +931,7 @@ mod tests {
                 stage_id: None,
                 timestamp: "2026-01-01".to_string(),
                 writer_seq: 1,
+                logical_time: 1,
             },
             ChatMessage {
                 id: "m2".to_string(),
@@ -819,6 +942,7 @@ mod tests {
                 stage_id: None,
                 timestamp: "2026-01-01".to_string(),
                 writer_seq: 2,
+                logical_time: 2,
             },
             ChatMessage {
                 id: "m3".to_string(),
@@ -829,25 +953,39 @@ mod tests {
                 stage_id: None,
                 timestamp: "2026-01-01".to_string(),
                 writer_seq: 1,
+                logical_time: 1,
             },
         ];
 
         let csv = ChatStateVector::from_messages(&messages);
-        assert_eq!(csv.writers.get("alice"), Some(&2));
-        assert_eq!(csv.writers.get("bob"), Some(&1));
+        assert_eq!(
+            csv.writers.get("alice"),
+            Some(&ChatWriterHead {
+                sequence: 2,
+                message_id: "m2@2".to_string(),
+            })
+        );
+        assert_eq!(csv.sequences().get("bob"), Some(&1));
+        assert_eq!(csv.head_ids().get("bob").map(String::as_str), Some("m3@1"));
     }
 
     #[test]
     fn test_chat_state_vector_encode_decode() {
         let mut csv = ChatStateVector::new();
-        csv.writers.insert("alice".to_string(), 5);
-        csv.writers.insert("bob".to_string(), 3);
+        csv.writers.insert(
+            "alice".to_string(),
+            ChatWriterHead {
+                sequence: 5,
+                message_id: "a5".to_string(),
+            },
+        );
 
-        let encoded = csv.encode();
-        let decoded = ChatStateVector::decode(&encoded).unwrap();
+        let decoded = ChatStateVector::decode(&csv.encode()).unwrap();
+        assert_eq!(decoded.writers, csv.writers);
 
-        assert_eq!(decoded.writers.get("alice"), Some(&5));
-        assert_eq!(decoded.writers.get("bob"), Some(&3));
+        let legacy = ChatStateVector::decode(br#"{"bob":3}"#).unwrap();
+        assert_eq!(legacy.sequences().get("bob"), Some(&3));
+        assert_eq!(legacy.head_ids().get("bob").map(String::as_str), Some(""));
     }
 
     #[test]
@@ -959,6 +1097,32 @@ mod tests {
         assert_eq!(orch.db.highest_verified_festival_seq(doc_id).unwrap(), 3);
     }
 
+    #[test]
+    fn chat_batch_uses_one_remote_clock_floor() {
+        let orch = create_orchestrator();
+        let topic = "festival/test/chat/general";
+        let envelopes: Vec<_> = [1_000_000, 2_000_000]
+            .into_iter()
+            .enumerate()
+            .map(|(index, logical_time)| proto::GossipEnvelope {
+                payload: Some(proto::gossip_envelope::Payload::Chat(proto::ChatMessage {
+                    id: format!("m{index}"),
+                    user_id: "mallory".to_string(),
+                    display_name: "Mallory".to_string(),
+                    text: "ratchet".to_string(),
+                    topic: topic.to_string(),
+                    stage_id: None,
+                    timestamp: "display-only".to_string(),
+                    writer_seq: index as u64 + 1,
+                    logical_time,
+                })),
+            })
+            .collect();
+
+        assert!(orch.handle_incoming_chat_batch(topic, &envelopes).is_err());
+        assert!(orch.db.get_chat_messages(topic, 10, 0).unwrap().is_empty());
+    }
+
     #[tokio::test]
     async fn test_handle_incoming_chat() {
         let orch = create_orchestrator();
@@ -973,8 +1137,18 @@ mod tests {
                 stage_id: None,
                 timestamp: "2026-01-01".to_string(),
                 writer_seq: 1,
+                logical_time: 1,
             })),
         };
+
+        assert!(
+            orch.handle_incoming_envelope("other", &envelope)
+                .await
+                .is_err()
+        );
+        orch.handle_incoming_envelope("test", &envelope)
+            .await
+            .unwrap();
 
         let msg = orch.decode_envelope(&envelope).unwrap();
         assert!(matches!(msg, Some(GossipMessage::Chat(_))));

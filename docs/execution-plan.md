@@ -84,7 +84,7 @@ Move group chat from debug-only calls into the normal resource path:
 
 Before shipping public chat:
 
-- replace authoritative wall-clock ordering with a deterministic causal order such as an HLC tuple;
+- use the persisted Lamport tuple `(logical_time, writer_key, writer_sequence, message_id)` for authoritative ordering;
 - keep wall time only for display;
 - distinguish festival-authority signatures from attendee authorship signatures;
 - decide how cached MainDO attestations affect offline trust, expiry, and unknown-key presentation.

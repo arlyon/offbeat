@@ -75,7 +75,7 @@
     {
       "id": "phase_3",
       "task_name": "Chat sync protocol — high-water mark",
-      "description": "Add writer_seq to chat messages. Implement ChatStateVector-based catchup. Add chat_catchup WS message type to DO. Replace sinceSeq-based catchup for chat.",
+      "description": "Add writer_seq and persisted per-topic Lamport time to chat messages. Implement committed-head ChatStateVector catchup and deterministic ordering. Add chat_catchup WS message type to DO. Replace sinceSeq-based catchup for chat.",
       "files_impacted": [
         "crates/core/src/chat.rs",
         "crates/core/src/sync.rs",
@@ -87,9 +87,10 @@
       "definition_of_done": "pnpm turbo check --ui stream --output-logs errors-only",
       "dependencies": ["phase_2"],
       "acceptance_criteria": [
-        "ChatMessage type has writer_seq field (monotonic per user per topic)",
-        "ChatStateVector = HashMap<UserId, u64> computed from local SQLite",
-        "DO responds to chat_catchup with messages not covered by client's ChatStateVector, newest first",
+        "ChatMessage has atomic writer_seq and logical_time fields",
+        "ChatStateVector carries each writer's highest contiguous sequence and ID-plus-Lamport head commitment",
+        "DO responds to chat_catchup with missing messages or an equal-sequence conflicting head",
+        "History orders by (logical_time, writer_id, writer_seq, message_id), never wall time",
         "INSERT OR IGNORE handles duplicates from HWM overlap",
         "sinceSeq-based catchup removed from ws_relay.rs",
         "gossip_log table deleted from client schema (no longer needed for any resource)"

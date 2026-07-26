@@ -252,11 +252,27 @@ async fn wait_for_catchup(
     }
 }
 
+async fn wait_for_chat_diff(
+    stream: &mut WsStreamType,
+) -> Result<proto::ChatDiffResponse, anyhow::Error> {
+    let msg = wait_for_msg(
+        stream,
+        |message| matches!(message, relay_server_message::Msg::ChatDiff(_)),
+        "chat diff",
+        5,
+    )
+    .await?;
+    match msg {
+        relay_server_message::Msg::ChatDiff(diff) => Ok(diff),
+        _ => unreachable!(),
+    }
+}
+
 /// Connect to a festival's WebSocket endpoint and authenticate (can read + write)
 async fn connect_and_auth(
     server: &DevServer,
     festival_id: &str,
-) -> Result<(WsSinkType, WsStreamType), anyhow::Error> {
+) -> Result<(WsSinkType, WsStreamType, String), anyhow::Error> {
     reqwest::Client::new()
         .put(format!(
             "{}/festivals/{festival_id}/config",
@@ -317,7 +333,7 @@ async fn connect_and_auth(
     .await?;
     wait_for_auth_ok(&mut stream).await?;
 
-    Ok((sink, stream))
+    Ok((sink, stream, pubkey_hex[..16].to_string()))
 }
 
 // For timestamp generation in tests
@@ -339,6 +355,8 @@ mod chrono {
 }
 
 /// Build a GossipEnvelope for a chat message
+static TEST_CHAT_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 fn chat_envelope(
     id: &str,
     user_id: &str,
@@ -346,6 +364,7 @@ fn chat_envelope(
     text: &str,
     topic: &str,
 ) -> proto::GossipEnvelope {
+    let writer_seq = TEST_CHAT_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     proto::GossipEnvelope {
         payload: Some(proto::gossip_envelope::Payload::Chat(proto::ChatMessage {
             id: id.to_string(),
@@ -355,7 +374,8 @@ fn chat_envelope(
             topic: topic.to_string(),
             stage_id: None,
             timestamp: chrono::Utc::now().to_rfc3339(),
-            writer_seq: 0,
+            writer_seq,
+            logical_time: writer_seq,
         })),
     }
 }
@@ -409,6 +429,32 @@ async fn send_catchup(
         },
     )
     .await
+}
+
+async fn send_chat_catchup(
+    sink: &mut WsSinkType,
+    topic: &str,
+    sv: std::collections::HashMap<String, u64>,
+    head_ids: std::collections::HashMap<String, String>,
+) -> Result<(), anyhow::Error> {
+    send_client_msg(
+        sink,
+        proto::RelayClientMessage {
+            msg: Some(relay_client_message::Msg::ChatCatchup(
+                proto::ChatCatchupRequest {
+                    topic: topic.to_string(),
+                    sv,
+                    limit: 50,
+                    head_ids,
+                },
+            )),
+        },
+    )
+    .await
+}
+
+async fn send_empty_chat_catchup(sink: &mut WsSinkType, topic: &str) -> Result<(), anyhow::Error> {
+    send_chat_catchup(sink, topic, Default::default(), Default::default()).await
 }
 
 async fn send_sv_exchange(
@@ -467,11 +513,11 @@ async fn connect_and_subscribe(
     server: &DevServer,
     festival_id: &str,
     topic: &str,
-) -> Result<(WsSinkType, WsStreamType), anyhow::Error> {
-    let (mut sink, mut stream) = connect_and_auth(server, festival_id).await?;
+) -> Result<(WsSinkType, WsStreamType, String), anyhow::Error> {
+    let (mut sink, mut stream, writer_id) = connect_and_auth(server, festival_id).await?;
     send_subscribe(&mut sink, &[topic]).await?;
     wait_for_subscribed(&mut stream).await?;
-    Ok((sink, stream))
+    Ok((sink, stream, writer_id))
 }
 
 // =============================================================================
@@ -481,7 +527,7 @@ async fn connect_and_subscribe(
 #[tokio::test]
 async fn test_single_client_subscribe() {
     let server = DevServer::start().await;
-    let (mut sink, mut stream) = connect_and_auth(&server, "rust-test-1").await.unwrap();
+    let (mut sink, mut stream, _) = connect_and_auth(&server, "rust-test-1").await.unwrap();
 
     send_subscribe(&mut sink, &["festival/rust-test-1/chat"])
         .await
@@ -503,9 +549,9 @@ async fn test_single_client_subscribe() {
 #[tokio::test]
 async fn test_single_client_chat_and_catchup() {
     let server = DevServer::start().await;
-    let (mut sink, mut stream) = connect_and_auth(&server, "rust-test-2").await.unwrap();
+    let (mut sink, mut stream, writer_id) = connect_and_auth(&server, "rust-test-2").await.unwrap();
 
-    send_subscribe(&mut sink, &["festival/rust-test-2/chat"])
+    send_subscribe(&mut sink, &["festival/rust-test-2/chat/general"])
         .await
         .unwrap();
     wait_for_subscribed(&mut stream).await.unwrap();
@@ -513,38 +559,38 @@ async fn test_single_client_chat_and_catchup() {
     let msg_id = uuid::Uuid::new_v4().to_string();
     let envelope = chat_envelope(
         &msg_id,
-        "rust-user-1",
+        &writer_id,
         "Rust User",
         "Hello from Rust!",
-        "festival/rust-test-2/chat",
+        "festival/rust-test-2/chat/general",
     );
-    send_gossip(&mut sink, "festival/rust-test-2/chat", envelope)
+    send_gossip(&mut sink, "festival/rust-test-2/chat/general", envelope)
         .await
         .unwrap();
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    send_catchup(&mut sink, "festival/rust-test-2/chat", 0)
+    send_empty_chat_catchup(&mut sink, "festival/rust-test-2/chat/general")
         .await
         .unwrap();
 
-    let catchup = wait_for_catchup(&mut stream).await.unwrap();
-    assert_eq!(catchup.topic, "festival/rust-test-2/chat");
+    let catchup = wait_for_chat_diff(&mut stream).await.unwrap();
+    assert_eq!(catchup.topic, "festival/rust-test-2/chat/general");
 
     assert!(!catchup.messages.is_empty());
 
     let our_msg = catchup
         .messages
         .iter()
-        .find(|e| {
+        .find(|envelope| {
             matches!(
-                e.message.as_ref().and_then(|m| m.payload.as_ref()),
+                envelope.payload.as_ref(),
                 Some(proto::gossip_envelope::Payload::Chat(chat)) if chat.id == msg_id
             )
         })
         .expect("Our message should be in catchup");
     assert!(matches!(
-        our_msg.message.as_ref().and_then(|m| m.payload.as_ref()),
+        our_msg.payload.as_ref(),
         Some(proto::gossip_envelope::Payload::Chat(_))
     ));
 }
@@ -556,19 +602,19 @@ async fn test_single_client_chat_and_catchup() {
 #[tokio::test]
 async fn test_two_clients_relay() {
     let server = DevServer::start().await;
-    let topic = "festival/rust-test-3/chat";
+    let topic = "festival/rust-test-3/chat/general";
 
-    let (mut sink_a, _stream_a) = connect_and_subscribe(&server, "rust-test-3", topic)
+    let (mut sink_a, _stream_a, writer_a) = connect_and_subscribe(&server, "rust-test-3", topic)
         .await
         .unwrap();
-    let (_sink_b, mut stream_b) = connect_and_subscribe(&server, "rust-test-3", topic)
+    let (_sink_b, mut stream_b, _) = connect_and_subscribe(&server, "rust-test-3", topic)
         .await
         .unwrap();
 
     let msg_id = uuid::Uuid::new_v4().to_string();
     let envelope = chat_envelope(
         &msg_id,
-        "client-a",
+        &writer_a,
         "Client A",
         "Message from A to B via DO relay",
         topic,
@@ -593,10 +639,10 @@ async fn test_p2p_relay_update() {
     let server = DevServer::start().await;
     let topic = "group/test-group/state";
 
-    let (mut sink_a, _stream_a) = connect_and_subscribe(&server, "rust-test-4", topic)
+    let (mut sink_a, _stream_a, _) = connect_and_subscribe(&server, "rust-test-4", topic)
         .await
         .unwrap();
-    let (_sink_b, mut stream_b) = connect_and_subscribe(&server, "rust-test-4", topic)
+    let (_sink_b, mut stream_b, _) = connect_and_subscribe(&server, "rust-test-4", topic)
         .await
         .unwrap();
 
@@ -642,10 +688,10 @@ async fn test_yrs_crdt_sync_via_relay() {
         .transact()
         .encode_state_as_update_v1(&yrs::StateVector::default());
 
-    let (mut sink_a, _stream_a) = connect_and_subscribe(&server, "rust-test-5", topic)
+    let (mut sink_a, _stream_a, _) = connect_and_subscribe(&server, "rust-test-5", topic)
         .await
         .unwrap();
-    let (_sink_b, mut stream_b) = connect_and_subscribe(&server, "rust-test-5", topic)
+    let (_sink_b, mut stream_b, _) = connect_and_subscribe(&server, "rust-test-5", topic)
         .await
         .unwrap();
 
@@ -688,16 +734,16 @@ async fn test_yrs_crdt_sync_via_relay() {
 #[tokio::test]
 async fn test_late_joiner_catchup() {
     let server = DevServer::start().await;
-    let topic = "festival/rust-test-6/chat";
+    let topic = "festival/rust-test-6/chat/general";
 
-    let (mut sink_a, _stream_a) = connect_and_subscribe(&server, "rust-test-6", topic)
+    let (mut sink_a, _stream_a, writer_a) = connect_and_subscribe(&server, "rust-test-6", topic)
         .await
         .unwrap();
 
     let msg_id = uuid::Uuid::new_v4().to_string();
     let envelope = chat_envelope(
         &msg_id,
-        "early-user",
+        &writer_a,
         "Early User",
         "Message sent before late joiner",
         topic,
@@ -706,26 +752,26 @@ async fn test_late_joiner_catchup() {
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let (mut sink_b, mut stream_b) = connect_and_subscribe(&server, "rust-test-6", topic)
+    let (mut sink_b, mut stream_b, _) = connect_and_subscribe(&server, "rust-test-6", topic)
         .await
         .unwrap();
 
-    send_catchup(&mut sink_b, topic, 0).await.unwrap();
+    send_empty_chat_catchup(&mut sink_b, topic).await.unwrap();
 
-    let catchup = wait_for_catchup(&mut stream_b).await.unwrap();
+    let catchup = wait_for_chat_diff(&mut stream_b).await.unwrap();
 
     let our_msg = catchup
         .messages
         .iter()
-        .find(|e| {
+        .find(|envelope| {
             matches!(
-                e.message.as_ref().and_then(|m| m.payload.as_ref()),
+                envelope.payload.as_ref(),
                 Some(proto::gossip_envelope::Payload::Chat(chat)) if chat.id == msg_id
             )
         })
         .expect("Missed message should be in catchup");
     assert!(matches!(
-        our_msg.message.as_ref().and_then(|m| m.payload.as_ref()),
+        our_msg.payload.as_ref(),
         Some(proto::gossip_envelope::Payload::Chat(_))
     ));
 }
@@ -737,18 +783,20 @@ async fn test_late_joiner_catchup() {
 #[tokio::test]
 async fn test_d1_d2_s1_relay_chat() {
     let server = DevServer::start().await;
-    let topic = "festival/relay-test-1/chat";
+    let topic = "festival/relay-test-1/chat/general";
 
-    let (mut sink_d1, mut stream_d1) = connect_and_subscribe(&server, "relay-test-1", topic)
-        .await
-        .unwrap();
-    let (mut sink_d2, mut stream_d2) = connect_and_subscribe(&server, "relay-test-1", topic)
-        .await
-        .unwrap();
+    let (mut sink_d1, mut stream_d1, writer_d1) =
+        connect_and_subscribe(&server, "relay-test-1", topic)
+            .await
+            .unwrap();
+    let (mut sink_d2, mut stream_d2, writer_d2) =
+        connect_and_subscribe(&server, "relay-test-1", topic)
+            .await
+            .unwrap();
 
     // D1 → D2
     let msg_id_1 = uuid::Uuid::new_v4().to_string();
-    let envelope = chat_envelope(&msg_id_1, "d1", "D1", "Hello from D1", topic);
+    let envelope = chat_envelope(&msg_id_1, &writer_d1, "D1", "Hello from D1", topic);
     send_gossip(&mut sink_d1, topic, envelope).await.unwrap();
 
     let recv_d2 = wait_for_gossip(&mut stream_d2, 5).await.unwrap();
@@ -759,7 +807,7 @@ async fn test_d1_d2_s1_relay_chat() {
 
     // D2 → D1
     let msg_id_2 = uuid::Uuid::new_v4().to_string();
-    let envelope2 = chat_envelope(&msg_id_2, "d2", "D2", "Hello from D2", topic);
+    let envelope2 = chat_envelope(&msg_id_2, &writer_d2, "D2", "Hello from D2", topic);
     send_gossip(&mut sink_d2, topic, envelope2).await.unwrap();
 
     let recv_d1 = wait_for_gossip(&mut stream_d1, 5).await.unwrap();
@@ -794,10 +842,10 @@ async fn test_d1_d2_s1_relay_crdt_update() {
         .encode_state_as_update_v1(&StateVector::default());
     let encrypted = crypto::encrypt(&group_key, &update_bytes).unwrap();
 
-    let (mut sink_d1, _stream_d1) = connect_and_subscribe(&server, "relay-test-2", topic)
+    let (mut sink_d1, _stream_d1, _) = connect_and_subscribe(&server, "relay-test-2", topic)
         .await
         .unwrap();
-    let (_sink_d2, mut stream_d2) = connect_and_subscribe(&server, "relay-test-2", topic)
+    let (_sink_d2, mut stream_d2, _) = connect_and_subscribe(&server, "relay-test-2", topic)
         .await
         .unwrap();
 
@@ -845,14 +893,20 @@ async fn test_d1_d2_s1_relay_crdt_update() {
 #[tokio::test]
 async fn test_d1_disconnect_d2_sends_d1_catchup() {
     let server = DevServer::start().await;
-    let topic = "festival/relay-test-3/chat";
+    let topic = "festival/relay-test-3/chat/general";
 
-    let (mut sink_d1, stream_d1) = connect_and_subscribe(&server, "relay-test-3", topic)
+    let (mut sink_d1, stream_d1, writer_d1) = connect_and_subscribe(&server, "relay-test-3", topic)
         .await
         .unwrap();
 
     let initial_msg_id = uuid::Uuid::new_v4().to_string();
-    let envelope = chat_envelope(&initial_msg_id, "d1", "D1", "D1 initial message", topic);
+    let envelope = chat_envelope(
+        &initial_msg_id,
+        &writer_d1,
+        "D1",
+        "D1 initial message",
+        topic,
+    );
     send_gossip(&mut sink_d1, topic, envelope).await.unwrap();
 
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -860,28 +914,31 @@ async fn test_d1_disconnect_d2_sends_d1_catchup() {
     drop(sink_d1);
     drop(stream_d1);
 
-    let (mut sink_d2, _stream_d2) = connect_and_subscribe(&server, "relay-test-3", topic)
-        .await
-        .unwrap();
+    let (mut sink_d2, _stream_d2, writer_d2) =
+        connect_and_subscribe(&server, "relay-test-3", topic)
+            .await
+            .unwrap();
 
     let mut d2_msg_ids = Vec::new();
     for i in 1..=3 {
         let msg_id = uuid::Uuid::new_v4().to_string();
         d2_msg_ids.push(msg_id.clone());
-        let envelope = chat_envelope(&msg_id, "d2", "D2", &format!("D2 message {i}"), topic);
+        let envelope = chat_envelope(&msg_id, &writer_d2, "D2", &format!("D2 message {i}"), topic);
         send_gossip(&mut sink_d2, topic, envelope).await.unwrap();
     }
 
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    let (mut sink_d1_new, mut stream_d1_new) =
+    let (mut sink_d1_new, mut stream_d1_new, _) =
         connect_and_subscribe(&server, "relay-test-3", topic)
             .await
             .unwrap();
 
-    send_catchup(&mut sink_d1_new, topic, 0).await.unwrap();
+    send_empty_chat_catchup(&mut sink_d1_new, topic)
+        .await
+        .unwrap();
 
-    let catchup = wait_for_catchup(&mut stream_d1_new).await.unwrap();
+    let catchup = wait_for_chat_diff(&mut stream_d1_new).await.unwrap();
 
     // All messages should be present
     assert!(
@@ -929,10 +986,10 @@ async fn test_group_encrypted_state_sync_via_relay() {
         .await
         .unwrap();
 
-    let (mut sink_d1, mut stream_d1) = connect_and_subscribe(&server, festival_id, &topic)
+    let (mut sink_d1, mut stream_d1, _) = connect_and_subscribe(&server, festival_id, &topic)
         .await
         .unwrap();
-    let (mut sink_d2, mut stream_d2) = connect_and_subscribe(&server, festival_id, &topic)
+    let (mut sink_d2, mut stream_d2, _) = connect_and_subscribe(&server, festival_id, &topic)
         .await
         .unwrap();
 
@@ -1044,10 +1101,10 @@ async fn test_sv_handshake_group_sync() {
         .await
         .unwrap();
 
-    let (mut sink_d1, mut stream_d1) = connect_and_subscribe(&server, festival_id, &topic)
+    let (mut sink_d1, mut stream_d1, _) = connect_and_subscribe(&server, festival_id, &topic)
         .await
         .unwrap();
-    let (mut sink_d2, mut stream_d2) = connect_and_subscribe(&server, festival_id, &topic)
+    let (mut sink_d2, mut stream_d2, _) = connect_and_subscribe(&server, festival_id, &topic)
         .await
         .unwrap();
 
@@ -1133,10 +1190,11 @@ async fn test_festival_stage_chat_via_relay() {
     let topic_stage1 = format!("festival/{festival_id}/chat/stage-1");
     let topic_stage2 = format!("festival/{festival_id}/chat/stage-2");
 
-    let (mut sink_d1, _stream_d1) = connect_and_subscribe(&server, festival_id, &topic_stage1)
-        .await
-        .unwrap();
-    let (_sink_d2, mut stream_d2) = connect_and_subscribe(&server, festival_id, &topic_stage1)
+    let (mut sink_d1, _stream_d1, writer_d1) =
+        connect_and_subscribe(&server, festival_id, &topic_stage1)
+            .await
+            .unwrap();
+    let (_sink_d2, mut stream_d2, _) = connect_and_subscribe(&server, festival_id, &topic_stage1)
         .await
         .unwrap();
 
@@ -1147,7 +1205,13 @@ async fn test_festival_stage_chat_via_relay() {
 
     // D1 sends on stage-1 → D2 receives
     let msg_id_1 = uuid::Uuid::new_v4().to_string();
-    let envelope1 = chat_envelope(&msg_id_1, "d1", "D1", "Stage 1 message", &topic_stage1);
+    let envelope1 = chat_envelope(
+        &msg_id_1,
+        &writer_d1,
+        "D1",
+        "Stage 1 message",
+        &topic_stage1,
+    );
     send_gossip(&mut sink_d1, &topic_stage1, envelope1)
         .await
         .unwrap();
@@ -1160,7 +1224,13 @@ async fn test_festival_stage_chat_via_relay() {
 
     // D1 sends on stage-2 → D2 should NOT receive (timeout)
     let msg_id_2 = uuid::Uuid::new_v4().to_string();
-    let envelope2 = chat_envelope(&msg_id_2, "d1", "D1", "Stage 2 message", &topic_stage2);
+    let envelope2 = chat_envelope(
+        &msg_id_2,
+        &writer_d1,
+        "D1",
+        "Stage 2 message",
+        &topic_stage2,
+    );
     send_gossip(&mut sink_d1, &topic_stage2, envelope2)
         .await
         .unwrap();
@@ -1201,6 +1271,7 @@ async fn test_encrypted_group_chat_via_relay() {
         stage_id: None,
         timestamp: chrono::Utc::now().to_rfc3339(),
         writer_seq: 0,
+        logical_time: 0,
     };
     let plaintext = serde_json::to_vec(&original).unwrap();
     let encrypted = crypto::encrypt(&group_key, &plaintext).unwrap();
@@ -1214,10 +1285,10 @@ async fn test_encrypted_group_chat_via_relay() {
         )),
     };
 
-    let (mut sink_d1, _) = connect_and_subscribe(&server, festival_id, &topic)
+    let (mut sink_d1, _, _) = connect_and_subscribe(&server, festival_id, &topic)
         .await
         .unwrap();
-    let (_sink_d2, mut stream_d2) = connect_and_subscribe(&server, festival_id, &topic)
+    let (_sink_d2, mut stream_d2, _) = connect_and_subscribe(&server, festival_id, &topic)
         .await
         .unwrap();
 
@@ -1252,7 +1323,7 @@ async fn test_chat_catchup_on_reconnect() {
     let festival_id = "chat-catchup-test-1";
     let topic = format!("festival/{festival_id}/chat/general");
 
-    let (mut sink_d1, _stream_d1) = connect_and_subscribe(&server, festival_id, &topic)
+    let (mut sink_d1, _stream_d1, writer_d1) = connect_and_subscribe(&server, festival_id, &topic)
         .await
         .unwrap();
 
@@ -1260,19 +1331,25 @@ async fn test_chat_catchup_on_reconnect() {
     for i in 1..=5 {
         let msg_id = uuid::Uuid::new_v4().to_string();
         msg_ids.push(msg_id.clone());
-        let envelope = chat_envelope(&msg_id, "d1", "D1", &format!("Catchup message {i}"), &topic);
+        let envelope = chat_envelope(
+            &msg_id,
+            &writer_d1,
+            "D1",
+            &format!("Catchup message {i}"),
+            &topic,
+        );
         send_gossip(&mut sink_d1, &topic, envelope).await.unwrap();
     }
 
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    let (mut sink_d2, mut stream_d2) = connect_and_subscribe(&server, festival_id, &topic)
+    let (mut sink_d2, mut stream_d2, _) = connect_and_subscribe(&server, festival_id, &topic)
         .await
         .unwrap();
 
-    send_catchup(&mut sink_d2, &topic, 0).await.unwrap();
+    send_empty_chat_catchup(&mut sink_d2, &topic).await.unwrap();
 
-    let catchup = wait_for_catchup(&mut stream_d2).await.unwrap();
+    let catchup = wait_for_chat_diff(&mut stream_d2).await.unwrap();
 
     assert!(
         catchup.messages.len() >= 5,
@@ -1296,25 +1373,33 @@ async fn test_festival_stage_chat_multi_stage_routing() {
     let topic_general = format!("festival/{festival_id}/chat/general");
 
     // D1 subscribes to all three topics
-    let (mut sink_d1, mut stream_d1) = connect_and_auth(&server, festival_id).await.unwrap();
+    let (mut sink_d1, mut stream_d1, writer_d1) =
+        connect_and_auth(&server, festival_id).await.unwrap();
     send_subscribe(&mut sink_d1, &[&topic_main, &topic_second, &topic_general])
         .await
         .unwrap();
     wait_for_subscribed(&mut stream_d1).await.unwrap();
 
     // D2 subscribes only to main-stage
-    let (mut sink_d2, mut stream_d2) = connect_and_subscribe(&server, festival_id, &topic_main)
-        .await
-        .unwrap();
+    let (mut sink_d2, mut stream_d2, writer_d2) =
+        connect_and_subscribe(&server, festival_id, &topic_main)
+            .await
+            .unwrap();
 
     // D3 subscribes only to general
-    let (_sink_d3, mut stream_d3) = connect_and_subscribe(&server, festival_id, &topic_general)
+    let (_sink_d3, mut stream_d3, _) = connect_and_subscribe(&server, festival_id, &topic_general)
         .await
         .unwrap();
 
     // D1 sends on main-stage → D2 receives, D3 does not
     let msg_id_main = uuid::Uuid::new_v4().to_string();
-    let envelope_main = chat_envelope(&msg_id_main, "d1", "D1", "Main stage rocks!", &topic_main);
+    let envelope_main = chat_envelope(
+        &msg_id_main,
+        &writer_d1,
+        "D1",
+        "Main stage rocks!",
+        &topic_main,
+    );
     send_gossip(&mut sink_d1, &topic_main, envelope_main)
         .await
         .unwrap();
@@ -1338,7 +1423,7 @@ async fn test_festival_stage_chat_multi_stage_routing() {
     let msg_id_gen = uuid::Uuid::new_v4().to_string();
     let envelope_gen = chat_envelope(
         &msg_id_gen,
-        "d1",
+        &writer_d1,
         "D1",
         "General announcement",
         &topic_general,
@@ -1357,7 +1442,7 @@ async fn test_festival_stage_chat_multi_stage_routing() {
 
     // D2 sends reply on main-stage → D1 receives
     let msg_id_reply = uuid::Uuid::new_v4().to_string();
-    let envelope_reply = chat_envelope(&msg_id_reply, "d2", "D2", "Agreed!", &topic_main);
+    let envelope_reply = chat_envelope(&msg_id_reply, &writer_d2, "D2", "Agreed!", &topic_main);
     send_gossip(&mut sink_d2, &topic_main, envelope_reply)
         .await
         .unwrap();
@@ -1389,7 +1474,7 @@ async fn test_signed_festival_update_propagation() {
 
     let admin_key = signing::generate_signing_key();
     let admin_pub_hex = bytes_to_hex(&admin_key.verifying_key().to_bytes());
-    let (_subscriber, mut live_stream) = connect_and_subscribe(&server, festival_id, &topic)
+    let (_subscriber, mut live_stream, _) = connect_and_subscribe(&server, festival_id, &topic)
         .await
         .unwrap();
     client
@@ -1446,7 +1531,7 @@ async fn test_signed_festival_update_propagation() {
         &signed.signature,
     ));
 
-    let (mut late_sink, mut late_stream) = connect_and_subscribe(&server, festival_id, &topic)
+    let (mut late_sink, mut late_stream, _) = connect_and_subscribe(&server, festival_id, &topic)
         .await
         .unwrap();
     send_sv_exchange(
@@ -1511,10 +1596,10 @@ async fn test_signed_update_rejected_by_wrong_key() {
         )),
     };
 
-    let (mut sink, mut sender_stream) = connect_and_subscribe(&server, festival_id, &topic)
+    let (mut sink, mut sender_stream, _) = connect_and_subscribe(&server, festival_id, &topic)
         .await
         .unwrap();
-    let (_receiver, mut receiver_stream) = connect_and_subscribe(&server, festival_id, &topic)
+    let (_receiver, mut receiver_stream, _) = connect_and_subscribe(&server, festival_id, &topic)
         .await
         .unwrap();
 
@@ -1580,7 +1665,7 @@ async fn test_do_fastforward_general_data() {
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     // Late joiner N2 connects and catches up
-    let (mut sink_n2, mut stream_n2) = connect_and_subscribe(&server, festival_id, &topic)
+    let (mut sink_n2, mut stream_n2, _) = connect_and_subscribe(&server, festival_id, &topic)
         .await
         .unwrap();
     send_sv_exchange(
@@ -1664,7 +1749,7 @@ async fn test_do_fastforward_group_data() {
         .await
         .unwrap();
 
-    let (mut sink_n1, _stream_n1) = connect_and_subscribe(&server, festival_id, &topic)
+    let (mut sink_n1, _stream_n1, _) = connect_and_subscribe(&server, festival_id, &topic)
         .await
         .unwrap();
 
@@ -1686,7 +1771,7 @@ async fn test_do_fastforward_group_data() {
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     // Late joiner N2 connects and catches up via DO
-    let (mut sink_n2, mut stream_n2) = connect_and_subscribe(&server, festival_id, &topic)
+    let (mut sink_n2, mut stream_n2, _) = connect_and_subscribe(&server, festival_id, &topic)
         .await
         .unwrap();
     send_catchup(&mut sink_n2, &topic, 0).await.unwrap();
@@ -1749,7 +1834,7 @@ async fn test_signed_update_via_do_advisory_catchup() {
     let festival_id = "advisory-test-1";
     let topic = format!("festival/{festival_id}/state");
     let admin_key = register_festival_admin(&server, festival_id).await;
-    let (_live_sink, mut live_stream) = connect_and_subscribe(&server, festival_id, &topic)
+    let (_live_sink, mut live_stream, _) = connect_and_subscribe(&server, festival_id, &topic)
         .await
         .unwrap();
 
@@ -1783,7 +1868,7 @@ async fn test_signed_update_via_do_advisory_catchup() {
         &signed.signature,
     ));
 
-    let (mut late_sink, mut late_stream) = connect_and_subscribe(&server, festival_id, &topic)
+    let (mut late_sink, mut late_stream, _) = connect_and_subscribe(&server, festival_id, &topic)
         .await
         .unwrap();
     send_sv_exchange(&mut late_sink, &topic, StateVector::default().encode_v1())
@@ -1831,7 +1916,7 @@ async fn test_do_public_key_endpoint() {
     let base_url = server.http_url();
 
     // First, trigger DO instantiation by connecting via WS
-    let (sink, stream) = connect_and_auth(&server, festival_id).await.unwrap();
+    let (sink, stream, _) = connect_and_auth(&server, festival_id).await.unwrap();
     drop(sink);
     drop(stream);
     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -1870,48 +1955,67 @@ async fn test_do_public_key_endpoint() {
 // =============================================================================
 
 #[tokio::test]
-async fn test_partial_catchup_since_seq() {
+async fn test_partial_catchup_since_committed_head() {
     let server = DevServer::start().await;
     let festival_id = "partial-catchup-test-1";
     let topic = format!("festival/{festival_id}/chat/general");
 
-    let (mut sink, _stream) = connect_and_subscribe(&server, festival_id, &topic)
+    let (mut sink, _stream, writer_id) = connect_and_subscribe(&server, festival_id, &topic)
         .await
         .unwrap();
 
-    // Send 5 messages
+    // Send 5 messages and retain the third authoritative head commitment.
+    let mut third_head = None;
     for i in 0..5 {
         let msg_id = uuid::Uuid::new_v4().to_string();
-        let envelope = chat_envelope(&msg_id, "user1", "User", &format!("msg {i}"), &topic);
+        let envelope = chat_envelope(&msg_id, &writer_id, "User", &format!("msg {i}"), &topic);
+        if i == 2
+            && let Some(proto::gossip_envelope::Payload::Chat(chat)) = envelope.payload.as_ref()
+        {
+            third_head = Some((
+                chat.writer_seq,
+                format!("{}@{}", chat.id, chat.logical_time),
+            ));
+        }
         send_gossip(&mut sink, &topic, envelope).await.unwrap();
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 
-    // First catchup from 0 — should get all 5
-    let (mut sink2, mut stream2) = connect_and_subscribe(&server, festival_id, &topic)
+    // An empty committed-head request gets all five messages.
+    let (mut sink2, mut stream2, _) = connect_and_subscribe(&server, festival_id, &topic)
         .await
         .unwrap();
-    send_catchup(&mut sink2, &topic, 0).await.unwrap();
-    let catchup1 = wait_for_catchup(&mut stream2).await.unwrap();
+    send_empty_chat_catchup(&mut sink2, &topic).await.unwrap();
+    let catchup1 = wait_for_chat_diff(&mut stream2).await.unwrap();
     assert!(
         catchup1.messages.len() >= 5,
         "full catchup should have >= 5 messages"
     );
 
-    // Get the seq of message 3 (0-indexed)
-    let seq_3 = catchup1.messages[2].seq;
+    let (seq_3, commitment_3) = third_head.unwrap();
+    send_chat_catchup(
+        &mut sink2,
+        &topic,
+        std::collections::HashMap::from([(writer_id.clone(), seq_3)]),
+        std::collections::HashMap::from([(writer_id, commitment_3)]),
+    )
+    .await
+    .unwrap();
+    let catchup2 = wait_for_chat_diff(&mut stream2).await.unwrap();
 
-    // Catchup since seq_3 — should only get messages after that
-    send_catchup(&mut sink2, &topic, seq_3).await.unwrap();
-    let catchup2 = wait_for_catchup(&mut stream2).await.unwrap();
-
-    // Should have fewer messages (only those after seq_3)
+    // The bounded page advances strictly beyond the committed head.
     assert!(
         catchup2.messages.len() < catchup1.messages.len(),
         "partial catchup should return fewer messages"
     );
-    for msg in &catchup2.messages {
-        assert!(msg.seq > seq_3, "all messages should be after sinceSeq");
+    for envelope in &catchup2.messages {
+        let Some(proto::gossip_envelope::Payload::Chat(chat)) = envelope.payload.as_ref() else {
+            panic!("expected chat envelope");
+        };
+        assert!(
+            chat.writer_seq > seq_3,
+            "all messages should follow the head"
+        );
     }
 }
 
@@ -1940,10 +2044,10 @@ async fn test_three_node_signed_relay() {
     let update_bytes = doc
         .transact()
         .encode_state_as_update_v1(&StateVector::default());
-    let (_sink_n2, mut stream_n2) = connect_and_subscribe(&server, festival_id, &topic)
+    let (_sink_n2, mut stream_n2, _) = connect_and_subscribe(&server, festival_id, &topic)
         .await
         .unwrap();
-    let (_sink_n3, mut stream_n3) = connect_and_subscribe(&server, festival_id, &topic)
+    let (_sink_n3, mut stream_n3, _) = connect_and_subscribe(&server, festival_id, &topic)
         .await
         .unwrap();
 
@@ -2003,7 +2107,7 @@ async fn test_encrypted_group_chat_catchup() {
     let group_id = crypto::group_id_from_key(&group_key);
     let topic = format!("group/{group_id}/chat");
 
-    let (mut sink_d1, _stream_d1) = connect_and_subscribe(&server, festival_id, &topic)
+    let (mut sink_d1, _stream_d1, _) = connect_and_subscribe(&server, festival_id, &topic)
         .await
         .unwrap();
 
@@ -2021,6 +2125,7 @@ async fn test_encrypted_group_chat_catchup() {
             stage_id: None,
             timestamp: chrono::Utc::now().to_rfc3339(),
             writer_seq: 0,
+            logical_time: 0,
         };
         let plaintext = serde_json::to_vec(&msg).unwrap();
         let encrypted = crypto::encrypt(&group_key, &plaintext).unwrap();
@@ -2039,7 +2144,7 @@ async fn test_encrypted_group_chat_catchup() {
 
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    let (mut sink_d2, mut stream_d2) = connect_and_subscribe(&server, festival_id, &topic)
+    let (mut sink_d2, mut stream_d2, _) = connect_and_subscribe(&server, festival_id, &topic)
         .await
         .unwrap();
     send_catchup(&mut sink_d2, &topic, 0).await.unwrap();
@@ -2105,13 +2210,14 @@ async fn test_mixed_chat_and_crdt_traffic() {
     let chat_topic = format!("festival/{festival_id}/chat/main-stage");
     let state_topic = format!("festival/{festival_id}/state");
 
-    let (mut sink_d1, mut _stream_d1) = connect_and_auth(&server, festival_id).await.unwrap();
+    let (mut sink_d1, mut _stream_d1, writer_d1) =
+        connect_and_auth(&server, festival_id).await.unwrap();
     send_subscribe(&mut sink_d1, &[&chat_topic, &state_topic])
         .await
         .unwrap();
     wait_for_subscribed(&mut _stream_d1).await.unwrap();
 
-    let (mut _sink_d2, mut stream_d2) = connect_and_auth(&server, festival_id).await.unwrap();
+    let (mut _sink_d2, mut stream_d2, _) = connect_and_auth(&server, festival_id).await.unwrap();
     send_subscribe(&mut _sink_d2, &[&chat_topic, &state_topic])
         .await
         .unwrap();
@@ -2133,7 +2239,7 @@ async fn test_mixed_chat_and_crdt_traffic() {
     let chat_msg_id = uuid::Uuid::new_v4().to_string();
     let chat_env = chat_envelope(
         &chat_msg_id,
-        "d1",
+        &writer_d1,
         "D1",
         "Check the new schedule!",
         &chat_topic,
@@ -2176,7 +2282,7 @@ async fn test_do_real_keypair_sign_and_catchup() {
     let admin_key = signing::generate_signing_key();
     let admin_pub_hex = bytes_to_hex(&admin_key.verifying_key().to_bytes());
 
-    let (sink_init, stream_init) = connect_and_auth(&server, festival_id).await.unwrap();
+    let (sink_init, stream_init, _) = connect_and_auth(&server, festival_id).await.unwrap();
     drop(sink_init);
     drop(stream_init);
     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -2215,7 +2321,7 @@ async fn test_do_real_keypair_sign_and_catchup() {
 
     use base64::Engine as _;
     let topic = format!("festival/{festival_id}/state");
-    let (_live_sink, mut live_stream) = connect_and_subscribe(&server, festival_id, &topic)
+    let (_live_sink, mut live_stream, _) = connect_and_subscribe(&server, festival_id, &topic)
         .await
         .unwrap();
     let doc = Doc::new();
@@ -2259,7 +2365,7 @@ async fn test_do_real_keypair_sign_and_catchup() {
         &signed.signature,
     ));
 
-    let (mut late_sink, mut late_stream) = connect_and_subscribe(&server, festival_id, &topic)
+    let (mut late_sink, mut late_stream, _) = connect_and_subscribe(&server, festival_id, &topic)
         .await
         .unwrap();
     send_sv_exchange(
@@ -2321,7 +2427,7 @@ async fn test_do_sign_update_endpoint() {
     let admin_key = signing::generate_signing_key();
     let admin_pub_hex = bytes_to_hex(&admin_key.verifying_key().to_bytes());
 
-    let (s, r) = connect_and_auth(&server, festival_id).await.unwrap();
+    let (s, r, _) = connect_and_auth(&server, festival_id).await.unwrap();
     drop(s);
     drop(r);
     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -2333,7 +2439,7 @@ async fn test_do_sign_update_endpoint() {
         .await
         .unwrap();
 
-    let (_sink_ws, mut stream_ws) = connect_and_subscribe(&server, festival_id, &topic)
+    let (_sink_ws, mut stream_ws, _) = connect_and_subscribe(&server, festival_id, &topic)
         .await
         .unwrap();
 
@@ -2424,7 +2530,7 @@ async fn test_do_sign_update_endpoint() {
     drop(stream_ws);
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    let (mut sink_late, mut stream_late) = connect_and_subscribe(&server, festival_id, &topic)
+    let (mut sink_late, mut stream_late, _) = connect_and_subscribe(&server, festival_id, &topic)
         .await
         .unwrap();
     send_sv_exchange(
@@ -2466,7 +2572,7 @@ async fn test_do_signing_key_rejected_for_non_admin() {
     let client = reqwest::Client::new();
 
     // Trigger DO init
-    let (s, r) = connect_and_auth(&server, festival_id).await.unwrap();
+    let (s, r, _) = connect_and_auth(&server, festival_id).await.unwrap();
     drop(s);
     drop(r);
     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -2572,7 +2678,7 @@ async fn test_global_admins_inherited_by_festival_do() {
 
     // Connect to a Festival DO via WS — this triggers ensureFestivalConfig
     // which syncs global admins to the Festival DO
-    let (sink_init, stream_init) = connect_and_auth(&server, festival_id).await.unwrap();
+    let (sink_init, stream_init, _) = connect_and_auth(&server, festival_id).await.unwrap();
     drop(sink_init);
     drop(stream_init);
     tokio::time::sleep(Duration::from_millis(500)).await;

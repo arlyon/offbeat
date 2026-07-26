@@ -83,9 +83,10 @@ Compact operations are optimisation representations, not a separate source of tr
 ## Append-log catch-up
 
 Each writer has a stable public writer key and monotonic sequence. A chat state
-vector maps writer keys to the highest contiguous sequence and its message ID.
-It also carries bounded equivocation markers. Equal writer sequences with
-different IDs are therefore detectable rather than hidden by identical HWMs.
+vector maps writer keys to the highest contiguous sequence and a commitment to
+its message ID plus Lamport time. It also carries bounded equivocation markers.
+Equal writer sequences with different IDs are therefore detectable rather than
+hidden by identical HWMs.
 
 Catch-up flow:
 
@@ -101,7 +102,33 @@ Catch-up flow:
    semantics.
 5. Notify watchers once for the applied batch.
 
-Authoritative ordering must not rely only on device wall clocks. Use a deterministic causal tuple, such as hybrid logical time, writer key, and writer sequence. Wall time remains display metadata.
+Direct peers and the Festival DO filter against request heads in indexed SQL,
+then apply a bounded limit in oldest-missing authoritative order so repeated
+requests advance. WebSocket reconnects use this committed-head request rather
+than relay sequence replay; connect/subscribe does not push unsolicited chat
+history. Each page is also bounded to one Lamport/writer advance beyond the
+requester's committed heads, so every relay-accepted page is consumable and a
+subsequent request advances the floor. State vectors, ingress frames/messages,
+response counts, response bytes, and aggregate clock advances per batch are
+capped. Equal-head conflicts use a persistent `EQUIVOCATED` sequence commitment
+to prevent one
+variant from starving later catch-up; public proof verification/quarantine ships
+with the public trust implementation.
+
+Authoritative ordering uses the deterministic tuple `(lamport_time, writer_key,
+writer_sequence, message_id)`. Each topic persists a Lamport clock. Receiving a
+message raises the local clock to at least the received value; creating a local
+message atomically increments that clock and the writer sequence with message
+persistence. A send after an observed predecessor therefore sorts later, while
+concurrent ties converge by writer key, sequence, and message ID. Wall time is
+display metadata only. Legacy messages with no Lamport field derive it from
+writer sequence; the head commitment makes a same-ID authoritative duplicate
+eligible to repair the stored order. The relay repairs that stable message-ID
+row in place instead of retaining a stale fallback variant. Migration assigns
+stable synthetic sequences to legacy zero/invalid counters and quarantines
+terminal values.
+Implausible remote jumps are rejected before they can poison the persisted topic
+clock or ratchet it repeatedly within one batch.
 
 ### History limits
 
@@ -217,7 +244,7 @@ A constrained encounter may advertise a better route. If both peers can establis
 
 ## Meshtastic
 
-Meshtastic owns the BLE/radio protobuf envelope. Offbeat owns `Data.payload` for `PortNum::PrivateApp`.
+Meshtastic owns the BLE/radio protobuf envelope. Offbeat owns `Data.payload` for `PortNum::PrivateApp`. Compact group chat v2 carries writer sequence and Lamport time; v1 decodes with Lamport time derived from writer sequence.
 
 The production baseline uses compact, prioritised resource frames with fragmentation/reassembly and deduplication. Whether native iroh framing is feasible remains an evidence-driven architecture decision. Any prototype must measure actual byte and airtime cost and must not re-enable bulk snapshots/history on LoRa.
 

@@ -28,6 +28,14 @@ use crate::doc_manager::DocManager;
 use crate::proto;
 use crate::sync::SyncOrchestrator;
 
+fn is_public_chat_topic(topic: &str) -> bool {
+    let mut parts = topic.split('/');
+    matches!(
+        (parts.next(), parts.next(), parts.next(), parts.next()),
+        (Some("festival"), Some(_), Some("chat"), Some(_))
+    )
+}
+
 // ---------------------------------------------------------------------------
 // WsRelaySink — cloneable send handle
 // ---------------------------------------------------------------------------
@@ -260,6 +268,9 @@ impl WsRelaySink {
 
     /// Request catchup for a topic since a given sequence number.
     pub async fn request_catchup(&self, topic: &str, since_seq: u64) -> anyhow::Result<()> {
+        if is_public_chat_topic(topic) {
+            anyhow::bail!("public chat requires committed-head catch-up");
+        }
         self.send_client_msg(&proto::RelayClientMessage {
             msg: Some(proto::relay_client_message::Msg::Catchup(
                 proto::CatchupRequest {
@@ -325,8 +336,9 @@ impl WsRelaySink {
             msg: Some(proto::relay_client_message::Msg::ChatCatchup(
                 proto::ChatCatchupRequest {
                     topic: topic.to_string(),
-                    sv: sv.writers.clone(),
+                    sv: sv.sequences(),
                     limit,
+                    head_ids: sv.head_ids(),
                 },
             )),
         })
@@ -574,16 +586,27 @@ async fn run_receive_loop_with_reconnect(
                         .cloned()
                         .collect();
                     if !topics.is_empty()
-                        && let Err(e) = sink.subscribe(topics).await
+                        && let Err(e) = sink.subscribe(topics.clone()).await
                     {
                         tracing::warn!("ws_relay: re-subscribe failed: {e}");
                     }
 
-                    // Request catchup for each topic
+                    // Public append logs reconnect through committed writer heads;
+                    // sequence replay remains only for non-chat CRDT resources.
                     let seqs = sink.last_seen_seq.lock().await.clone();
-                    for (topic, seq) in seqs {
-                        if let Err(e) = sink.request_catchup(&topic, seq).await {
-                            tracing::warn!("ws_relay: catchup request failed: {e}");
+                    for topic in topics {
+                        let result = if is_public_chat_topic(&topic) {
+                            match sync_orchestrator.chat_state_vector(&topic) {
+                                Ok(sv) => sink.chat_catchup(&topic, &sv, 50).await,
+                                Err(error) => Err(error),
+                            }
+                        } else if let Some(seq) = seqs.get(&topic) {
+                            sink.request_catchup(&topic, *seq).await
+                        } else {
+                            Ok(())
+                        };
+                        if let Err(error) = result {
+                            tracing::warn!(%error, "ws_relay: catchup request failed");
                         }
                     }
 
@@ -667,7 +690,7 @@ async fn handle_server_message(
     sink: &WsRelaySink,
     sync_orchestrator: &Arc<SyncOrchestrator>,
     _doc_manager: &Arc<DocManager>,
-    notifier: &Arc<crate::notifier::ResourceNotifier>,
+    _notifier: &Arc<crate::notifier::ResourceNotifier>,
     connection_manager: &Option<Arc<ConnectionManager>>,
 ) -> anyhow::Result<()> {
     use proto::relay_server_message::Msg;
@@ -733,8 +756,8 @@ async fn handle_server_message(
                 return Ok(());
             }
 
-            // Track last seen seq for catchup on reconnect
-            {
+            // Public chat uses committed-head catch-up, never relay sequence.
+            if !is_public_chat_topic(&broadcast.topic) {
                 let mut seqs = sink.last_seen_seq.lock().await;
                 let entry = seqs.entry(broadcast.topic.clone()).or_insert(0);
                 if broadcast.seq > *entry {
@@ -752,6 +775,9 @@ async fn handle_server_message(
         }
 
         Msg::Catchup(catchup) => {
+            if is_public_chat_topic(&catchup.topic) {
+                anyhow::bail!("rejected sequence-based public chat catch-up");
+            }
             for entry in catchup.messages {
                 // Track seq
                 {
@@ -782,17 +808,8 @@ async fn handle_server_message(
         }
 
         Msg::ChatDiff(chat_diff) => {
-            for envelope in &chat_diff.messages {
-                if sync_orchestrator
-                    .handle_incoming_envelope(&chat_diff.topic, envelope)
-                    .await
-                    .is_err()
-                {
-                    tracing::warn!("ws_relay chat_diff dispatch failed");
-                }
-            }
+            sync_orchestrator.handle_incoming_chat_batch(&chat_diff.topic, &chat_diff.messages)?;
             tracing::info!("ws_relay: applied chat_diff");
-            notifier.notify_chat(&chat_diff.topic);
             Ok(())
         }
 
@@ -895,6 +912,7 @@ mod tests {
                 stage_id: None,
                 timestamp: "now".to_string(),
                 writer_seq: 0,
+                logical_time: 0,
             })),
         };
         let msg = proto::RelayClientMessage {
@@ -942,6 +960,7 @@ mod tests {
                             stage_id: None,
                             timestamp: "now".to_string(),
                             writer_seq: 0,
+                            logical_time: 0,
                         })),
                     }),
                 },

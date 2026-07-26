@@ -14,6 +14,7 @@ message ChatMessage {
   string text = 4;
   string topic = 5;
   optional string stage_id = 6;
-  string timestamp = 7;   // ISO 8601
+  string timestamp = 7;   // ISO 8601 display metadata only
   uint64 writer_seq = 8;
+  uint64 logical_time = 9; // per-topic Lamport clock; authoritative order
 }

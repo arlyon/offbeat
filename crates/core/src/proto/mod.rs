@@ -26,6 +26,7 @@ impl From<crate::types::ChatMessage> for ChatMessage {
             stage_id: m.stage_id,
             timestamp: m.timestamp,
             writer_seq: m.writer_seq,
+            logical_time: m.logical_time,
         }
     }
 }
@@ -41,6 +42,7 @@ impl From<ChatMessage> for crate::types::ChatMessage {
             stage_id: m.stage_id,
             timestamp: m.timestamp,
             writer_seq: m.writer_seq,
+            logical_time: m.logical_time,
         }
     }
 }
@@ -180,6 +182,7 @@ mod tests {
             stage_id: Some("main".to_string()),
             timestamp: "2026-01-01T00:00:00Z".to_string(),
             writer_seq: 42,
+            logical_time: 42,
         };
 
         let proto: ChatMessage = domain.clone().into();
@@ -219,6 +222,7 @@ mod tests {
             stage_id: None,
             timestamp: "now".to_string(),
             writer_seq: 1,
+            logical_time: 1,
         };
         let msg = GossipMessage::Chat(chat);
         let envelope = GossipEnvelope::from_gossip_message(&msg);

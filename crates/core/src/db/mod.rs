@@ -1,11 +1,27 @@
 mod migrations;
 
 use anyhow::Result;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
 use std::sync::Mutex;
 
 use crate::types::{ChatMessage, SignedUpdate, VerifiedFestivalUpdate};
+
+const MAX_REMOTE_LAMPORT_ADVANCE: i64 = 1_000_000;
+pub const EQUIVOCATED_HEAD_ID: &str = "__offbeat/equivocated__";
+
+pub fn chat_head_commitment(message_id: &str, logical_time: u64) -> String {
+    format!("{message_id}@{logical_time}")
+}
+
+fn committed_logical_time(commitment: &str) -> Option<i64> {
+    commitment
+        .rsplit_once('@')?
+        .1
+        .parse::<u64>()
+        .ok()
+        .and_then(|value| i64::try_from(value).ok())
+}
 
 /// Thread-safe SQLite database wrapper.
 pub struct Database {
@@ -23,6 +39,93 @@ pub struct PendingGroupUpdate {
 // SAFETY: `Connection` is `Send` (rusqlite documents this), and we guard
 // all access with a `Mutex`, so `Database` can be shared across threads.
 unsafe impl Sync for Database {}
+
+fn sqlite_counter(value: u64, name: &str) -> Result<i64> {
+    i64::try_from(value).map_err(|_| anyhow::anyhow!("chat {name} exceeds SQLite range"))
+}
+
+fn effective_logical_time(message: &ChatMessage) -> Result<i64> {
+    let value = if message.logical_time == 0 {
+        message.writer_seq
+    } else {
+        message.logical_time
+    };
+    sqlite_counter(value, "Lamport time")
+}
+
+fn insert_chat_message(tx: &rusqlite::Transaction<'_>, message: &ChatMessage) -> Result<usize> {
+    let writer_seq = sqlite_counter(message.writer_seq, "writer sequence")?;
+    let logical_time = effective_logical_time(message)?;
+    Ok(tx.execute(
+        "INSERT OR IGNORE INTO chat_messages
+         (id, topic, user_id, display_name, text, stage_id, timestamp,
+          writer_seq, logical_time, received_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, datetime('now'))",
+        params![
+            message.id,
+            message.topic,
+            message.user_id,
+            message.display_name,
+            message.text,
+            message.stage_id,
+            message.timestamp,
+            writer_seq,
+            logical_time,
+        ],
+    )?)
+}
+
+fn reconcile_legacy_chat_order(
+    tx: &rusqlite::Transaction<'_>,
+    message: &ChatMessage,
+    logical_time: i64,
+) -> Result<usize> {
+    if message.logical_time == 0 {
+        return Ok(0);
+    }
+    Ok(tx.execute(
+        "UPDATE chat_messages SET logical_time = ?2
+         WHERE id = ?1 AND logical_time = writer_seq AND logical_time <> ?2
+           AND topic = ?3 AND user_id = ?4 AND display_name = ?5
+           AND stage_id IS ?6 AND timestamp = ?7 AND writer_seq = ?8 AND text = ?9",
+        params![
+            message.id,
+            logical_time,
+            message.topic,
+            message.user_id,
+            message.display_name,
+            message.stage_id,
+            message.timestamp,
+            sqlite_counter(message.writer_seq, "writer sequence")?,
+            message.text,
+        ],
+    )?)
+}
+
+fn row_counter(row: &rusqlite::Row<'_>, index: usize, name: &str) -> rusqlite::Result<u64> {
+    let value: i64 = row.get(index)?;
+    u64::try_from(value).map_err(|_| {
+        rusqlite::Error::FromSqlConversionFailure(
+            index,
+            rusqlite::types::Type::Integer,
+            Box::new(std::io::Error::other(format!("negative chat {name}"))),
+        )
+    })
+}
+
+fn chat_message_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChatMessage> {
+    Ok(ChatMessage {
+        id: row.get(0)?,
+        user_id: row.get(1)?,
+        display_name: row.get(2)?,
+        text: row.get(3)?,
+        topic: row.get(4)?,
+        stage_id: row.get(5)?,
+        timestamp: row.get(6)?,
+        writer_seq: row_counter(row, 7, "writer sequence")?,
+        logical_time: row_counter(row, 8, "Lamport time")?,
+    })
+}
 
 impl Database {
     /// Open (or create) a database at the given path and run migrations.
@@ -339,6 +442,18 @@ impl Database {
             "DELETE FROM chat_messages WHERE topic = ?1",
             params![chat_topic],
         )?;
+        tx.execute(
+            "DELETE FROM chat_topic_clocks WHERE topic = ?1",
+            params![chat_topic],
+        )?;
+        tx.execute(
+            "DELETE FROM chat_writer_sequences WHERE topic = ?1",
+            params![chat_topic],
+        )?;
+        tx.execute(
+            "DELETE FROM chat_sequence_conflicts WHERE topic = ?1",
+            params![chat_topic],
+        )?;
         tx.execute("DELETE FROM groups WHERE id = ?1", params![group_id])?;
         tx.commit()?;
         Ok(pending_id)
@@ -399,56 +514,164 @@ impl Database {
 
     // --- chat messages ---
 
-    pub fn save_chat_message(&self, msg: &ChatMessage) -> Result<()> {
-        self.conn.lock().unwrap().execute(
-            "INSERT OR IGNORE INTO chat_messages
-             (id, topic, user_id, display_name, text, stage_id, timestamp, writer_seq, received_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, datetime('now'))",
-            params![
-                msg.id,
-                msg.topic,
-                msg.user_id,
-                msg.display_name,
-                msg.text,
-                msg.stage_id,
-                msg.timestamp,
-                msg.writer_seq as i64,
-            ],
+    /// Allocate a writer sequence and per-topic Lamport time, then persist the
+    /// local message in the same transaction.
+    pub fn save_local_chat_message(&self, mut msg: ChatMessage) -> Result<ChatMessage> {
+        if msg.writer_seq != 0 || msg.logical_time != 0 {
+            anyhow::bail!("local chat position must be allocated by the database");
+        }
+
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        tx.execute(
+            "INSERT OR IGNORE INTO chat_writer_sequences(topic, user_id, writer_seq)
+             VALUES (?1, ?2, 0)",
+            params![msg.topic, msg.user_id],
         )?;
-        Ok(())
+        let current_writer_seq: i64 = tx.query_row(
+            "SELECT writer_seq FROM chat_writer_sequences
+             WHERE topic = ?1 AND user_id = ?2",
+            params![msg.topic, msg.user_id],
+            |row| row.get(0),
+        )?;
+        let next_writer_seq = current_writer_seq
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("chat writer sequence exhausted"))?;
+
+        tx.execute(
+            "INSERT OR IGNORE INTO chat_topic_clocks(topic, logical_time) VALUES (?1, 0)",
+            params![msg.topic],
+        )?;
+        let current_logical_time: i64 = tx.query_row(
+            "SELECT logical_time FROM chat_topic_clocks WHERE topic = ?1",
+            params![msg.topic],
+            |row| row.get(0),
+        )?;
+        let next_logical_time = current_logical_time
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("chat Lamport clock exhausted"))?;
+
+        tx.execute(
+            "UPDATE chat_writer_sequences SET writer_seq = ?3
+             WHERE topic = ?1 AND user_id = ?2",
+            params![msg.topic, msg.user_id, next_writer_seq],
+        )?;
+        tx.execute(
+            "UPDATE chat_topic_clocks SET logical_time = ?2 WHERE topic = ?1",
+            params![msg.topic, next_logical_time],
+        )?;
+
+        msg.writer_seq = next_writer_seq as u64;
+        msg.logical_time = next_logical_time as u64;
+        if insert_chat_message(&tx, &msg)? != 1 {
+            anyhow::bail!("chat message ID already exists");
+        }
+        tx.commit()?;
+        Ok(msg)
+    }
+
+    /// Persist an incoming message and advance local sequence/Lamport floors.
+    pub fn save_chat_message(&self, msg: &ChatMessage) -> Result<()> {
+        self.save_chat_messages_batch(std::slice::from_ref(msg))
     }
 
     pub fn save_chat_messages_batch(&self, msgs: &[ChatMessage]) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
-        {
-            let mut stmt = tx.prepare(
-                "INSERT OR IGNORE INTO chat_messages
-                 (id, topic, user_id, display_name, text, stage_id, timestamp, writer_seq, received_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, datetime('now'))",
-            )?;
-            for msg in msgs {
-                stmt.execute(params![
-                    msg.id,
-                    msg.topic,
-                    msg.user_id,
-                    msg.display_name,
-                    msg.text,
-                    msg.stage_id,
-                    msg.timestamp,
-                    msg.writer_seq as i64,
-                ])?;
+        let mut initial_topic_clocks = std::collections::HashMap::new();
+        let mut initial_writer_sequences = std::collections::HashMap::new();
+        for msg in msgs {
+            let logical_time = effective_logical_time(msg)?;
+            let current_logical_time: i64 = tx
+                .query_row(
+                    "SELECT logical_time FROM chat_topic_clocks WHERE topic = ?1",
+                    params![msg.topic],
+                    |row| row.get(0),
+                )
+                .optional()?
+                .unwrap_or(0);
+            let initial_topic_clock = *initial_topic_clocks
+                .entry(msg.topic.clone())
+                .or_insert(current_logical_time);
+            if logical_time > initial_topic_clock.saturating_add(MAX_REMOTE_LAMPORT_ADVANCE) {
+                anyhow::bail!("remote chat Lamport clock exceeds accepted advance");
             }
+            let writer_seq = sqlite_counter(msg.writer_seq, "writer sequence")?;
+            let writer_key = (msg.topic.clone(), msg.user_id.clone());
+            let initial_writer_sequence: i64 =
+                *initial_writer_sequences.entry(writer_key).or_insert(
+                    tx.query_row(
+                        "SELECT writer_seq FROM chat_writer_sequences
+                     WHERE topic = ?1 AND user_id = ?2",
+                        params![msg.topic, msg.user_id],
+                        |row| row.get(0),
+                    )
+                    .optional()?
+                    .unwrap_or(0),
+                );
+            if writer_seq > initial_writer_sequence.saturating_add(MAX_REMOTE_LAMPORT_ADVANCE) {
+                anyhow::bail!("remote chat writer sequence exceeds accepted advance");
+            }
+            let has_conflict: bool = writer_seq > 0
+                && tx.query_row(
+                    "SELECT EXISTS(
+                        SELECT 1 FROM chat_messages
+                        WHERE topic = ?1 AND user_id = ?2 AND writer_seq = ?3 AND id <> ?4
+                    )",
+                    params![msg.topic, msg.user_id, writer_seq, msg.id],
+                    |row| row.get(0),
+                )?;
+            if has_conflict {
+                tx.execute(
+                    "INSERT OR IGNORE INTO chat_sequence_conflicts(topic, user_id, writer_seq)
+                     VALUES (?1, ?2, ?3)",
+                    params![msg.topic, msg.user_id, writer_seq],
+                )?;
+            }
+            let inserted = insert_chat_message(&tx, msg)?;
+            let reconciled = if inserted == 0 {
+                reconcile_legacy_chat_order(&tx, msg, logical_time)?
+            } else {
+                0
+            };
+            if inserted == 0 && reconciled == 0 {
+                continue;
+            }
+            tx.execute(
+                "INSERT INTO chat_topic_clocks(topic, logical_time) VALUES (?1, ?2)
+                 ON CONFLICT(topic) DO UPDATE SET
+                    logical_time = MAX(logical_time, excluded.logical_time)",
+                params![msg.topic, logical_time],
+            )?;
+            tx.execute(
+                "INSERT INTO chat_writer_sequences(topic, user_id, writer_seq)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(topic, user_id) DO UPDATE SET
+                    writer_seq = MAX(writer_seq, excluded.writer_seq)",
+                params![msg.topic, msg.user_id, writer_seq],
+            )?;
         }
         tx.commit()?;
         Ok(())
     }
 
     pub fn delete_chat_messages(&self, topic: &str) -> Result<()> {
-        self.conn
-            .lock()
-            .unwrap()
-            .execute("DELETE FROM chat_messages WHERE topic = ?1", params![topic])?;
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM chat_messages WHERE topic = ?1", params![topic])?;
+        tx.execute(
+            "DELETE FROM chat_topic_clocks WHERE topic = ?1",
+            params![topic],
+        )?;
+        tx.execute(
+            "DELETE FROM chat_writer_sequences WHERE topic = ?1",
+            params![topic],
+        )?;
+        tx.execute(
+            "DELETE FROM chat_sequence_conflicts WHERE topic = ?1",
+            params![topic],
+        )?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -460,98 +683,188 @@ impl Database {
     ) -> Result<Vec<ChatMessage>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, user_id, display_name, text, topic, stage_id, timestamp, writer_seq
+            "SELECT id, user_id, display_name, text, topic, stage_id, timestamp,
+                    writer_seq, logical_time
              FROM chat_messages
              WHERE topic = ?1
-             ORDER BY timestamp ASC
+             ORDER BY logical_time ASC, user_id ASC, writer_seq ASC, id ASC
              LIMIT ?2 OFFSET ?3",
         )?;
         let msgs = stmt
-            .query_map(params![topic, limit, offset], |row| {
-                Ok(ChatMessage {
-                    id: row.get(0)?,
-                    user_id: row.get(1)?,
-                    display_name: row.get(2)?,
-                    text: row.get(3)?,
-                    topic: row.get(4)?,
-                    stage_id: row.get(5)?,
-                    timestamp: row.get(6)?,
-                    writer_seq: row.get::<_, i64>(7)? as u64,
-                })
-            })?
+            .query_map(params![topic, limit, offset], chat_message_from_row)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(msgs)
     }
 
-    /// Get the next writer_seq for a user on a topic (max + 1, or 1 if none).
+    /// Get the next writer sequence without reserving it. Local sends must use
+    /// `save_local_chat_message` so allocation and persistence stay atomic.
     pub fn get_next_writer_seq(&self, topic: &str, user_id: &str) -> Result<u64> {
         let conn = self.conn.lock().unwrap();
-        let max: i64 = conn.query_row(
-            "SELECT COALESCE(MAX(writer_seq), 0) FROM chat_messages WHERE topic = ?1 AND user_id = ?2",
-            params![topic, user_id],
-            |row| row.get(0),
-        )?;
-        Ok((max + 1) as u64)
+        let current: i64 = conn
+            .query_row(
+                "SELECT writer_seq FROM chat_writer_sequences
+                 WHERE topic = ?1 AND user_id = ?2",
+                params![topic, user_id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .unwrap_or(0);
+        let next = current
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("chat writer sequence exhausted"))?;
+        Ok(next as u64)
     }
 
-    /// Compute the chat state vector for a topic: {user_id: max_writer_seq} for each writer.
-    pub fn compute_chat_sv(&self, topic: &str) -> Result<std::collections::HashMap<String, u64>> {
+    /// Compute complete highest-contiguous writer heads without loading message
+    /// payloads or truncating to a history page.
+    pub fn get_chat_writer_heads(&self, topic: &str) -> Result<Vec<(String, u64, String)>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT user_id, MAX(writer_seq) FROM chat_messages WHERE topic = ?1 GROUP BY user_id",
+            "SELECT c.user_id, c.writer_seq,
+                    CASE WHEN EXISTS(
+                        SELECT 1 FROM chat_sequence_conflicts x
+                        WHERE x.topic = c.topic AND x.user_id = c.user_id
+                          AND x.writer_seq = c.writer_seq
+                    ) THEN '__offbeat/equivocated__' ELSE MIN(c.id) END,
+                    MAX(c.logical_time)
+             FROM chat_messages c WHERE c.topic = ?1
+             GROUP BY c.user_id, c.writer_seq
+             ORDER BY c.user_id, c.writer_seq",
         )?;
-        let sv = stmt
-            .query_map(params![topic], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as u64))
-            })?
-            .collect::<rusqlite::Result<std::collections::HashMap<String, u64>>>()?;
-        Ok(sv)
+        let mut rows = stmt.query(params![topic])?;
+        let mut heads = Vec::new();
+        let mut current_writer = String::new();
+        let mut current_sequence = 0u64;
+        let mut current_id = String::new();
+        while let Some(row) = rows.next()? {
+            let writer: String = row.get(0)?;
+            let sequence = u64::try_from(row.get::<_, i64>(1)?)
+                .map_err(|_| anyhow::anyhow!("negative chat writer sequence"))?;
+            let message_id: String = row.get(2)?;
+            let logical_time = u64::try_from(row.get::<_, i64>(3)?)
+                .map_err(|_| anyhow::anyhow!("negative chat logical time"))?;
+            let head_id = if message_id == EQUIVOCATED_HEAD_ID {
+                message_id
+            } else {
+                chat_head_commitment(&message_id, logical_time)
+            };
+            if writer != current_writer {
+                if !current_writer.is_empty() {
+                    heads.push((
+                        std::mem::take(&mut current_writer),
+                        current_sequence,
+                        std::mem::take(&mut current_id),
+                    ));
+                }
+                current_writer = writer;
+                current_sequence = 0;
+                current_id.clear();
+                if sequence == 0 {
+                    current_id = head_id;
+                } else if sequence == 1 {
+                    current_sequence = 1;
+                    current_id = head_id;
+                }
+            } else if sequence == current_sequence + 1 {
+                current_sequence = sequence;
+                current_id = head_id;
+            }
+        }
+        if !current_writer.is_empty() {
+            heads.push((current_writer, current_sequence, current_id));
+        }
+        Ok(heads)
     }
 
-    /// Get messages that are newer than the given state vector.
-    /// Returns messages where user's writer_seq > sv[user] OR user not in sv.
+    /// Compute `{writer_id: highest_contiguous_writer_seq}` for compatibility
+    /// with sequence-only catch-up peers.
+    pub fn compute_chat_sv(&self, topic: &str) -> Result<std::collections::HashMap<String, u64>> {
+        Ok(self
+            .get_chat_writer_heads(topic)?
+            .into_iter()
+            .map(|(writer, sequence, _)| (writer, sequence))
+            .collect())
+    }
+
+    /// Return missing messages in authoritative Lamport order.
     pub fn get_messages_since_sv(
         &self,
         topic: &str,
         sv: &std::collections::HashMap<String, u64>,
         limit: u32,
     ) -> Result<Vec<ChatMessage>> {
-        // Simple approach: get all messages for topic, filter in Rust
-        // (More efficient SQL is possible but this is clearer and the message count is bounded)
+        self.get_messages_since_heads(topic, sv, &std::collections::HashMap::new(), limit)
+    }
+
+    /// Return missing messages plus an equal-sequence variant when the remote
+    /// head commitment differs.
+    pub fn get_messages_since_heads(
+        &self,
+        topic: &str,
+        sv: &std::collections::HashMap<String, u64>,
+        head_ids: &std::collections::HashMap<String, String>,
+        limit: u32,
+    ) -> Result<Vec<ChatMessage>> {
+        let logical_floor = head_ids
+            .values()
+            .filter_map(|commitment| committed_logical_time(commitment))
+            .max()
+            .unwrap_or(0);
+        let logical_ceiling = logical_floor.saturating_add(MAX_REMOTE_LAMPORT_ADVANCE);
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT id, user_id, display_name, text, topic, stage_id, timestamp, writer_seq
-             FROM chat_messages
-             WHERE topic = ?1
-             ORDER BY writer_seq DESC, timestamp DESC
-             LIMIT ?2",
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(
+            "CREATE TEMP TABLE IF NOT EXISTS requested_chat_heads (
+                writer_id TEXT PRIMARY KEY,
+                writer_seq INTEGER NOT NULL,
+                head_id TEXT NOT NULL
+            );
+            DELETE FROM requested_chat_heads;",
         )?;
-        let all_msgs: Vec<ChatMessage> = stmt
-            .query_map(params![topic, limit * 10], |row| {
-                // over-fetch to filter
-                Ok(ChatMessage {
-                    id: row.get(0)?,
-                    user_id: row.get(1)?,
-                    display_name: row.get(2)?,
-                    text: row.get(3)?,
-                    topic: row.get(4)?,
-                    stage_id: row.get(5)?,
-                    timestamp: row.get(6)?,
-                    writer_seq: row.get::<_, i64>(7)? as u64,
-                })
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-
-        let filtered: Vec<ChatMessage> = all_msgs
-            .into_iter()
-            .filter(|m| match sv.get(&m.user_id) {
-                Some(&max_seq) => m.writer_seq > max_seq,
-                None => true, // unknown writer → include all
-            })
-            .take(limit as usize)
-            .collect();
-
-        Ok(filtered)
+        {
+            let mut insert = tx.prepare(
+                "INSERT INTO requested_chat_heads(writer_id, writer_seq, head_id)
+                 VALUES (?1, ?2, ?3)",
+            )?;
+            for (writer, sequence) in sv {
+                insert.execute(params![
+                    writer,
+                    sqlite_counter(*sequence, "requested writer sequence")?,
+                    head_ids.get(writer).map(String::as_str).unwrap_or_default(),
+                ])?;
+            }
+        }
+        let messages = {
+            let mut stmt = tx.prepare(
+                "SELECT c.id, c.user_id, c.display_name, c.text, c.topic, c.stage_id,
+                        c.timestamp, c.writer_seq, c.logical_time
+                 FROM chat_messages c
+                 LEFT JOIN requested_chat_heads h ON h.writer_id = c.user_id
+                 WHERE c.topic = ?1
+                   AND c.logical_time <= ?4
+                   AND c.writer_seq <= COALESCE(h.writer_seq, 0) + ?5
+                   AND (
+                    h.writer_id IS NULL OR c.writer_seq > h.writer_seq OR
+                    (c.writer_seq = h.writer_seq AND h.head_id <> '' AND h.head_id <> ?3
+                     AND (c.id || '@' || c.logical_time) <> h.head_id)
+                 )
+                 ORDER BY c.logical_time ASC, c.user_id ASC, c.writer_seq ASC, c.id ASC
+                 LIMIT ?2",
+            )?;
+            stmt.query_map(
+                params![
+                    topic,
+                    limit.clamp(1, 1000),
+                    EQUIVOCATED_HEAD_ID,
+                    logical_ceiling,
+                    MAX_REMOTE_LAMPORT_ADVANCE,
+                ],
+                chat_message_from_row,
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        tx.commit()?;
+        Ok(messages)
     }
 
     // --- credentials ---
@@ -816,20 +1129,18 @@ mod tests {
                 stage_id: None,
                 timestamp: "2026-01-01T00:00:00Z".to_string(),
                 writer_seq: 1,
+                logical_time: 1,
             })
             .unwrap();
         }
 
         db.delete_chat_messages("group/g1/chat").unwrap();
-        assert!(
-            db.get_chat_messages("group/g1/chat", 10, 0)
-                .unwrap()
-                .is_empty()
-        );
+        assert!(db
+            .get_chat_messages("group/g1/chat", 10, 0)
+            .unwrap()
+            .is_empty());
         assert_eq!(
-            db.get_chat_messages("group/g2/chat", 10, 0)
-                .unwrap()
-                .len(),
+            db.get_chat_messages("group/g2/chat", 10, 0).unwrap().len(),
             1
         );
     }
@@ -907,16 +1218,13 @@ mod tests {
             stage_id: None,
             timestamp: "2026-01-01T00:00:00Z".to_string(),
             writer_seq: 1,
+            logical_time: 1,
         })
         .unwrap();
-        db.enqueue_group_update("festival-a", "g1", &[3])
-            .unwrap();
-        db.enqueue_group_update("festival-a", "g1", &[4])
-            .unwrap();
+        db.enqueue_group_update("festival-a", "g1", &[3]).unwrap();
+        db.enqueue_group_update("festival-a", "g1", &[4]).unwrap();
 
-        let leave_id = db
-            .finalize_group_leave("festival-a", "g1", &[9])
-            .unwrap();
+        let leave_id = db.finalize_group_leave("festival-a", "g1", &[9]).unwrap();
         let pending = db.load_pending_group_updates("festival-a").unwrap();
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].id, leave_id);
@@ -924,11 +1232,24 @@ mod tests {
         assert!(db.load_group_key("g1").unwrap().is_none());
         assert!(db.load_doc("group/g1/state").unwrap().is_none());
         assert!(db.load_doc_updates("group/g1/state").unwrap().is_empty());
-        assert!(
-            db.get_chat_messages("group/g1/chat", 10, 0)
-                .unwrap()
-                .is_empty()
-        );
+        assert!(db
+            .get_chat_messages("group/g1/chat", 10, 0)
+            .unwrap()
+            .is_empty());
+        let after_leave = db
+            .save_local_chat_message(ChatMessage {
+                id: "after-leave".to_string(),
+                user_id: "user".to_string(),
+                display_name: "User".to_string(),
+                text: "new lifecycle".to_string(),
+                topic: "group/g1/chat".to_string(),
+                stage_id: None,
+                timestamp: "not-authoritative".to_string(),
+                writer_seq: 0,
+                logical_time: 0,
+            })
+            .unwrap();
+        assert_eq!((after_leave.writer_seq, after_leave.logical_time), (1, 1));
     }
 
     #[test]
@@ -952,11 +1273,10 @@ mod tests {
         assert_eq!(pending[0].group_id, "group-a");
         assert_eq!(pending[0].envelope, vec![2, 3]);
         db.delete_pending_group_update(first_id).unwrap();
-        assert!(
-            db.load_pending_group_updates("festival-a")
-                .unwrap()
-                .is_empty()
-        );
+        assert!(db
+            .load_pending_group_updates("festival-a")
+            .unwrap()
+            .is_empty());
         assert_eq!(
             db.load_pending_group_updates("festival-b").unwrap().len(),
             1
@@ -1025,6 +1345,7 @@ mod tests {
             stage_id: None,
             timestamp: "2026-06-13T20:00:00Z".to_string(),
             writer_seq: 0,
+            logical_time: 0,
         };
         db.save_chat_message(&msg).unwrap();
         let msgs = db.get_chat_messages("festival/f1", 10, 0).unwrap();
@@ -1046,6 +1367,7 @@ mod tests {
                 stage_id: None,
                 timestamp: format!("2026-06-13T20:{:02}:00Z", i % 60),
                 writer_seq: i as u64,
+                logical_time: i as u64,
             })
             .collect();
         db.save_chat_messages_batch(&msgs).unwrap();
@@ -1066,6 +1388,7 @@ mod tests {
                 stage_id: None,
                 timestamp: format!("2026-06-13T2{i}:00:00Z"),
                 writer_seq: i as u64,
+                logical_time: i as u64,
             })
             .unwrap();
         }
@@ -1078,6 +1401,7 @@ mod tests {
             stage_id: None,
             timestamp: "2026-06-13T20:00:00Z".to_string(),
             writer_seq: 0,
+            logical_time: 0,
         })
         .unwrap();
         let msgs = db.get_chat_messages("topic/a", 10, 0).unwrap();
@@ -1096,6 +1420,7 @@ mod tests {
             stage_id: None,
             timestamp: "2026-06-13T20:00:00Z".to_string(),
             writer_seq: 0,
+            logical_time: 0,
         };
         db.save_chat_message(&msg).unwrap();
 
@@ -1120,6 +1445,7 @@ mod tests {
             stage_id: None,
             timestamp: "2026-06-13T21:00:00Z".to_string(),
             writer_seq: 1,
+            logical_time: 1,
         };
         db.save_chat_message(&msg2).unwrap();
 
@@ -1154,6 +1480,7 @@ mod tests {
             stage_id: None,
             timestamp: "2026-06-13T20:00:00Z".to_string(),
             writer_seq: 0,
+            logical_time: 0,
         };
         db.save_chat_message(&msg).unwrap();
 
@@ -1168,6 +1495,7 @@ mod tests {
                 stage_id: None,
                 timestamp: "2026-06-13T21:00:00Z".to_string(),
                 writer_seq: 1,
+                logical_time: 1,
             },
             ChatMessage {
                 id: "batch_new".to_string(),
@@ -1178,6 +1506,7 @@ mod tests {
                 stage_id: None,
                 timestamp: "2026-06-13T22:00:00Z".to_string(),
                 writer_seq: 2,
+                logical_time: 2,
             },
         ];
         db.save_chat_messages_batch(&msgs).unwrap();
@@ -1211,6 +1540,7 @@ mod tests {
             stage_id: None,
             timestamp: "2026-06-13T20:00:00Z".to_string(),
             writer_seq: 1,
+            logical_time: 1,
         })
         .unwrap();
 
@@ -1220,47 +1550,27 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_chat_sv() {
+    fn test_compute_chat_sv_uses_highest_contiguous_sequence() {
         let db = test_db();
         let topic = "festival/f1/chat/general";
-
-        db.save_chat_message(&ChatMessage {
-            id: "m1".to_string(),
-            user_id: "alice".to_string(),
-            display_name: "Alice".to_string(),
-            text: "hi".to_string(),
-            topic: topic.to_string(),
-            stage_id: None,
-            timestamp: "2026-06-13T20:00:00Z".to_string(),
-            writer_seq: 3,
-        })
-        .unwrap();
-        db.save_chat_message(&ChatMessage {
-            id: "m2".to_string(),
-            user_id: "bob".to_string(),
-            display_name: "Bob".to_string(),
-            text: "hey".to_string(),
-            topic: topic.to_string(),
-            stage_id: None,
-            timestamp: "2026-06-13T20:01:00Z".to_string(),
-            writer_seq: 7,
-        })
-        .unwrap();
-        db.save_chat_message(&ChatMessage {
-            id: "m3".to_string(),
-            user_id: "alice".to_string(),
-            display_name: "Alice".to_string(),
-            text: "world".to_string(),
-            topic: topic.to_string(),
-            stage_id: None,
-            timestamp: "2026-06-13T20:02:00Z".to_string(),
-            writer_seq: 5,
-        })
-        .unwrap();
+        for (writer, sequence) in [("alice", 1), ("alice", 2), ("alice", 4), ("bob", 2)] {
+            db.save_chat_message(&ChatMessage {
+                id: format!("{writer}-{sequence}"),
+                user_id: writer.to_string(),
+                display_name: writer.to_string(),
+                text: "message".to_string(),
+                topic: topic.to_string(),
+                stage_id: None,
+                timestamp: "not-authoritative".to_string(),
+                writer_seq: sequence,
+                logical_time: sequence,
+            })
+            .unwrap();
+        }
 
         let sv = db.compute_chat_sv(topic).unwrap();
-        assert_eq!(sv.get("alice").copied(), Some(5));
-        assert_eq!(sv.get("bob").copied(), Some(7));
+        assert_eq!(sv.get("alice").copied(), Some(2));
+        assert_eq!(sv.get("bob").copied(), Some(0));
     }
 
     #[test]
@@ -1279,6 +1589,7 @@ mod tests {
                 stage_id: None,
                 timestamp: format!("2026-06-13T20:0{seq}:00Z"),
                 writer_seq: seq,
+                logical_time: seq,
             })
             .unwrap();
         }
@@ -1292,6 +1603,7 @@ mod tests {
                 stage_id: None,
                 timestamp: format!("2026-06-13T21:0{seq}:00Z"),
                 writer_seq: seq,
+                logical_time: seq,
             })
             .unwrap();
         }
@@ -1314,6 +1626,380 @@ mod tests {
             .get_messages_since_sv(topic, &std::collections::HashMap::new(), 50)
             .unwrap();
         assert_eq!(all.len(), 5);
+    }
+
+    #[test]
+    fn lamport_order_ignores_wall_clock_and_tracks_causality() {
+        let db = test_db();
+        let topic = "festival/f1/chat/general";
+        db.save_chat_message(&ChatMessage {
+            id: "remote".to_string(),
+            user_id: "bob".to_string(),
+            display_name: "Bob".to_string(),
+            text: "future clock".to_string(),
+            topic: topic.to_string(),
+            stage_id: None,
+            timestamp: "2099-01-01T00:00:00Z".to_string(),
+            writer_seq: 4,
+            logical_time: 50,
+        })
+        .unwrap();
+
+        let local = db
+            .save_local_chat_message(ChatMessage {
+                id: "reply".to_string(),
+                user_id: "alice".to_string(),
+                display_name: "Alice".to_string(),
+                text: "reply".to_string(),
+                topic: topic.to_string(),
+                stage_id: None,
+                timestamp: "1970-01-01T00:00:00Z".to_string(),
+                writer_seq: 0,
+                logical_time: 0,
+            })
+            .unwrap();
+
+        assert_eq!(local.logical_time, 51);
+        assert_eq!(local.writer_seq, 1);
+        let ids: Vec<String> = db
+            .get_chat_messages(topic, 10, 0)
+            .unwrap()
+            .into_iter()
+            .map(|message| message.id)
+            .collect();
+        assert_eq!(ids, vec!["remote", "reply"]);
+    }
+
+    #[test]
+    fn rejects_terminal_remote_clock_without_poisoning_topic() {
+        let db = test_db();
+        let rejected = db.save_chat_message(&ChatMessage {
+            id: "poison".to_string(),
+            user_id: "mallory".to_string(),
+            display_name: "Mallory".to_string(),
+            text: "poison".to_string(),
+            topic: "topic".to_string(),
+            stage_id: None,
+            timestamp: "not-authoritative".to_string(),
+            writer_seq: 1,
+            logical_time: 1_000_001,
+        });
+        assert!(rejected.is_err());
+        let local = db
+            .save_local_chat_message(ChatMessage {
+                id: "local".to_string(),
+                user_id: "alice".to_string(),
+                display_name: "Alice".to_string(),
+                text: "safe".to_string(),
+                topic: "topic".to_string(),
+                stage_id: None,
+                timestamp: "not-authoritative".to_string(),
+                writer_seq: 0,
+                logical_time: 0,
+            })
+            .unwrap();
+        assert_eq!(local.logical_time, 1);
+    }
+
+    #[test]
+    fn batch_cannot_ratchet_remote_clock_limit_per_message() {
+        let db = test_db();
+        let messages = [
+            ChatMessage {
+                id: "first".to_string(),
+                user_id: "mallory".to_string(),
+                display_name: "Mallory".to_string(),
+                text: "first".to_string(),
+                topic: "topic".to_string(),
+                stage_id: None,
+                timestamp: "display-only".to_string(),
+                writer_seq: 1,
+                logical_time: 1_000_000,
+            },
+            ChatMessage {
+                id: "second".to_string(),
+                user_id: "mallory".to_string(),
+                display_name: "Mallory".to_string(),
+                text: "second".to_string(),
+                topic: "topic".to_string(),
+                stage_id: None,
+                timestamp: "display-only".to_string(),
+                writer_seq: 2,
+                logical_time: 2_000_000,
+            },
+        ];
+        assert!(db.save_chat_messages_batch(&messages).is_err());
+        assert!(db.get_chat_messages("topic", 10, 0).unwrap().is_empty());
+        let local = db
+            .save_local_chat_message(ChatMessage {
+                id: "local".to_string(),
+                user_id: "alice".to_string(),
+                display_name: "Alice".to_string(),
+                text: "safe".to_string(),
+                topic: "topic".to_string(),
+                stage_id: None,
+                timestamp: "display-only".to_string(),
+                writer_seq: 0,
+                logical_time: 0,
+            })
+            .unwrap();
+        assert_eq!(local.logical_time, 1);
+    }
+
+    #[test]
+    fn catchup_pages_respect_requester_lamport_floor() {
+        let db = test_db();
+        for (sequence, logical_time) in [(1, 1_000_000), (2, 2_000_000)] {
+            db.save_chat_message(&ChatMessage {
+                id: format!("m{sequence}"),
+                user_id: "alice".to_string(),
+                display_name: "Alice".to_string(),
+                text: "message".to_string(),
+                topic: "topic".to_string(),
+                stage_id: None,
+                timestamp: "display-only".to_string(),
+                writer_seq: sequence,
+                logical_time,
+            })
+            .unwrap();
+        }
+
+        let first = db
+            .get_messages_since_heads(
+                "topic",
+                &std::collections::HashMap::new(),
+                &std::collections::HashMap::new(),
+                50,
+            )
+            .unwrap();
+        assert_eq!(
+            first
+                .iter()
+                .map(|message| message.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["m1"]
+        );
+        let second = db
+            .get_messages_since_heads(
+                "topic",
+                &std::collections::HashMap::from([("alice".to_string(), 1)]),
+                &std::collections::HashMap::from([("alice".to_string(), "m1@1000000".to_string())]),
+                50,
+            )
+            .unwrap();
+        assert_eq!(
+            second
+                .iter()
+                .map(|message| message.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["m2"]
+        );
+    }
+
+    #[test]
+    fn duplicate_legacy_message_recovers_authoritative_lamport_time() {
+        let db = test_db();
+        let mut message = ChatMessage {
+            id: "same-id".to_string(),
+            user_id: "alice".to_string(),
+            display_name: "Alice".to_string(),
+            text: "same payload".to_string(),
+            topic: "topic".to_string(),
+            stage_id: None,
+            timestamp: "display-only".to_string(),
+            writer_seq: 1,
+            logical_time: 0,
+        };
+        db.save_chat_message(&message).unwrap();
+        let local_heads = db.get_chat_writer_heads("topic").unwrap();
+        assert_eq!(local_heads[0].2, "same-id@1");
+
+        message.logical_time = 50;
+        let remote = test_db();
+        remote.save_chat_message(&message).unwrap();
+        let repaired = remote
+            .get_messages_since_heads(
+                "topic",
+                &std::collections::HashMap::from([("alice".to_string(), 1)]),
+                &std::collections::HashMap::from([("alice".to_string(), local_heads[0].2.clone())]),
+                1,
+            )
+            .unwrap();
+        assert_eq!(repaired.len(), 1);
+        db.save_chat_messages_batch(&repaired).unwrap();
+        let stored = db.get_chat_messages("topic", 10, 0).unwrap();
+        assert_eq!(stored[0].logical_time, 50);
+        let local = db
+            .save_local_chat_message(ChatMessage {
+                id: "next".to_string(),
+                user_id: "bob".to_string(),
+                display_name: "Bob".to_string(),
+                text: "reply".to_string(),
+                topic: "topic".to_string(),
+                stage_id: None,
+                timestamp: "display-only".to_string(),
+                writer_seq: 0,
+                logical_time: 0,
+            })
+            .unwrap();
+        assert_eq!(local.logical_time, 51);
+    }
+
+    #[test]
+    fn concurrent_lamport_ties_use_stable_writer_order() {
+        let db = test_db();
+        for (writer, id, timestamp) in [
+            ("bob", "b", "1970-01-01T00:00:00Z"),
+            ("alice", "a", "2099-01-01T00:00:00Z"),
+        ] {
+            db.save_chat_message(&ChatMessage {
+                id: id.to_string(),
+                user_id: writer.to_string(),
+                display_name: writer.to_string(),
+                text: "concurrent".to_string(),
+                topic: "topic".to_string(),
+                stage_id: None,
+                timestamp: timestamp.to_string(),
+                writer_seq: 1,
+                logical_time: 10,
+            })
+            .unwrap();
+        }
+        let ids: Vec<String> = db
+            .get_chat_messages("topic", 10, 0)
+            .unwrap()
+            .into_iter()
+            .map(|message| message.id)
+            .collect();
+        assert_eq!(ids, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn concurrent_local_sends_allocate_unique_positions() {
+        let db = std::sync::Arc::new(test_db());
+        let topic = "festival/f1/chat/general";
+        let handles: Vec<_> = (0..8)
+            .map(|index| {
+                let db = db.clone();
+                std::thread::spawn(move || {
+                    db.save_local_chat_message(ChatMessage {
+                        id: format!("m{index}"),
+                        user_id: "alice".to_string(),
+                        display_name: "Alice".to_string(),
+                        text: format!("message {index}"),
+                        topic: topic.to_string(),
+                        stage_id: None,
+                        timestamp: "not-authoritative".to_string(),
+                        writer_seq: 0,
+                        logical_time: 0,
+                    })
+                    .unwrap()
+                })
+            })
+            .collect();
+        let mut positions: Vec<(u64, u64)> = handles
+            .into_iter()
+            .map(|handle| {
+                let message = handle.join().unwrap();
+                (message.writer_seq, message.logical_time)
+            })
+            .collect();
+        positions.sort_unstable();
+        assert_eq!(
+            positions,
+            (1..=8).map(|value| (value, value)).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn complete_heads_and_bounded_catchup_scale_past_history_page() {
+        let db = test_db();
+        let messages: Vec<_> = (1..=1_200u64)
+            .map(|sequence| ChatMessage {
+                id: format!("alice-{sequence}"),
+                user_id: "alice".to_string(),
+                display_name: "Alice".to_string(),
+                text: "message".to_string(),
+                topic: "topic".to_string(),
+                stage_id: None,
+                timestamp: "not-authoritative".to_string(),
+                writer_seq: sequence,
+                logical_time: sequence,
+            })
+            .collect();
+        db.save_chat_messages_batch(&messages).unwrap();
+
+        assert_eq!(
+            db.get_chat_writer_heads("topic").unwrap(),
+            vec![("alice".to_string(), 1_200, "alice-1200@1200".to_string())]
+        );
+        let page = db
+            .get_messages_since_heads(
+                "topic",
+                &std::collections::HashMap::from([("alice".to_string(), 0)]),
+                &std::collections::HashMap::new(),
+                50,
+            )
+            .unwrap();
+        assert_eq!(page.len(), 50);
+        assert_eq!(page.first().unwrap().writer_seq, 1);
+        assert_eq!(page.last().unwrap().writer_seq, 50);
+
+        let mut conflict = messages.last().unwrap().clone();
+        conflict.id = "alice-1200-conflict".to_string();
+        db.save_chat_message(&conflict).unwrap();
+        assert_eq!(
+            db.get_chat_writer_heads("topic").unwrap(),
+            vec![("alice".to_string(), 1_200, EQUIVOCATED_HEAD_ID.to_string(),)]
+        );
+        let after_conflict = db
+            .get_messages_since_heads(
+                "topic",
+                &std::collections::HashMap::from([("alice".to_string(), 1_200)]),
+                &std::collections::HashMap::from([(
+                    "alice".to_string(),
+                    EQUIVOCATED_HEAD_ID.to_string(),
+                )]),
+                50,
+            )
+            .unwrap();
+        assert!(after_conflict.is_empty());
+    }
+
+    #[test]
+    fn lamport_clock_survives_database_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lamport.db");
+        {
+            let db = Database::new(&path).unwrap();
+            db.save_chat_message(&ChatMessage {
+                id: "remote".to_string(),
+                user_id: "alice".to_string(),
+                display_name: "Alice".to_string(),
+                text: "before restart".to_string(),
+                topic: "topic".to_string(),
+                stage_id: None,
+                timestamp: "2099-01-01".to_string(),
+                writer_seq: 7,
+                logical_time: 42,
+            })
+            .unwrap();
+        }
+        let db = Database::new(&path).unwrap();
+        let next = db
+            .save_local_chat_message(ChatMessage {
+                id: "local".to_string(),
+                user_id: "alice".to_string(),
+                display_name: "Alice".to_string(),
+                text: "after restart".to_string(),
+                topic: "topic".to_string(),
+                stage_id: None,
+                timestamp: "1970-01-01".to_string(),
+                writer_seq: 0,
+                logical_time: 0,
+            })
+            .unwrap();
+        assert_eq!((next.writer_seq, next.logical_time), (8, 43));
     }
 
     #[test]

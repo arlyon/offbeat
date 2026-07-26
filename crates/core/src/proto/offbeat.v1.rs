@@ -24,11 +24,14 @@ pub struct ChatMessage {
     pub topic: ::prost::alloc::string::String,
     #[prost(string, optional, tag = "6")]
     pub stage_id: ::core::option::Option<::prost::alloc::string::String>,
-    /// ISO 8601
+    /// ISO 8601 display metadata only
     #[prost(string, tag = "7")]
     pub timestamp: ::prost::alloc::string::String,
     #[prost(uint64, tag = "8")]
     pub writer_seq: u64,
+    /// per-topic Lamport clock; authoritative order
+    #[prost(uint64, tag = "9")]
+    pub logical_time: u64,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GossipEnvelope {
@@ -251,6 +254,13 @@ pub struct ChatCatchupRequest {
     pub sv: ::std::collections::HashMap<::prost::alloc::string::String, u64>,
     #[prost(uint32, tag = "3")]
     pub limit: u32,
+    /// ID-plus-Lamport commitment at each writer's advertised sequence. Additive
+    /// for compatibility with older peers that only understand the sequence map.
+    #[prost(map = "string, string", tag = "4")]
+    pub head_ids: ::std::collections::HashMap<
+        ::prost::alloc::string::String,
+        ::prost::alloc::string::String,
+    >,
 }
 /// Server -> Client
 #[derive(Clone, PartialEq, ::prost::Message)]

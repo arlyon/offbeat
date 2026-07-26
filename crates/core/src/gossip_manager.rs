@@ -120,6 +120,9 @@ pub fn dispatch_message(
         }
 
         GossipMessage::Chat(msg) => {
+            if msg.writer_seq == 0 {
+                anyhow::bail!("chat message is missing a writer sequence");
+            }
             db.save_chat_message(&msg)?;
         }
 
@@ -130,6 +133,9 @@ pub fn dispatch_message(
             let plaintext = crypto::decrypt(&group_key, &encrypted)?;
             let chat: ChatMessage = serde_json::from_slice(&plaintext)
                 .map_err(|e| anyhow::anyhow!("deserialise chat: {e}"))?;
+            if chat.writer_seq == 0 {
+                anyhow::bail!("chat message is missing a writer sequence");
+            }
             let topic = chat.topic.clone();
             db.save_chat_message(&chat)?;
             return Ok(DispatchResult::DecryptedChat { topic });
@@ -481,7 +487,8 @@ mod tests {
             topic: "festival/f1".to_string(),
             stage_id: None,
             timestamp: "2026-06-14T20:00:00Z".to_string(),
-            writer_seq: 0,
+            writer_seq: 1,
+            logical_time: 1,
         };
 
         let dummy_pk = [0u8; 32];
@@ -610,7 +617,8 @@ mod tests {
             topic: "festival/test/chat".to_string(),
             stage_id: None,
             timestamp: "2026-06-14T21:00:00Z".to_string(),
-            writer_seq: 0,
+            writer_seq: 1,
+            logical_time: 1,
         };
         let bytes = encode_gossip_message(&GossipMessage::Chat(chat.clone()));
         let envelope = proto::decode_envelope(&bytes).unwrap();
