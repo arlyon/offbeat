@@ -23,6 +23,7 @@ import 'screens/social/social_screen.dart';
 import 'services/auth_service.dart';
 import 'services/admin_service.dart';
 import 'services/festival_admin_service.dart';
+import 'services/festival_import_service.dart';
 import 'services/festival_service.dart';
 import 'services/bluetooth_service.dart';
 import 'widgets/connection_drawer.dart';
@@ -144,6 +145,7 @@ class _OffbeatShellState extends State<_OffbeatShell>
   final _authService = AuthService();
   final _adminService = AdminService();
   final _festivalAdminService = FestivalAdminService();
+  final _festivalImportService = FestivalImportService();
   final _festivalService = FestivalService();
 
   // Brutalist motion curve: cubic-bezier(0.2, 0.7, 0.2, 1.0)
@@ -353,6 +355,43 @@ class _OffbeatShellState extends State<_OffbeatShell>
             : 'could not refresh';
       });
     }
+  }
+
+  Future<ClashfinderPreviewResult> _previewClashfinder(String source) async {
+    final node = _node;
+    if (node == null) {
+      throw const FestivalImportException('The local node is not ready.');
+    }
+    return _festivalImportService.preview(node: node, clashfinder: source);
+  }
+
+  Future<Festival> _publishClashfinder({
+    required String previewId,
+    required String name,
+    required String location,
+    required String city,
+    required String country,
+  }) async {
+    final node = _node;
+    if (node == null) {
+      throw const FestivalImportException('The local node is not ready.');
+    }
+    return _festivalImportService.publish(
+      node: node,
+      previewId: previewId,
+      name: name,
+      location: location,
+      city: city,
+      country: country,
+    );
+  }
+
+  Future<void> _openPublishedFestival(Festival festival) async {
+    await _loadFestivals();
+    final canonical = _festivals
+        .where((entry) => entry.id == festival.id)
+        .firstOrNull;
+    await _onFestivalTap(canonical ?? festival);
   }
 
   Future<void> _handleRegister() async {
@@ -980,6 +1019,12 @@ class _OffbeatShellState extends State<_OffbeatShell>
                   error: _festivalsError,
                   onRefresh: _loadFestivals,
                   onFestivalTap: (fest) => _onFestivalTap(fest),
+                  importRegistered:
+                      _authState == 'valid' || _authState == 'expiring',
+                  onRegister: _handleRegister,
+                  onPreviewClashfinder: _previewClashfinder,
+                  onPublishClashfinder: _publishClashfinder,
+                  onFestivalPublished: _openPublishedFestival,
                 ),
               ),
             // Festival (slides in from right)

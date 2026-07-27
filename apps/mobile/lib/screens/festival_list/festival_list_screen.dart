@@ -7,7 +7,9 @@
 
 import 'package:flutter/material.dart';
 import '../../data/models.dart';
+import '../../services/festival_import_service.dart';
 import '../../theme/tokens.dart';
+import 'clashfinder_import_panel.dart';
 import '../../widgets/dotted_border.dart';
 import 'festival_row.dart';
 
@@ -17,6 +19,19 @@ class FestivalListScreen extends StatefulWidget {
   final bool loading;
   final String? error;
   final VoidCallback? onRefresh;
+  final bool importRegistered;
+  final Future<void> Function() onRegister;
+  final Future<ClashfinderPreviewResult> Function(String source)
+  onPreviewClashfinder;
+  final Future<Festival> Function({
+    required String previewId,
+    required String name,
+    required String location,
+    required String city,
+    required String country,
+  })
+  onPublishClashfinder;
+  final Future<void> Function(Festival festival) onFestivalPublished;
 
   const FestivalListScreen({
     super.key,
@@ -25,6 +40,11 @@ class FestivalListScreen extends StatefulWidget {
     this.loading = false,
     this.error,
     this.onRefresh,
+    required this.importRegistered,
+    required this.onRegister,
+    required this.onPreviewClashfinder,
+    required this.onPublishClashfinder,
+    required this.onFestivalPublished,
   });
 
   @override
@@ -36,6 +56,7 @@ class _FestivalListScreenState extends State<FestivalListScreen> {
   final _searchController = TextEditingController();
   // Initial saved state: fieldday26 and ade25
   final Set<String> _saved = {'fieldday26', 'ade25'};
+  bool _showImport = false;
 
   @override
   void dispose() {
@@ -86,7 +107,22 @@ class _FestivalListScreenState extends State<FestivalListScreen> {
                     padding: EdgeInsets.zero,
                     children: [
                       // Page header
-                      _PageHeader(activeCount: _activeCount),
+                      _PageHeader(
+                        activeCount: _activeCount,
+                        importExpanded: _showImport,
+                        onAddClashfinder: () => setState(() {
+                          _showImport = !_showImport;
+                        }),
+                      ),
+                      if (_showImport)
+                        ClashfinderImportPanel(
+                          registered: widget.importRegistered,
+                          onRegister: widget.onRegister,
+                          onPreview: widget.onPreviewClashfinder,
+                          onPublish: widget.onPublishClashfinder,
+                          onPublished: widget.onFestivalPublished,
+                          onClose: () => setState(() => _showImport = false),
+                        ),
                       // Error banner
                       if (widget.error != null)
                         _ErrorBanner(
@@ -181,8 +217,14 @@ class _FestivalListScreenState extends State<FestivalListScreen> {
 
 class _PageHeader extends StatelessWidget {
   final int activeCount;
+  final bool importExpanded;
+  final VoidCallback onAddClashfinder;
 
-  const _PageHeader({required this.activeCount});
+  const _PageHeader({
+    required this.activeCount,
+    required this.importExpanded,
+    required this.onAddClashfinder,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -202,12 +244,47 @@ class _PageHeader extends StatelessWidget {
               color: colorFg,
             ),
           ),
-          const SizedBox(height: 8),
-          Text('$activeCount ACTIVE', style: _metaStyle),
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              Expanded(child: Text('$activeCount ACTIVE', style: _metaStyle)),
+              Semantics(
+                button: true,
+                expanded: importExpanded,
+                label: 'Add a Clashfinder event',
+                child: InkWell(
+                  onTap: onAddClashfinder,
+                  child: SizedBox(
+                    height: 44,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          importExpanded ? Icons.remove : Icons.add,
+                          size: 14,
+                          color: colorAccent,
+                        ),
+                        const SizedBox(width: 5),
+                        const Text('ADD CLASHFINDER', style: _actionStyle),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
         ],
       ),
     );
   }
+
+  static const _actionStyle = TextStyle(
+    fontFamily: 'JetBrainsMono',
+    fontSize: 10,
+    fontWeight: FontWeight.w700,
+    color: colorAccent,
+    letterSpacing: 0.08 * 10,
+  );
 
   static const _metaStyle = TextStyle(
     fontFamily: 'JetBrainsMono',
