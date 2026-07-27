@@ -14,12 +14,13 @@ CREATE TABLE IF NOT EXISTS festivals (
 );
 
 CREATE TABLE IF NOT EXISTS festival_stages (
-    id TEXT PRIMARY KEY,
+    id TEXT NOT NULL,
     festival_id TEXT NOT NULL REFERENCES festivals(id),
     name TEXT NOT NULL,
     short TEXT NOT NULL,
     color TEXT NOT NULL,
-    sort_order INTEGER NOT NULL
+    sort_order INTEGER NOT NULL,
+    PRIMARY KEY (festival_id, id)
 );
 
 CREATE TABLE IF NOT EXISTS festival_history (

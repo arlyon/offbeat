@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { ed25519 } from "@noble/curves/ed25519.js";
-import type { ClashfinderSource, Lineup } from "@offbeat/protocol";
+import type { ClashfinderApiResponse, ClashfinderSource, Lineup } from "@offbeat/protocol";
 import { fetchClashfinder, parseClashfinderApi } from "@offbeat/protocol";
 import {
 	generateAuthenticationOptions,
@@ -9,6 +9,23 @@ import {
 	verifyAuthentication,
 	verifyRegistration,
 } from "./auth";
+import {
+	festivalImportSigningPayload,
+	IMPORT_GLOBAL_PREVIEW_LIMIT,
+	IMPORT_GLOBAL_PUBLISH_LIMIT,
+	IMPORT_NETWORK_PREVIEW_LIMIT,
+	IMPORT_NETWORK_PUBLISH_LIMIT,
+	IMPORT_PREVIEW_LIMIT,
+	IMPORT_PREVIEW_TTL_SECONDS,
+	IMPORT_PREVIEW_WINDOW_SECONDS,
+	IMPORT_PUBLISH_LIMIT,
+	IMPORT_PUBLISH_WINDOW_SECONDS,
+	IMPORT_REQUEST_MAX_SKEW_SECONDS,
+	MAX_CLASHFINDER_RESPONSE_BYTES,
+	MAX_IMPORT_REQUEST_BYTES,
+	normalizeClashfinderId,
+	validateClashfinderImport,
+} from "./festival-import";
 import { generateKeypair, sign, verify } from "./signing";
 
 function requireUrl(value: string): URL {
@@ -91,12 +108,13 @@ export class MainDO extends DurableObject {
 			);
 
 			CREATE TABLE IF NOT EXISTS festival_stages (
-				id TEXT PRIMARY KEY,
+				id TEXT NOT NULL,
 				festival_id TEXT NOT NULL REFERENCES festivals(id),
 				name TEXT NOT NULL,
 				short TEXT NOT NULL,
 				color TEXT NOT NULL,
-				sort_order INTEGER NOT NULL
+				sort_order INTEGER NOT NULL,
+				PRIMARY KEY (festival_id, id)
 			);
 
 			CREATE TABLE IF NOT EXISTS festival_days (
@@ -150,7 +168,95 @@ export class MainDO extends DurableObject {
 				revoked_at TEXT NOT NULL DEFAULT (datetime('now')),
 				reason TEXT
 			);
+
+			CREATE TABLE IF NOT EXISTS festival_import_previews (
+				id TEXT PRIMARY KEY,
+				public_key TEXT NOT NULL,
+				clashfinder_id TEXT NOT NULL,
+				festival_id TEXT NOT NULL,
+				name TEXT NOT NULL,
+				start_date TEXT NOT NULL,
+				end_date TEXT NOT NULL,
+				year INTEGER NOT NULL,
+				stage_count INTEGER NOT NULL,
+				set_count INTEGER NOT NULL,
+				lineup_json TEXT NOT NULL,
+				expires_at INTEGER NOT NULL,
+				created_at INTEGER NOT NULL
+			);
+
+			CREATE INDEX IF NOT EXISTS idx_festival_import_previews_expiry
+				ON festival_import_previews(expires_at);
+
+			CREATE TABLE IF NOT EXISTS festival_import_nonces (
+				nonce TEXT PRIMARY KEY,
+				public_key TEXT NOT NULL,
+				created_at INTEGER NOT NULL
+			);
+
+			CREATE TABLE IF NOT EXISTS festival_import_audit (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				public_key TEXT NOT NULL,
+				action TEXT NOT NULL,
+				clashfinder_id TEXT,
+				result TEXT NOT NULL,
+				created_at INTEGER NOT NULL
+			);
+
+			CREATE INDEX IF NOT EXISTS idx_festival_import_audit_rate
+				ON festival_import_audit(public_key, action, created_at);
+
+			CREATE TABLE IF NOT EXISTS festival_import_network_audit (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				network_key TEXT NOT NULL,
+				action TEXT NOT NULL,
+				created_at INTEGER NOT NULL
+			);
+
+			CREATE INDEX IF NOT EXISTS idx_festival_import_network_rate
+				ON festival_import_network_audit(network_key, action, created_at);
+
+			CREATE TABLE IF NOT EXISTS festival_import_results (
+				preview_id TEXT PRIMARY KEY,
+				public_key TEXT NOT NULL,
+				festival_id TEXT NOT NULL,
+				expires_at INTEGER NOT NULL
+			);
 		`);
+		this.#migrateFestivalStagesPrimaryKey();
+	}
+
+	#migrateFestivalStagesPrimaryKey() {
+		const primaryKeyColumns = (
+			this.sql.exec("PRAGMA table_info(festival_stages)").toArray() as Array<{
+				name: string;
+				pk: number;
+			}>
+		)
+			.filter((column) => column.pk > 0)
+			.sort((left, right) => left.pk - right.pk)
+			.map((column) => column.name);
+		if (primaryKeyColumns.join(",") === "festival_id,id") return;
+
+		this.ctx.storage.transactionSync(() => {
+			this.sql.exec(`
+				CREATE TABLE festival_stages_v2 (
+					id TEXT NOT NULL,
+					festival_id TEXT NOT NULL REFERENCES festivals(id),
+					name TEXT NOT NULL,
+					short TEXT NOT NULL,
+					color TEXT NOT NULL,
+					sort_order INTEGER NOT NULL,
+					PRIMARY KEY (festival_id, id)
+				)
+			`);
+			this.sql.exec(`
+				INSERT INTO festival_stages_v2 (id, festival_id, name, short, color, sort_order)
+				SELECT id, festival_id, name, short, color, sort_order FROM festival_stages
+			`);
+			this.sql.exec("DROP TABLE festival_stages");
+			this.sql.exec("ALTER TABLE festival_stages_v2 RENAME TO festival_stages");
+		});
 	}
 
 	/** Insert or replace stages, days, and sets for a festival. */
@@ -328,16 +434,265 @@ export class MainDO extends DurableObject {
 		return null;
 	}
 
+	async #requireRegisteredImportUser(
+		request: Request,
+		body: string,
+	): Promise<{ publicKey: string; nonce: string } | Response> {
+		if (!this.#publicKey) return new Response("MainDO keypair not initialized", { status: 503 });
+		const attestationMessage = request.headers.get("X-Attestation-Message");
+		const attestationSignature = request.headers.get("X-Attestation-Signature");
+		const attestationIssuer = request.headers.get("X-Attestation-Issuer");
+		const publicKey = request.headers.get("X-Session-PublicKey")?.toLowerCase();
+		const requestTimestamp = request.headers.get("X-Request-Timestamp");
+		const requestNonce = request.headers.get("X-Request-Nonce")?.toLowerCase();
+		const requestSignature = request.headers.get("X-Request-Signature");
+		if (
+			!attestationMessage ||
+			!attestationSignature ||
+			!attestationIssuer ||
+			!publicKey ||
+			!requestTimestamp ||
+			!requestNonce ||
+			!requestSignature
+		) {
+			return new Response("Registered-user authentication headers required", { status: 401 });
+		}
+		if (
+			!/^([0-9a-f]{64})$/.test(publicKey) ||
+			!/^([0-9a-f]{128})$/i.test(attestationSignature) ||
+			!/^([0-9a-f]{128})$/i.test(requestSignature) ||
+			!/^([0-9a-f]{32})$/.test(requestNonce)
+		) {
+			return new Response("Malformed registered-user authentication", { status: 401 });
+		}
+
+		const rootPublicKey = bytesToHex(this.#publicKey);
+		if (attestationIssuer.toLowerCase() !== rootPublicKey) {
+			return new Response("Unknown attestation issuer", { status: 401 });
+		}
+		const attestationValid = await verify(
+			this.#publicKey,
+			new TextEncoder().encode(attestationMessage),
+			hexToBytes(attestationSignature),
+		);
+		if (!attestationValid) return new Response("Invalid attestation", { status: 401 });
+
+		const parts = attestationMessage.split(":");
+		const issuedAt = Number(parts[3]);
+		const expiresAt = Number(parts[4]);
+		const now = Math.floor(Date.now() / 1000);
+		if (
+			parts.length !== 5 ||
+			parts[0] !== "attestation" ||
+			parts[1] !== "v1" ||
+			parts[2]?.toLowerCase() !== publicKey ||
+			!Number.isSafeInteger(issuedAt) ||
+			!Number.isSafeInteger(expiresAt) ||
+			issuedAt > now + IMPORT_REQUEST_MAX_SKEW_SECONDS ||
+			expiresAt < now
+		) {
+			return new Response("Expired or invalid attestation", { status: 401 });
+		}
+		const registered = this.sql
+			.exec("SELECT 1 FROM credentials WHERE public_key = ? LIMIT 1", publicKey)
+			.toArray();
+		const revoked = this.sql
+			.exec("SELECT 1 FROM revocations WHERE public_key = ? LIMIT 1", publicKey)
+			.toArray();
+		if (registered.length === 0 || revoked.length > 0) {
+			return new Response("User is not registered", { status: 403 });
+		}
+
+		const timestamp = Number(requestTimestamp);
+		if (
+			!Number.isSafeInteger(timestamp) ||
+			Math.abs(now - timestamp) > IMPORT_REQUEST_MAX_SKEW_SECONDS
+		) {
+			return new Response("Stale import request", { status: 401 });
+		}
+		const url = requireUrl(request.url);
+		const signaturePayload = festivalImportSigningPayload(
+			request.method,
+			url.pathname,
+			requestTimestamp,
+			requestNonce,
+			body,
+		);
+		const signatureValid = await verify(
+			hexToBytes(publicKey),
+			new TextEncoder().encode(signaturePayload),
+			hexToBytes(requestSignature),
+		);
+		if (!signatureValid) return new Response("Invalid import request signature", { status: 401 });
+
+		const replayed = this.sql
+			.exec("SELECT 1 FROM festival_import_nonces WHERE nonce = ? LIMIT 1", requestNonce)
+			.toArray();
+		if (replayed.length > 0)
+			return new Response("Import request was already used", { status: 409 });
+		return { publicKey, nonce: requestNonce };
+	}
+
+	async #beginImportAttempt(
+		request: Request,
+		publicKey: string,
+		nonce: string,
+		action: "preview" | "publish" | "retry",
+		clashfinderId: string | null,
+	): Promise<number | Response> {
+		const now = Math.floor(Date.now() / 1000);
+		let windowSeconds = IMPORT_PREVIEW_WINDOW_SECONDS;
+		let userLimit = 20;
+		let networkLimit = 100;
+		let globalLimit = 500;
+		if (action === "preview") {
+			userLimit = IMPORT_PREVIEW_LIMIT;
+			networkLimit = IMPORT_NETWORK_PREVIEW_LIMIT;
+			globalLimit = IMPORT_GLOBAL_PREVIEW_LIMIT;
+		} else if (action === "publish") {
+			windowSeconds = IMPORT_PUBLISH_WINDOW_SECONDS;
+			userLimit = IMPORT_PUBLISH_LIMIT;
+			networkLimit = IMPORT_NETWORK_PUBLISH_LIMIT;
+			globalLimit = IMPORT_GLOBAL_PUBLISH_LIMIT;
+		}
+		const address = request.headers.get("CF-Connecting-IP") ?? "unknown";
+		const addressDigest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(address));
+		const networkKey = bytesToHex(new Uint8Array(addressDigest)).slice(0, 32);
+		const userCount = (
+			this.sql
+				.exec(
+					"SELECT COUNT(*) AS count FROM festival_import_audit WHERE public_key = ? AND action = ? AND created_at >= ?",
+					publicKey,
+					action,
+					now - windowSeconds,
+				)
+				.one() as { count: number }
+		).count;
+		const globalCount = (
+			this.sql
+				.exec(
+					"SELECT COUNT(*) AS count FROM festival_import_audit WHERE action = ? AND created_at >= ?",
+					action,
+					now - windowSeconds,
+				)
+				.one() as { count: number }
+		).count;
+		const networkCount = (
+			this.sql
+				.exec(
+					"SELECT COUNT(*) AS count FROM festival_import_network_audit WHERE network_key = ? AND action = ? AND created_at >= ?",
+					networkKey,
+					action,
+					now - windowSeconds,
+				)
+				.one() as { count: number }
+		).count;
+		if (userCount >= userLimit || networkCount >= networkLimit || globalCount >= globalLimit) {
+			return new Response("Festival import rate limit exceeded", {
+				status: 429,
+				headers: { "Retry-After": windowSeconds.toString() },
+			});
+		}
+		const replayed = this.sql
+			.exec("SELECT 1 FROM festival_import_nonces WHERE nonce = ? LIMIT 1", nonce)
+			.toArray();
+		if (replayed.length > 0)
+			return new Response("Import request was already used", { status: 409 });
+
+		let auditId = 0;
+		this.ctx.storage.transactionSync(() => {
+			this.sql.exec(
+				"INSERT INTO festival_import_nonces (nonce, public_key, created_at) VALUES (?, ?, ?)",
+				nonce,
+				publicKey,
+				now,
+			);
+			auditId = (
+				this.sql
+					.exec(
+						"INSERT INTO festival_import_audit (public_key, action, clashfinder_id, result, created_at) VALUES (?, ?, ?, 'started', ?) RETURNING id",
+						publicKey,
+						action,
+						clashfinderId,
+						now,
+					)
+					.one() as { id: number }
+			).id;
+			this.sql.exec(
+				"INSERT INTO festival_import_network_audit (network_key, action, created_at) VALUES (?, ?, ?)",
+				networkKey,
+				action,
+				now,
+			);
+		});
+		return auditId;
+	}
+
+	#finishImportAttempt(id: number, result: string) {
+		this.sql.exec("UPDATE festival_import_audit SET result = ? WHERE id = ?", result, id);
+	}
+
+	#cleanupFestivalImports(now = Math.floor(Date.now() / 1000)) {
+		this.sql.exec("DELETE FROM festival_import_previews WHERE expires_at < ?", now);
+		this.sql.exec("DELETE FROM festival_import_results WHERE expires_at < ?", now);
+		this.sql.exec(
+			"DELETE FROM festival_import_nonces WHERE created_at < ?",
+			now - IMPORT_PUBLISH_WINDOW_SECONDS,
+		);
+		const auditRetention = now - 30 * 24 * 60 * 60;
+		this.sql.exec("DELETE FROM festival_import_audit WHERE created_at < ?", auditRetention);
+		this.sql.exec("DELETE FROM festival_import_network_audit WHERE created_at < ?", auditRetention);
+	}
+
+	#getFestivalByClashfinderId(clashfinderId: string) {
+		const rows = this.sql
+			.exec(
+				"SELECT id FROM festivals WHERE lower(clashfinder_id) = lower(?) LIMIT 1",
+				clashfinderId,
+			)
+			.toArray() as Array<{ id: string }>;
+		return rows[0] ? this.#getFestival(rows[0].id) : null;
+	}
+
+	async #fetchClashfinderForImport(clashfinderId: string): Promise<ClashfinderApiResponse> {
+		const env = this.env as Record<string, string | undefined>;
+		if (
+			env.RP_ID === "localhost" &&
+			env.DEV_BYPASS_WEBAUTHN === "true" &&
+			env.CLASHFINDER_TEST_FIXTURE
+		) {
+			return parseStoredJson<ClashfinderApiResponse>(
+				env.CLASHFINDER_TEST_FIXTURE,
+				"CLASHFINDER_TEST_FIXTURE",
+			);
+		}
+		if (!env.CLASHFINDER_USERNAME || !env.CLASHFINDER_PRIVATE_KEY) {
+			throw new Error("Clashfinder credentials not configured");
+		}
+		const controller = new AbortController();
+		const timeout = setTimeout(() => controller.abort(), 10_000);
+		try {
+			return await fetchClashfinder(
+				clashfinderId,
+				{ username: env.CLASHFINDER_USERNAME, privateKey: env.CLASHFINDER_PRIVATE_KEY },
+				{ signal: controller.signal, maxResponseBytes: MAX_CLASHFINDER_RESPONSE_BYTES },
+			);
+		} finally {
+			clearTimeout(timeout);
+		}
+	}
+
 	/** Look up a stored WebAuthn credential by its credential ID. */
 	#getCredentialById(credentialId: string): {
 		id: string;
 		publicKey: Uint8Array;
+		ed25519PublicKey: string;
 		counter: number;
 		transports?: string[];
 	} | null {
 		const rows = this.sql
-			.exec("SELECT credential_data FROM credentials WHERE id = ?", credentialId)
-			.toArray() as { credential_data: string }[];
+			.exec("SELECT credential_data, public_key FROM credentials WHERE id = ?", credentialId)
+			.toArray() as Array<{ credential_data: string; public_key: string }>;
 		if (rows.length === 0) return null;
 		const data = parseStoredJson<{
 			credentialId: string;
@@ -350,6 +705,7 @@ export class MainDO extends DurableObject {
 		return {
 			id: data.credentialId,
 			publicKey: pkBytes,
+			ed25519PublicKey: rows[0].public_key,
 			counter: data.counter ?? 0,
 			transports: data.transports,
 		};
@@ -461,6 +817,246 @@ export class MainDO extends DurableObject {
 			const festival = this.#getFestival(id);
 			if (!festival) return new Response("Festival not found", { status: 404 });
 			return Response.json(festival);
+		}
+
+		// POST /festival-imports/preview — registered users validate a Clashfinder source.
+		if (method === "POST" && path === "/festival-imports/preview") {
+			const rawBody = await request.text();
+			if (new TextEncoder().encode(rawBody).byteLength > MAX_IMPORT_REQUEST_BYTES) {
+				return new Response("Import request is too large", { status: 413 });
+			}
+			const user = await this.#requireRegisteredImportUser(request, rawBody);
+			if (user instanceof Response) return user;
+			const attempt = await this.#beginImportAttempt(
+				request,
+				user.publicKey,
+				user.nonce,
+				"preview",
+				null,
+			);
+			if (attempt instanceof Response) return attempt;
+			let body: { clashfinder?: string } | null;
+			try {
+				body = parseStoredJson<{ clashfinder: string }>(rawBody, "festival import preview request");
+			} catch {
+				this.#finishImportAttempt(attempt, "invalid_json");
+				return new Response("Invalid import request JSON", { status: 400 });
+			}
+			const clashfinderId = normalizeClashfinderId(body?.clashfinder ?? "");
+			if (!clashfinderId) {
+				this.#finishImportAttempt(attempt, "invalid_source");
+				return new Response("Enter a valid Clashfinder URL or event ID", { status: 400 });
+			}
+			this.#cleanupFestivalImports();
+			const existing = this.#getFestivalByClashfinderId(clashfinderId);
+			if (existing) {
+				this.#finishImportAttempt(attempt, "existing");
+				return Response.json({ status: "existing", festival: existing });
+			}
+
+			try {
+				const apiResponse = await this.#fetchClashfinderForImport(clashfinderId);
+				const validated = validateClashfinderImport(clashfinderId, apiResponse);
+				const previewId = crypto.randomUUID();
+				const now = Math.floor(Date.now() / 1000);
+				const expiresAt = now + IMPORT_PREVIEW_TTL_SECONDS;
+				this.sql.exec(
+					`INSERT INTO festival_import_previews
+					 (id, public_key, clashfinder_id, festival_id, name, start_date, end_date, year,
+					  stage_count, set_count, lineup_json, expires_at, created_at)
+					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+					previewId,
+					user.publicKey,
+					validated.clashfinderId,
+					validated.festivalId,
+					validated.name,
+					validated.startDate,
+					validated.endDate,
+					validated.year,
+					validated.stageCount,
+					validated.setCount,
+					JSON.stringify(validated.lineup),
+					expiresAt,
+					now,
+				);
+				this.#finishImportAttempt(attempt, "previewed");
+				return Response.json({
+					status: "preview",
+					preview: {
+						id: previewId,
+						clashfinderId: validated.clashfinderId,
+						name: validated.name,
+						startDate: validated.startDate,
+						endDate: validated.endDate,
+						stageCount: validated.stageCount,
+						setCount: validated.setCount,
+						expiresAt: new Date(expiresAt * 1000).toISOString(),
+					},
+				});
+			} catch (error) {
+				this.#finishImportAttempt(attempt, "rejected");
+				console.warn("Festival import preview rejected", error);
+				return new Response("Clashfinder event could not be imported", { status: 422 });
+			}
+		}
+
+		// POST /festival-imports/:previewId/publish — publish the validated preview.
+		const importPublishMatch = path.match(
+			/^\/festival-imports\/([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\/publish$/i,
+		);
+		if (method === "POST" && importPublishMatch) {
+			const rawBody = await request.text();
+			if (new TextEncoder().encode(rawBody).byteLength > MAX_IMPORT_REQUEST_BYTES) {
+				return new Response("Import request is too large", { status: 413 });
+			}
+			const user = await this.#requireRegisteredImportUser(request, rawBody);
+			if (user instanceof Response) return user;
+			this.#cleanupFestivalImports();
+			const completedRows = this.sql
+				.exec(
+					"SELECT festival_id FROM festival_import_results WHERE preview_id = ? AND public_key = ? AND expires_at >= ? LIMIT 1",
+					importPublishMatch[1],
+					user.publicKey,
+					Math.floor(Date.now() / 1000),
+				)
+				.toArray() as Array<{ festival_id: string }>;
+			if (completedRows[0]) {
+				const retryAttempt = await this.#beginImportAttempt(
+					request,
+					user.publicKey,
+					user.nonce,
+					"retry",
+					null,
+				);
+				if (retryAttempt instanceof Response) return retryAttempt;
+				this.#finishImportAttempt(retryAttempt, "retry");
+				return Response.json({
+					status: "existing",
+					festival: this.#getFestival(completedRows[0].festival_id),
+				});
+			}
+			const attempt = await this.#beginImportAttempt(
+				request,
+				user.publicKey,
+				user.nonce,
+				"publish",
+				null,
+			);
+			if (attempt instanceof Response) return attempt;
+			let body: { name?: string; location?: string; city?: string; country?: string } | null;
+			try {
+				body = parseStoredJson<typeof body>(rawBody, "festival import publish request");
+			} catch {
+				this.#finishImportAttempt(attempt, "invalid_json");
+				return new Response("Invalid import request JSON", { status: 400 });
+			}
+			const name = body?.name?.trim();
+			const location = body?.location?.trim();
+			const city = body?.city?.trim();
+			const country = body?.country?.trim().toUpperCase();
+			if (
+				!name ||
+				name.length > 200 ||
+				!location ||
+				location.length > 200 ||
+				!city ||
+				city.length > 120 ||
+				!country ||
+				!/^[A-Z]{2}$/.test(country)
+			) {
+				this.#finishImportAttempt(attempt, "invalid_metadata");
+				return new Response("Name, venue, city, and two-letter country code are required", {
+					status: 400,
+				});
+			}
+
+			const previewRows = this.sql
+				.exec(
+					"SELECT * FROM festival_import_previews WHERE id = ? AND public_key = ? AND expires_at >= ? LIMIT 1",
+					importPublishMatch[1],
+					user.publicKey,
+					Math.floor(Date.now() / 1000),
+				)
+				.toArray() as Array<{
+				id: string;
+				clashfinder_id: string;
+				festival_id: string;
+				start_date: string;
+				end_date: string;
+				year: number;
+				lineup_json: string;
+			}>;
+			const preview = previewRows[0];
+			if (!preview) {
+				this.#finishImportAttempt(attempt, "missing_preview");
+				return new Response("Import preview expired or not found", { status: 404 });
+			}
+			const existing = this.#getFestivalByClashfinderId(preview.clashfinder_id);
+			if (existing) {
+				this.ctx.storage.transactionSync(() => {
+					this.sql.exec(
+						"INSERT OR REPLACE INTO festival_import_results (preview_id, public_key, festival_id, expires_at) VALUES (?, ?, ?, ?)",
+						preview.id,
+						user.publicKey,
+						existing.id,
+						Math.floor(Date.now() / 1000) + IMPORT_PREVIEW_TTL_SECONDS,
+					);
+					this.sql.exec("DELETE FROM festival_import_previews WHERE id = ?", preview.id);
+					this.#finishImportAttempt(attempt, "existing");
+				});
+				return Response.json({ status: "existing", festival: existing });
+			}
+			if (this.#getFestival(preview.festival_id)) {
+				this.#finishImportAttempt(attempt, "id_collision");
+				return new Response("Generated festival ID already exists", { status: 409 });
+			}
+
+			try {
+				const lineup = parseStoredJson<Lineup>(preview.lineup_json, `import preview ${preview.id}`);
+				lineup.festival = { id: preview.festival_id, name, location };
+				const today = new Date().toISOString().split("T")[0];
+				const status =
+					today < preview.start_date ? "upcoming" : today > preview.end_date ? "past" : "live";
+				this.ctx.storage.transactionSync(() => {
+					this.sql.exec(
+						`INSERT INTO festivals
+						 (id, name, year, location, city, country, start_date, end_date, genres, status, clashfinder_id)
+						 VALUES (?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?)`,
+						preview.festival_id,
+						name,
+						preview.year,
+						location,
+						city,
+						country,
+						preview.start_date,
+						preview.end_date,
+						status,
+						preview.clashfinder_id,
+					);
+					this.#upsertLineup(preview.festival_id, lineup);
+					this.sql.exec(
+						"INSERT INTO festival_import_results (preview_id, public_key, festival_id, expires_at) VALUES (?, ?, ?, ?)",
+						preview.id,
+						user.publicKey,
+						preview.festival_id,
+						Math.floor(Date.now() / 1000) + IMPORT_PREVIEW_TTL_SECONDS,
+					);
+					this.sql.exec("DELETE FROM festival_import_previews WHERE id = ?", preview.id);
+					this.#finishImportAttempt(attempt, "published");
+				});
+				return Response.json(
+					{
+						status: "created",
+						festival: this.#getFestival(preview.festival_id),
+						lineup: this.#getLineup(preview.festival_id),
+					},
+					{ status: 201 },
+				);
+			} catch (error) {
+				this.#finishImportAttempt(attempt, "failed");
+				console.error("Festival import publish failed", error);
+				return new Response("Festival could not be published", { status: 500 });
+			}
 		}
 
 		// POST /festivals — create a new festival from Clashfinder (admin-only).
@@ -686,7 +1282,6 @@ export class MainDO extends DurableObject {
 				challenge: string;
 				ed25519PublicKey: string;
 			};
-			console.log("Register complete — webauthnResponse:", JSON.stringify(body.webauthnResponse));
 			if (!body.ed25519PublicKey || body.ed25519PublicKey.length !== 64) {
 				return new Response("ed25519PublicKey must be 64 hex chars", { status: 400 });
 			}
@@ -803,12 +1398,9 @@ export class MainDO extends DurableObject {
 				return new Response("Authentication failed: not verified", { status: 400 });
 			}
 
-			// Verify the Ed25519 key matches what we stored at registration
-			const storedCred = this.sql
-				.exec("SELECT public_key FROM credentials WHERE public_key = ?", body.ed25519PublicKey)
-				.toArray();
-			if (storedCred.length === 0) {
-				return new Response("Ed25519 key does not match registered key", { status: 403 });
+			// Verify this WebAuthn credential is bound to the requested Ed25519 key.
+			if (credential.ed25519PublicKey !== body.ed25519PublicKey.toLowerCase()) {
+				return new Response("Ed25519 key does not match registered credential", { status: 403 });
 			}
 			const attestation = await this.#issueAttestation(body.ed25519PublicKey);
 			return Response.json({ attestation });
@@ -870,12 +1462,9 @@ export class MainDO extends DurableObject {
 				return new Response("Authentication failed: not verified", { status: 400 });
 			}
 
-			// Check key is registered and not revoked
-			const storedCred = this.sql
-				.exec("SELECT public_key FROM credentials WHERE public_key = ?", body.ed25519PublicKey)
-				.toArray();
-			if (storedCred.length === 0) {
-				return new Response("Unknown key", { status: 403 });
+			// The authenticated WebAuthn credential must own this Ed25519 key.
+			if (credential.ed25519PublicKey !== body.ed25519PublicKey.toLowerCase()) {
+				return new Response("Ed25519 key does not match registered credential", { status: 403 });
 			}
 			const revoked = this.sql
 				.exec("SELECT 1 FROM revocations WHERE public_key = ?", body.ed25519PublicKey)

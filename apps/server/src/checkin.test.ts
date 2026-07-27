@@ -76,6 +76,7 @@ const FESTIVAL_ID = "checkin-test-fest";
 
 beforeAll(async () => {
 	worker = await unstable_dev("src/index.ts", {
+		persist: false,
 		experimental: { disableExperimentalWarning: true },
 	});
 

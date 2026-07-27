@@ -1512,6 +1512,23 @@ export class FestivalDO extends DurableObject {
 		}
 	}
 
+	/** Return whether canonical lineup state and its signed completion marker exist. */
+	async hasSeededLineup(festivalId: string): Promise<boolean> {
+		const docId = `festival/${festivalId}/state`;
+		const hasDoc = this.sql
+			.exec("SELECT 1 FROM yrs_docs WHERE doc_id = ? LIMIT 1", docId)
+			.toArray();
+		const hasCheckpoint = this.sql
+			.exec(
+				"SELECT 1 FROM festival_signed_updates WHERE doc_id = ? AND kind = ? LIMIT 1",
+				docId,
+				FestivalUpdateKind.CHECKPOINT,
+			)
+			.toArray();
+		const digest = await this.ctx.storage.get<string>(`lineup_seed_digest:${docId}`);
+		return hasDoc.length > 0 && hasCheckpoint.length > 0 && Boolean(digest);
+	}
+
 	/**
 	 * Seed the Festival DO with lineup data as a signed Yrs CRDT document.
 	 * Called by `ensureFestivalConfig` when the Festival DO is first initialised.
@@ -1535,18 +1552,40 @@ export class FestivalDO extends DurableObject {
 				cancelled: boolean;
 			}[];
 		},
-	) {
+	): Promise<void> {
 		if (!this.#secretKey || !this.#publicKey) {
 			throw new Error("Keypair not initialized");
 		}
 
 		const docId = `festival/${festivalId}/state`;
+		const digestKey = `lineup_seed_digest:${docId}`;
+		const canonicalDigest = bytesToHex(
+			new Uint8Array(
+				await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(lineup))),
+			),
+		);
 
-		// Check if we already have a seeded doc — skip if so
+		// A digest is written only after both canonical state and a signed checkpoint
+		// persist. Matching retries are read-only; missing/changed markers reconcile.
 		const existing = this.sql
 			.exec("SELECT 1 FROM yrs_docs WHERE doc_id = ? LIMIT 1", docId)
 			.toArray();
-		if (existing.length > 0) return;
+		const signedCheckpoint = this.sql
+			.exec(
+				"SELECT 1 FROM festival_signed_updates WHERE doc_id = ? AND kind = ? LIMIT 1",
+				docId,
+				FestivalUpdateKind.CHECKPOINT,
+			)
+			.toArray();
+		const storedDigest = await this.ctx.storage.get<string>(digestKey);
+		if (existing.length > 0 && signedCheckpoint.length > 0 && storedDigest === canonicalDigest) {
+			return;
+		}
+		if (existing.length > 0) {
+			await this.updateLineup(festivalId, lineup);
+			await this.ctx.storage.put(digestKey, canonicalDigest);
+			return;
+		}
 
 		// Build a Yrs doc using top-level shared maps
 		const doc = new Y.Doc();
@@ -1581,14 +1620,10 @@ export class FestivalDO extends DurableObject {
 			setsMap.set(set.id, m);
 		}
 
-		// Assign to in-memory doc and persist
-		this.#publicStateDoc = doc;
+		// Persist a signed canonical checkpoint before marking the Yrs document as
+		// seeded. A failed write is therefore safely retryable and never leaves an
+		// unsigned document that future reconciliation mistakes for completion.
 		const fullState = Y.encodeStateAsUpdate(doc);
-		this.sql.exec(
-			"INSERT OR REPLACE INTO yrs_docs (doc_id, data, updated_at) VALUES (?, ?, datetime('now'))",
-			docId,
-			fullState,
-		);
 		const authoritySeq = this.#nextAuthoritySeq(docId);
 		await this.#persistSignedFestivalUpdate(
 			docId,
@@ -1596,6 +1631,13 @@ export class FestivalDO extends DurableObject {
 			authoritySeq,
 			fullState,
 		);
+		this.sql.exec(
+			"INSERT OR REPLACE INTO yrs_docs (doc_id, data, updated_at) VALUES (?, ?, datetime('now'))",
+			docId,
+			fullState,
+		);
+		this.#publicStateDoc = doc;
+		await this.ctx.storage.put(digestKey, canonicalDigest);
 
 		console.log(
 			`[seedLineup] seeded ${docId}: ${lineup.stages.length} stages, ${lineup.days.length} days, ${lineup.sets.length} sets`,
@@ -1624,7 +1666,7 @@ export class FestivalDO extends DurableObject {
 				cancelled: boolean;
 			}[];
 		},
-	) {
+	): Promise<void> {
 		if (!this.#secretKey || !this.#publicKey) {
 			throw new Error("Keypair not initialized");
 		}

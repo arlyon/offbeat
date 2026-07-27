@@ -5,6 +5,7 @@ let worker: Unstable_DevWorker;
 
 beforeAll(async () => {
 	worker = await unstable_dev("src/index.ts", {
+		persist: false,
 		experimental: { disableExperimentalWarning: true },
 	});
 

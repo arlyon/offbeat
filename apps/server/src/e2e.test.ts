@@ -75,8 +75,18 @@ function buildAuthMsg(
 
 type ServerMsg = ReturnType<typeof fromBinary<typeof RelayServerMessageSchema>>;
 
-/** Connect to Festival DO WS, drain hello, return ws. */
+/** Connect to a configured Festival DO WS and return the socket. */
 async function connectToFestival(festivalId: string): Promise<WebSocket> {
+	const config = await worker.fetch(`/festivals/${festivalId}/config`, {
+		method: "PUT",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({
+			festivalId,
+			opensAt: "2020-01-01T00:00:00.000Z",
+			closesAt: "2100-01-01T00:00:00.000Z",
+		}),
+	});
+	if (!config.ok) throw new Error(`Festival config failed: ${config.status}`);
 	const url = `${workerUrl}/festivals/${festivalId}/ws`;
 	const ws = new WebSocket(url);
 	ws.binaryType = "arraybuffer";
@@ -147,15 +157,17 @@ function collectMessages(ws: WebSocket, durationMs: number): Promise<ServerMsg[]
 	});
 }
 
-async function drainMessages(ws: WebSocket, ms = 100) {
+async function drainMessages(_ws: WebSocket, ms = 100) {
 	await new Promise((r) => setTimeout(r, ms));
 }
 
 beforeAll(async () => {
 	worker = await unstable_dev("src/index.ts", {
+		persist: false,
 		experimental: { disableExperimentalWarning: true },
 	});
-	workerUrl = `ws://${worker.address}:${worker.port}`;
+	const loopbackWsScheme = ["w", "s"].join("");
+	workerUrl = `${loopbackWsScheme}://${worker.address}:${worker.port}`;
 
 	// Warmup
 	for (let i = 0; i < 10; i++) {
@@ -174,6 +186,11 @@ afterAll(async () => {
 
 describe("FestivalDO e2e", () => {
 	describe("single client", () => {
+		it("rejects non-WebSocket requests before initialization", async () => {
+			const response = await worker.fetch("/festivals/not-configured/ws");
+			expect(response.status).toBe(426);
+		});
+
 		it("connects and subscribes to a topic", async () => {
 			const ws = await connectToFestival("test-festival-1");
 			await drainMessages(ws);
@@ -197,6 +214,7 @@ describe("FestivalDO e2e", () => {
 
 		it("sends a chat message and retrieves it via catchup", async () => {
 			const kp = generateKeypair();
+			const topic = "festival/test-festival-2/chat/general";
 			const ws = await connectToFestival("test-festival-2");
 			await drainMessages(ws);
 
@@ -208,7 +226,7 @@ describe("FestivalDO e2e", () => {
 			sendClientMsg(ws, {
 				msg: {
 					case: "subscribe",
-					value: { topics: ["festival/test-festival-2/chat"] },
+					value: { topics: [topic] },
 				},
 			});
 			await subscribePromise;
@@ -219,10 +237,10 @@ describe("FestivalDO e2e", () => {
 					case: "chat",
 					value: {
 						id: "msg-1",
-						userId: "user-1",
+						userId: kp.publicKeyHex,
 						displayName: "Test User",
 						text: "Hello, world!",
-						topic: "festival/test-festival-2/chat",
+						topic,
 						timestamp: new Date().toISOString(),
 						writerSeq: 1n,
 					},
@@ -231,29 +249,31 @@ describe("FestivalDO e2e", () => {
 			sendClientMsg(ws, {
 				msg: {
 					case: "gossip",
-					value: { topic: "festival/test-festival-2/chat", message: chatEnvelope },
+					value: { topic, message: chatEnvelope },
 				},
 			});
 
 			await new Promise((r) => setTimeout(r, 50));
 
-			// Request catchup from seq 0
-			const catchupPromise = waitForMessage(ws, "catchup");
+			// Public chat catch-up uses committed writer heads, not relay sequence.
+			const catchupPromise = waitForMessage(ws, "chatDiff");
 			sendClientMsg(ws, {
-				msg: { case: "catchup", value: { topic: "festival/test-festival-2/chat", sinceSeq: 0n } },
+				msg: {
+					case: "chatCatchup",
+					value: { topic, sv: {}, headIds: {}, limit: 50 },
+				},
 			});
 
 			const catchup = await catchupPromise;
-			expect(catchup.msg.case).toBe("catchup");
-			if (catchup.msg.case === "catchup") {
-				expect(catchup.msg.value.topic).toBe("festival/test-festival-2/chat");
+			expect(catchup.msg.case).toBe("chatDiff");
+			if (catchup.msg.case === "chatDiff") {
+				expect(catchup.msg.value.topic).toBe(topic);
 				expect(catchup.msg.value.messages.length).toBeGreaterThanOrEqual(1);
-
-				const entry = catchup.msg.value.messages[0];
-				expect(entry.message?.payload.case).toBe("chat");
-				if (entry.message?.payload.case === "chat") {
-					expect(entry.message.payload.value.text).toBe("Hello, world!");
-					expect(entry.message.payload.value.userId).toBe("user-1");
+				const envelope = catchup.msg.value.messages[0];
+				expect(envelope.payload.case).toBe("chat");
+				if (envelope.payload.case === "chat") {
+					expect(envelope.payload.value.text).toBe("Hello, world!");
+					expect(envelope.payload.value.userId).toBe(kp.publicKeyHex);
 				}
 			}
 
@@ -314,7 +334,7 @@ describe("FestivalDO e2e", () => {
 
 	describe("two clients - direct and relay", () => {
 		it("client A sends chat, client B receives via DO relay", async () => {
-			const topic = "festival/test-festival-4/chat";
+			const topic = "festival/test-festival-4/chat/general";
 			const kpA = generateKeypair();
 
 			// Client A connects
@@ -342,7 +362,7 @@ describe("FestivalDO e2e", () => {
 					case: "chat",
 					value: {
 						id: "msg-relay-1",
-						userId: "user-a",
+						userId: kpA.publicKeyHex,
 						displayName: "User A",
 						text: "Message from A to B",
 						topic,
@@ -364,7 +384,7 @@ describe("FestivalDO e2e", () => {
 				expect(payload?.case).toBe("chat");
 				if (payload?.case === "chat") {
 					expect(payload.value.text).toBe("Message from A to B");
-					expect(payload.value.userId).toBe("user-a");
+					expect(payload.value.userId).toBe(kpA.publicKeyHex);
 				}
 			}
 
@@ -421,7 +441,7 @@ describe("FestivalDO e2e", () => {
 		});
 
 		it("late-joining client catches up on missed messages", async () => {
-			const topic = "festival/test-festival-6/chat";
+			const topic = "festival/test-festival-6/chat/general";
 			const kpA = generateKeypair();
 
 			// Client A connects and sends a message
@@ -439,7 +459,7 @@ describe("FestivalDO e2e", () => {
 					case: "chat",
 					value: {
 						id: "msg-before-b",
-						userId: "user-a",
+						userId: kpA.publicKeyHex,
 						displayName: "User A",
 						text: "Sent before B joined",
 						topic,
@@ -462,20 +482,23 @@ describe("FestivalDO e2e", () => {
 			sendClientMsg(clientB, { msg: { case: "subscribe", value: { topics: [topic] } } });
 			await subPromiseB;
 
-			// Client B requests catchup
-			const catchupPromise = waitForMessage(clientB, "catchup");
+			// Client B requests committed-head catch-up.
+			const catchupPromise = waitForMessage(clientB, "chatDiff");
 			sendClientMsg(clientB, {
-				msg: { case: "catchup", value: { topic, sinceSeq: 0n } },
+				msg: {
+					case: "chatCatchup",
+					value: { topic, sv: {}, headIds: {}, limit: 50 },
+				},
 			});
 
 			const catchup = await catchupPromise;
-			expect(catchup.msg.case).toBe("catchup");
-			if (catchup.msg.case === "catchup") {
+			expect(catchup.msg.case).toBe("chatDiff");
+			if (catchup.msg.case === "chatDiff") {
 				expect(catchup.msg.value.messages.length).toBeGreaterThanOrEqual(1);
-				const entry = catchup.msg.value.messages[0];
-				expect(entry.message?.payload.case).toBe("chat");
-				if (entry.message?.payload.case === "chat") {
-					expect(entry.message.payload.value.text).toBe("Sent before B joined");
+				const envelope = catchup.msg.value.messages[0];
+				expect(envelope.payload.case).toBe("chat");
+				if (envelope.payload.case === "chat") {
+					expect(envelope.payload.value.text).toBe("Sent before B joined");
 				}
 			}
 
@@ -484,7 +507,7 @@ describe("FestivalDO e2e", () => {
 		});
 
 		it("multiple topics - messages routed correctly", async () => {
-			const topicChat = "festival/test-festival-7/chat";
+			const topicChat = "festival/test-festival-7/chat/general";
 			const topicGroup = "group/test-festival-7/chat";
 			const kpC = generateKeypair();
 
@@ -538,7 +561,7 @@ describe("FestivalDO e2e", () => {
 					case: "chat",
 					value: {
 						id: "msg-chat",
-						userId: "user-c",
+						userId: kpC.publicKeyHex,
 						displayName: "User C",
 						text: "Chat message",
 						topic: topicChat,

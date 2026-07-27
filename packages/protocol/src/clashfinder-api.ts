@@ -112,7 +112,7 @@ export function buildApiUrl(
 		params.set("authValidUntil", options.authValidUntil);
 	}
 
-	return `https://clashfinder.com/data/event/${clashfinderId}.json?${params.toString()}`;
+	return `https://clashfinder.com/data/event/${encodeURIComponent(clashfinderId)}.json?${params.toString()}`;
 }
 
 /**
@@ -124,16 +124,67 @@ export async function fetchClashfinder(
 	options?: {
 		authParam?: string;
 		authValidUntil?: string;
+		signal?: AbortSignal;
+		maxResponseBytes?: number;
 	},
 ): Promise<ClashfinderApiResponse> {
 	const publicKey = await generatePublicKey(auth, options);
 	const url = buildApiUrl(clashfinderId, { username: auth.username, publicKey }, options);
 
-	const response = await fetch(url);
+	const response = await fetch(url, { signal: options?.signal, redirect: "error" });
+	if (response.redirected) {
+		throw new Error("Clashfinder API redirects are not allowed");
+	}
+	if (response.url) {
+		let finalUrl: URL;
+		try {
+			finalUrl = new URL(response.url);
+		} catch (error) {
+			throw new Error("Clashfinder API returned an invalid response URL", { cause: error });
+		}
+		if (finalUrl.protocol !== "https:" || finalUrl.origin !== "https://clashfinder.com") {
+			throw new Error("Clashfinder API returned an unexpected origin");
+		}
+	}
 
 	if (!response.ok) {
 		throw new Error(`Clashfinder API error: ${response.status} ${response.statusText}`);
 	}
+	if (options?.maxResponseBytes === undefined) {
+		return response.json() as Promise<ClashfinderApiResponse>;
+	}
 
-	return response.json() as Promise<ClashfinderApiResponse>;
+	const contentLength = Number(response.headers.get("content-length"));
+	if (Number.isFinite(contentLength) && contentLength > options.maxResponseBytes) {
+		throw new Error("Clashfinder API response is too large");
+	}
+	if (!response.body) throw new Error("Clashfinder API returned an empty response");
+	const reader = response.body.getReader();
+	const chunks: Uint8Array[] = [];
+	let totalBytes = 0;
+	try {
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			totalBytes += value.byteLength;
+			if (totalBytes > options.maxResponseBytes) {
+				await reader.cancel("response size limit exceeded");
+				throw new Error("Clashfinder API response is too large");
+			}
+			chunks.push(value);
+		}
+	} finally {
+		reader.releaseLock();
+	}
+	const bytes = new Uint8Array(totalBytes);
+	let offset = 0;
+	for (const chunk of chunks) {
+		bytes.set(chunk, offset);
+		offset += chunk.byteLength;
+	}
+	try {
+		return JSON.parse(new TextDecoder().decode(bytes)) as ClashfinderApiResponse;
+	} catch (error) {
+		throw new Error("Clashfinder API returned invalid JSON", { cause: error });
+	}
 }

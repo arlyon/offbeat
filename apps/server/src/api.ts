@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { MAX_IMPORT_REQUEST_BYTES } from "./festival-import";
 
 type Env = {
 	Bindings: {
@@ -6,6 +7,7 @@ type Env = {
 		FESTIVAL_DO: DurableObjectNamespace;
 		ADMIN_SECRET_KEY?: string;
 		MAIN_DO_ROOT_SECRET?: string;
+		DEV_BYPASS_WEBAUTHN?: string;
 	};
 };
 
@@ -43,6 +45,60 @@ function requireUrl(value: string): URL {
 	} catch (error) {
 		throw new Error(`Invalid URL: ${value}`, { cause: error });
 	}
+}
+
+async function readRequestBodyWithinLimit(
+	request: Request,
+	maxBytes: number,
+): Promise<ArrayBuffer | Response> {
+	const contentLength = Number(request.headers.get("content-length"));
+	if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+		return new Response("Import request is too large", { status: 413 });
+	}
+	if (!request.body) return new ArrayBuffer(0);
+	const reader = request.body.getReader();
+	const chunks: Uint8Array[] = [];
+	let totalBytes = 0;
+	try {
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			totalBytes += value.byteLength;
+			if (totalBytes > maxBytes) {
+				await reader.cancel("request size limit exceeded");
+				return new Response("Import request is too large", { status: 413 });
+			}
+			chunks.push(value);
+		}
+	} finally {
+		reader.releaseLock();
+	}
+	const body = new Uint8Array(totalBytes);
+	let offset = 0;
+	for (const chunk of chunks) {
+		body.set(chunk, offset);
+		offset += chunk.byteLength;
+	}
+	return body.buffer;
+}
+
+async function forwardToMainDOBounded(
+	env: Env["Bindings"],
+	path: string,
+	request: Request,
+): Promise<Response> {
+	const body = await readRequestBodyWithinLimit(request, MAX_IMPORT_REQUEST_BYTES);
+	if (body instanceof Response) return body;
+	const stub = getMainDO(env);
+	const url = requireUrl(request.url);
+	url.pathname = path;
+	return stub.fetch(
+		new Request(url.toString(), {
+			method: request.method,
+			headers: request.headers,
+			body,
+		}),
+	);
 }
 
 async function forwardToMainDO(
@@ -84,6 +140,37 @@ app.get("/festivals/:id", (c) => {
 // POST /festivals — create a new festival (admin-only, forwarded with auth headers)
 app.post("/festivals", (c) => {
 	return forwardToMainDO(c.env, "/festivals", c.req.raw);
+});
+
+// POST /festival-imports/preview — registered-user Clashfinder preview.
+app.post("/festival-imports/preview", async (c) => {
+	const response = await forwardToMainDOBounded(c.env, "/festival-imports/preview", c.req.raw);
+	if (!response.ok) return response;
+	const result = (await response.json()) as {
+		status: string;
+		festival?: { id: string };
+		preview?: unknown;
+	};
+	if (result.status === "existing" && result.festival?.id) {
+		await ensureFestivalConfig(c.env, result.festival.id, true);
+	}
+	return Response.json(result, { status: response.status });
+});
+
+// POST /festival-imports/:previewId/publish — publish and seed authoritative state.
+app.post("/festival-imports/:previewId/publish", async (c) => {
+	const previewId = c.req.param("previewId");
+	const path = `/festival-imports/${previewId}/publish`;
+	const response = await forwardToMainDOBounded(c.env, path, c.req.raw);
+	if (!response.ok) return response;
+	const result = (await response.json()) as {
+		status: string;
+		festival?: { id: string };
+	};
+	if (result.festival?.id) {
+		await ensureFestivalConfig(c.env, result.festival.id, true);
+	}
+	return Response.json(result, { status: response.status });
 });
 
 // PUT /festivals/:id — update festival metadata (admin-only)
@@ -164,6 +251,9 @@ app.get("/festivals/:id/public-key", (c) => {
 
 // PUT /festivals/:id/config — set event window on Festival DO
 app.put("/festivals/:id/config", async (c) => {
+	if (c.env.DEV_BYPASS_WEBAUTHN !== "true") {
+		return new Response("Not found", { status: 404 });
+	}
 	const id = c.req.param("id");
 	const doId = c.env.FESTIVAL_DO.idFromName(id);
 	const stub = c.env.FESTIVAL_DO.get(doId);
@@ -315,69 +405,68 @@ app.post("/festivals/:id/sign-update", async (c) => {
 
 /** Ensure the Festival DO has its event window configured and lineup seeded.
  *  Fetches metadata + lineup from MainDO and seeds the genesis Yrs doc. */
-async function ensureFestivalConfig(env: Env["Bindings"], festivalId: string) {
+async function ensureFestivalConfig(
+	env: Env["Bindings"],
+	festivalId: string,
+	requireLineup = false,
+) {
 	const doId = env.FESTIVAL_DO.idFromName(festivalId);
 	const stub = env.FESTIVAL_DO.get(doId);
-
-	// Check if already configured
+	const mainStub = getMainDO(env);
 	const configUrl = requireUrl("http://internal/config");
 	const existing = await stub.fetch(new Request(configUrl.toString(), { method: "GET" }));
-	const config = (await existing.json()) as { opensAt: string | null; closesAt: string | null };
-	if (config.opensAt && config.closesAt) {
-		// Already configured — still ensure weather alarm is armed (idempotent)
-		await (stub as unknown as { armWeatherAlarm(): Promise<void> }).armWeatherAlarm();
-		return;
-	}
-
-	// Fetch festival metadata from MainDO
-	const mainStub = getMainDO(env);
-	const festUrl = requireUrl(`http://internal/festivals/${festivalId}`);
-	const festResp = await mainStub.fetch(new Request(festUrl.toString()));
-	if (!festResp.ok) return;
-
-	const fest = (await festResp.json()) as {
-		startDate: string;
-		endDate: string;
-		lat?: number;
-		lon?: number;
+	const config = (await existing.json()) as {
+		opensAt: string | null;
+		closesAt: string | null;
+		festivalId: string | null;
 	};
 
-	// ±1 day from start/end
-	const opens = new Date(fest.startDate);
-	opens.setDate(opens.getDate() - 1);
-	const closes = new Date(fest.endDate);
-	closes.setDate(closes.getDate() + 1);
-	// Set to end of day
-	closes.setHours(23, 59, 59, 999);
-
-	await stub.fetch(
-		new Request(configUrl.toString(), {
-			method: "PUT",
-			body: JSON.stringify({
-				opensAt: opens.toISOString(),
-				closesAt: closes.toISOString(),
-				festivalId,
-				lat: fest.lat,
-				lon: fest.lon,
+	if (!config.opensAt || !config.closesAt || config.festivalId !== festivalId) {
+		const festUrl = requireUrl(`http://internal/festivals/${festivalId}`);
+		const festResp = await mainStub.fetch(new Request(festUrl.toString()));
+		if (!festResp.ok) return;
+		const fest = (await festResp.json()) as {
+			startDate: string;
+			endDate: string;
+			lat?: number;
+			lon?: number;
+		};
+		const opens = new Date(fest.startDate);
+		opens.setDate(opens.getDate() - 1);
+		const closes = new Date(fest.endDate);
+		closes.setDate(closes.getDate() + 1);
+		closes.setHours(23, 59, 59, 999);
+		await stub.fetch(
+			new Request(configUrl.toString(), {
+				method: "PUT",
+				body: JSON.stringify({
+					opensAt: opens.toISOString(),
+					closesAt: closes.toISOString(),
+					festivalId,
+					lat: fest.lat,
+					lon: fest.lon,
+				}),
+				headers: { "Content-Type": "application/json" },
 			}),
-			headers: { "Content-Type": "application/json" },
-		}),
-	);
-
-	// Sync global admins to the Festival DO
-	await syncAdminsToFestival(env, festivalId);
-
-	// Seed the Festival DO with the lineup as a genesis Yrs document
-	const lineupUrl = requireUrl(`http://internal/festivals/${festivalId}/lineup`);
-	const lineupResp = await mainStub.fetch(new Request(lineupUrl.toString()));
-	if (lineupResp.ok) {
-		const lineup = await lineupResp.json();
-		await (
-			stub as unknown as { seedLineup(festivalId: string, lineup: unknown): Promise<void> }
-		).seedLineup(festivalId, lineup);
+		);
 	}
 
-	// Arm weather alarm (fetches weather on a 6h schedule)
+	await syncAdminsToFestival(env, festivalId);
+	// A lightweight completion marker keeps ordinary reconnects from transferring
+	// and hashing the full lineup. Missing markers trigger convergent reconciliation.
+	const festivalStub = stub as unknown as {
+		hasSeededLineup(festivalId: string): Promise<boolean>;
+		seedLineup(festivalId: string, lineup: unknown): Promise<void>;
+	};
+	if (!(await festivalStub.hasSeededLineup(festivalId))) {
+		const lineupUrl = requireUrl(`http://internal/festivals/${festivalId}/lineup`);
+		const lineupResp = await mainStub.fetch(new Request(lineupUrl.toString()));
+		if (lineupResp.ok) {
+			await festivalStub.seedLineup(festivalId, await lineupResp.json());
+		} else if (requireLineup) {
+			throw new Error(`Festival lineup unavailable for ${festivalId}`);
+		}
+	}
 	await (stub as unknown as { armWeatherAlarm(): Promise<void> }).armWeatherAlarm();
 }
 
@@ -400,6 +489,12 @@ async function syncAdminsToFestival(env: Env["Bindings"], festivalId: string) {
 
 // GET /festivals/:id/ws — WebSocket upgrade to Festival DO
 app.get("/festivals/:id/ws", async (c) => {
+	if (c.req.header("Upgrade")?.toLowerCase() !== "websocket") {
+		return new Response("WebSocket upgrade required", {
+			status: 426,
+			headers: { Upgrade: "websocket" },
+		});
+	}
 	const id = c.req.param("id");
 
 	// Auto-configure the DO's event window on first WS connection

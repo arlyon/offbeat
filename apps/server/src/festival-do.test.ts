@@ -152,6 +152,7 @@ async function drainMessages(_ws: WebSocket, ms = 100) {
 
 beforeAll(async () => {
 	worker = await unstable_dev("src/index.ts", {
+		persist: false,
 		experimental: { disableExperimentalWarning: true },
 	});
 	const loopbackWsScheme = ["w", "s"].join("");
