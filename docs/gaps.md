@@ -180,7 +180,10 @@ The GPL-3.0 `meshtastic` crate remains reference-only. Offbeat owns only `PRIVAT
 
 The top-level list of possible Clashfinder-backed events remains server-authoritative. Cache successful discovery responses for offline browsing and expose stale/empty state honestly.
 
-Peer introduction of never-seen events and fresh-install bootstrap from nearby devices are out of scope.
+Registered users may now publish a validated public Clashfinder source through
+the online MainDO import workflow. This does not weaken registry authority:
+peers still cannot introduce unseen events, and fresh-install bootstrap from
+nearby devices remains out of scope.
 
 ## P1: no complete multi-device acceptance matrix
 

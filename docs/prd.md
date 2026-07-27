@@ -29,6 +29,7 @@ The system uses transport-agnostic logical resources, iroh for capable peer rout
 ### Festival Discovery & Lineup
 
 - **U1:** Browse upcoming festivals with metadata (name, dates, location, stages, genres).
+- **U1a:** As a registered attendee, paste a public Clashfinder URL, preview its schedule, confirm location metadata, and publish it into discovery without becoming an admin.
 - **U2:** Search festivals by name, city, or genre.
 - **U3:** Save festivals to favourites.
 - **U4:** See live festivals with pulsing indicator.
@@ -349,7 +350,9 @@ FRB maps Rust `Stream`s to Dart `Stream`s natively:
 - **FR1.4:** Festival Yrs updates propagate via iroh-gossip on `{fest}/state` topic.
 - **FR1.5:** Clients verify signature against festival's public key before applying updates.
 - **FR1.6:** Peers relay signed updates to other peers (trustless relay, trusted origin).
-- **Acceptance:** Seed festival data → client discovers the festival through REST → client receives and verifies signed festival state → second client receives the same state through a peer route → both persist and show identical lineup offline.
+- **FR1.7:** Any currently registered user may preview and immediately publish a valid public Clashfinder event through an authenticated, replay-protected, rate-limited workflow. The Main DO deduplicates the source, retains a short-lived idempotency result, and the Festival DO idempotently seeds signed authoritative state.
+- **FR1.8:** Clashfinder credentials remain server-only. Imports accept only a bounded fixed-host source and bounded schedule payload; the top-level authoring UI requires an online connection and never creates a peer-authoritative event.
+- **Acceptance:** Seed or user-publish festival data → client discovers the festival through REST → client receives and verifies signed festival state → second client receives the same state through a peer route → both persist and show identical lineup offline. Replayed, forged, over-limit, duplicate, malformed, and oversized authoring requests produce deterministic bounded outcomes.
 
 ### FR2: Festival DO Lifecycle
 

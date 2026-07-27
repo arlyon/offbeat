@@ -164,7 +164,26 @@ X-Admin-Sig: <hex sig over "/festivals">
 
 **Response:** `201 Created` with the festival object.
 
-### From Clashfinder source
+### Registered-user Clashfinder authoring
+
+Festival discovery exposes an inline **ADD CLASHFINDER** flow to every currently
+registered user. It is separate from administrator mutation endpoints:
+
+```text
+POST /festival-imports/preview
+POST /festival-imports/:previewId/publish
+```
+
+Preview accepts a public Clashfinder URL or short ID, fetches it with server-only
+credentials, validates bounded schedule data, and stores an owner-bound preview
+for 15 minutes. Publish confirms name, venue, city, and two-letter country code,
+then atomically creates the server-authoritative registry entry and lineup. The
+API idempotently seeds signed Festival DO state and returns an existing festival
+for duplicate sources or fresh signed retries. Requests use the registered-user
+signature contract in `auth-protocol.md` and are limited per user, network, and
+globally.
+
+### Administrator Clashfinder source
 
 ```
 POST /festivals

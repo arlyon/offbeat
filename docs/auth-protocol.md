@@ -73,6 +73,30 @@ protocol significantly, especially on constrained transports (BLE, LoRa).
 
 ---
 
+## Authenticated Online Authoring Requests
+
+Online actions that mutate server-authoritative state, including registered-user
+Clashfinder imports, bind a current MainDO attestation to one exact HTTP request.
+The client signs this domain-separated payload with its attested Ed25519 key:
+
+```text
+offbeat:festival-import:v1
+METHOD
+/path
+unix_timestamp
+128-bit_nonce_hex
+exact_request_body
+```
+
+The MainDO verifies the attestation against its own root key, requires the
+attested key to match the stored WebAuthn credential and request-signing key,
+rejects revoked or expired identities, allows at most five minutes of clock
+skew, and consumes each nonce once. Import admission is bounded per identity,
+per hashed network address, and globally before any shared Clashfinder quota is
+used. These online mutations do not use the offline public-chat grace policy.
+
+---
+
 ## Accepted Offline Public-Chat Policy
 
 The accepted model is **signed authorship with cached registration proof and
