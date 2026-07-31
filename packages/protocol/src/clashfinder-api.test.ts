@@ -40,7 +40,7 @@ describe("Clashfinder API", () => {
 		).rejects.toThrow("response is too large");
 		expect(fetchMock).toHaveBeenCalledWith(
 			expect.stringMatching(/^https:\/\/clashfinder\.com\/data\/event\//),
-			expect.objectContaining({ redirect: "error" }),
+			expect.objectContaining({ redirect: "manual" }),
 		);
 		expect(cancelled).toBe(true);
 	});

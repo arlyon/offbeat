@@ -131,7 +131,7 @@ export async function fetchClashfinder(
 	const publicKey = await generatePublicKey(auth, options);
 	const url = buildApiUrl(clashfinderId, { username: auth.username, publicKey }, options);
 
-	const response = await fetch(url, { signal: options?.signal, redirect: "error" });
+	const response = await fetch(url, { signal: options?.signal, redirect: "manual" });
 	if (response.redirected) {
 		throw new Error("Clashfinder API redirects are not allowed");
 	}
