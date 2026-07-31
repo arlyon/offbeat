@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Festival {
     pub id: String,
@@ -14,11 +14,21 @@ pub struct Festival {
     pub stages: Vec<Stage>,
     pub genres: Vec<String>,
     pub status: FestivalStatus,
+    pub clashfinder_id: Option<String>,
     pub public_key: String,
     pub updated_at: String,
+    pub lat: Option<f64>,
+    pub lon: Option<f64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
+pub struct FestivalRegistryCache {
+    pub festivals: Vec<Festival>,
+    pub fetched_at: String,
+    pub request_token: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum FestivalStatus {
     #[serde(rename = "upcoming")]
@@ -29,7 +39,7 @@ pub enum FestivalStatus {
     Past,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Stage {
     pub id: String,

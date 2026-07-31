@@ -1,9 +1,9 @@
 // These types are re-exported from the parent module (mod.rs) and used
 // in function signatures throughout this module.
-use offbeat_core::OffbeatNode;
 use offbeat_core::connection_manager::{GossipStatus, PeerEntry, PeerSource};
 use offbeat_core::doc_manager::DocManager;
 use offbeat_core::notifier::SyncStatus;
+use offbeat_core::OffbeatNode;
 
 // ---------------------------------------------------------------------------
 // DTOs
@@ -65,6 +65,12 @@ pub struct IdentityDto {
 pub struct AuthStateDto {
     pub state: String,
     pub expires_at: Option<String>,
+}
+
+pub struct FestivalRegistryCacheDto {
+    pub payload_json: String,
+    pub fetched_at: String,
+    pub request_token: String,
 }
 
 pub struct AttestationDto {

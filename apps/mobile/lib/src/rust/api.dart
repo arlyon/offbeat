@@ -7,7 +7,7 @@ import 'api/dto.dart';
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `deregister_group_resources`, `ensure_group_chat_access`, `flush_pending_group_updates`, `group_id_from_chat_topic`, `publish_group_state_update`, `reconcile_shared_stars`, `register_group_resources`, `schedule_pending_group_retry`, `send_group_state_update`, `send_pending_group_update`
+// These functions are ignored because they are not marked as `pub`: `deregister_group_resources`, `ensure_group_chat_access`, `flush_pending_group_updates`, `group_id_from_chat_topic`, `group_publish_lock`, `publish_group_state_update`, `reconcile_shared_stars`, `register_group_resources`, `relay_matches_festival`, `schedule_pending_group_retry`, `send_group_state_update`, `send_pending_group_update`
 
 Future<List<MeshtasticDebugDeviceDto>> meshtasticDebugScan({
   required int scanMs,
@@ -96,6 +96,9 @@ abstract class AppNode implements RustOpaqueInterface {
     required int offset,
   });
 
+  /// Load the cached registry, if a successful server fetch has been persisted.
+  Future<FestivalRegistryCacheDto?> getFestivalRegistryCache();
+
   /// Read the current state of a group from the local Yrs doc.
   Future<GroupStateDto> getGroupState({required String groupId});
 
@@ -172,6 +175,13 @@ abstract class AppNode implements RustOpaqueInterface {
   Future<void> publishChat({
     required String topic,
     required ChatMessageDto message,
+  });
+
+  /// Atomically replace the app-side cache of the server-authoritative registry.
+  Future<bool> replaceFestivalRegistryCache({
+    required String payloadJson,
+    required String fetchedAt,
+    required String requestToken,
   });
 
   /// Cycle the BLE transport (stop then start).
@@ -287,5 +297,22 @@ abstract class AppNode implements RustOpaqueInterface {
   /// Watch weather forecast — emits current forecast, then updates on changes.
   Future<Stream<WeatherForecastDto?>> watchWeather({
     required String festivalId,
+  });
+}
+
+// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<FestivalRegistryCacheStore>>
+abstract class FestivalRegistryCacheStore implements RustOpaqueInterface {
+  Future<FestivalRegistryCacheDto?> load();
+
+  /// Open only the local SQLite cache, without constructing any transports.
+  static Future<FestivalRegistryCacheStore> open({required String dbPath}) =>
+      RustLib.instance.api.crateApiFestivalRegistryCacheStoreOpen(
+        dbPath: dbPath,
+      );
+
+  Future<bool> replace({
+    required String payloadJson,
+    required String fetchedAt,
+    required String requestToken,
   });
 }

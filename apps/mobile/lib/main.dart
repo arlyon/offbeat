@@ -35,8 +35,6 @@ import 'src/rust/frb_generated.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await RustLib.init();
-  await BluetoothService.requestPermissions();
-  await BluetoothService.initBle();
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
@@ -100,6 +98,9 @@ class _OffbeatShellState extends State<_OffbeatShell>
   List<Festival> _festivals = [];
   bool _festivalsLoading = false;
   String? _festivalsError;
+  DateTime? _festivalCacheFetchedAt;
+  FestivalRegistryStore? _festivalRegistryStore;
+  int _festivalLoadGeneration = 0;
 
   // Lineup state (subscription-based)
   StreamSubscription<LineupDto?>? _lineupSub;
@@ -169,8 +170,7 @@ class _OffbeatShellState extends State<_OffbeatShell>
     _clockTimer = Timer.periodic(const Duration(seconds: 60), (_) {
       if (mounted) setState(() => _now = DateTime.now());
     });
-    _initNode();
-    _loadFestivals();
+    unawaited(_initializeNodeAndFestivals());
     _initDeepLinks();
   }
 
@@ -183,6 +183,7 @@ class _OffbeatShellState extends State<_OffbeatShell>
     _transportSub?.cancel();
     _relayRetryTimer?.cancel();
     _deepLinkSub?.cancel();
+    _festivalService.dispose();
     _navController.dispose();
     super.dispose();
   }
@@ -234,15 +235,50 @@ class _OffbeatShellState extends State<_OffbeatShell>
         });
   }
 
-  Future<void> _initNode() async {
-    final dir = await getApplicationDocumentsDirectory();
-    final dbPath = '${dir.path}/offbeat.db';
+  Future<void> _initializeNodeAndFestivals() async {
+    String? dbPath;
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      dbPath = '${dir.path}/offbeat.db';
+      final localStore = await FestivalRegistryCacheStore.open(dbPath: dbPath);
+      if (!mounted) return;
+      _festivalRegistryStore = LocalFestivalRegistryStore(localStore);
+      await _hydrateFestivalCache();
+    } catch (error) {
+      debugPrint('Failed to initialize local festival cache: $error');
+    }
+
+    if (!mounted) return;
+    setState(() => _nodeReady = true);
+    unawaited(_loadFestivals(loadCache: false));
+
+    try {
+      await BluetoothService.requestPermissions();
+      await BluetoothService.initBle();
+      await _initNode(dbPath: dbPath);
+    } catch (error) {
+      debugPrint('Failed to initialize network node: $error');
+    }
+  }
+
+  Future<void> _initNode({String? dbPath}) async {
+    if (dbPath == null) {
+      final dir = await getApplicationDocumentsDirectory();
+      dbPath = '${dir.path}/offbeat.db';
+    }
     final node = await AppNode.create(dbPath: dbPath);
+    if (!mounted) return;
 
-    // CRITICAL: Start the BLE background discovery and sync tasks
-    await node.startBleSync();
+    setState(() {
+      _node = node;
+      _nodeReady = true;
+    });
 
-    // Load existing auth state
+    try {
+      await node.startBleSync();
+    } catch (error) {
+      debugPrint('BLE sync startup failed: $error');
+    }
 
     final authState = await node.getAuthState();
     final identity = await node.getIdentity();
@@ -251,25 +287,22 @@ class _OffbeatShellState extends State<_OffbeatShell>
       pubKeyHex = await node.getPublicKeyHex();
     }
 
-    // Check admin status if registered
     List<String> admins = [];
     bool isAdmin = false;
     if (pubKeyHex.isNotEmpty) {
       try {
-        admins = await _adminService.listAdmins();
+        admins = await _adminService.listAdmins().timeout(
+          const Duration(seconds: 10),
+        );
         isAdmin = admins.contains(pubKeyHex);
         debugPrint('Loaded ${admins.length} admins, isAdmin=$isAdmin');
-      } catch (e) {
-        debugPrint('Failed to load admins: $e');
+      } catch (error) {
+        debugPrint('Failed to load admins: $error');
       }
     }
 
-    // Start watching sync status
-    final syncStream = await node.watchSyncStatus();
-
+    if (!mounted || _node != node) return;
     setState(() {
-      _node = node;
-      _nodeReady = true;
       _authState = authState.state;
       _authExpiresAt = authState.expiresAt;
       _userId = identity.userId;
@@ -280,27 +313,34 @@ class _OffbeatShellState extends State<_OffbeatShell>
       if (isAdmin) _adminRequestStatus = 'already_admin';
     });
 
-    // Listen to sync status changes
-    syncStream.listen((status) {
-      if (mounted) {
-        setState(() {
-          _isSyncing = status.syncing;
-          _syncStatusNotifier.value = status;
-        });
-      }
-    });
+    try {
+      final syncStream = await node.watchSyncStatus();
+      syncStream.listen((status) {
+        if (mounted && _node == node) {
+          setState(() {
+            _isSyncing = status.syncing;
+            _syncStatusNotifier.value = status;
+          });
+        }
+      });
+    } catch (error) {
+      debugPrint('Sync status watcher failed: $error');
+    }
 
-    // Listen to transport status (relay + BLE)
-    final transportStream = await node.watchTransportStatus();
-    _transportSub = transportStream.listen((status) {
-      if (mounted) {
-        setState(() {
-          _transportStatusNotifier.value = status;
-          _relayConnected = status.relay.connected;
-          _blePeerCount = status.ble.active ? status.ble.peerCount : -1;
-        });
-      }
-    });
+    try {
+      final transportStream = await node.watchTransportStatus();
+      _transportSub = transportStream.listen((status) {
+        if (mounted && _node == node) {
+          setState(() {
+            _transportStatusNotifier.value = status;
+            _relayConnected = status.relay.connected;
+            _blePeerCount = status.ble.active ? status.ble.peerCount : -1;
+          });
+        }
+      });
+    } catch (error) {
+      debugPrint('Transport status watcher failed: $error');
+    }
   }
 
   /// Restart the node to re-attempt BLE transport initialization.
@@ -331,30 +371,86 @@ class _OffbeatShellState extends State<_OffbeatShell>
       _starredSetIds = {};
     });
     await _initNode();
-    _loadFestivals();
   }
 
-  Future<void> _loadFestivals() async {
+  Future<void> _hydrateFestivalCache() async {
+    final store = _festivalRegistryStore;
+    if (store == null) return;
+    try {
+      final cached = await _festivalService.loadCachedFestivals(store);
+      if (cached != null && mounted) {
+        setState(() {
+          _festivals = cached.festivals;
+          _festivalCacheFetchedAt = cached.fetchedAt;
+          _festivalsError =
+              'cached copy // updated ${_formatCacheTime(cached.fetchedAt)}';
+        });
+      }
+    } catch (error) {
+      debugPrint('Failed to load cached festival registry: $error');
+    }
+  }
+
+  Future<void> _loadFestivals({bool loadCache = true}) async {
+    final generation = ++_festivalLoadGeneration;
+    bool isCurrent() => mounted && generation == _festivalLoadGeneration;
     setState(() {
       _festivalsLoading = true;
-      _festivalsError = null;
+      final cachedAt = _festivalCacheFetchedAt;
+      _festivalsError = cachedAt == null
+          ? null
+          : 'cached copy // updated ${_formatCacheTime(cachedAt)} // checking for updates';
     });
+
+    final store = _festivalRegistryStore;
+    if (loadCache && _festivals.isEmpty && store != null) {
+      try {
+        final cached = await _festivalService.loadCachedFestivals(store);
+        if (cached != null && isCurrent()) {
+          setState(() {
+            _festivals = cached.festivals;
+            _festivalCacheFetchedAt = cached.fetchedAt;
+            _festivalsError =
+                'cached copy // updated ${_formatCacheTime(cached.fetchedAt)} // checking for updates';
+          });
+        }
+      } catch (error) {
+        debugPrint('Failed to load cached festival registry: $error');
+      }
+    }
+
     try {
-      final festivals = await _festivalService.fetchFestivals();
-      if (!mounted) return;
+      final refreshed = await _festivalService.refreshFestivals(store: store);
+      if (!isCurrent()) return;
       setState(() {
-        _festivals = festivals;
+        _festivals = refreshed.festivals;
         _festivalsLoading = false;
+        if (refreshed.persisted) {
+          _festivalCacheFetchedAt = refreshed.fetchedAt;
+          _festivalsError = null;
+        } else {
+          _festivalsError = 'online // offline cache unavailable';
+        }
       });
-    } catch (e) {
-      if (!mounted) return;
+    } catch (error) {
+      if (!isCurrent()) return;
+      final cachedAt = _festivalCacheFetchedAt;
       setState(() {
         _festivalsLoading = false;
-        _festivalsError = _festivals.isEmpty
+        _festivalsError = cachedAt != null
+            ? 'offline cache // updated ${_formatCacheTime(cachedAt)}'
+            : _festivals.isEmpty
             ? 'offline — no cached data'
             : 'could not refresh';
       });
     }
+  }
+
+  String _formatCacheTime(DateTime value) {
+    final local = value.toLocal();
+    String twoDigits(int number) => number.toString().padLeft(2, '0');
+    return '${local.year}-${twoDigits(local.month)}-${twoDigits(local.day)} '
+        '${twoDigits(local.hour)}:${twoDigits(local.minute)}';
   }
 
   Future<ClashfinderPreviewResult> _previewClashfinder(String source) async {

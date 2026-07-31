@@ -174,11 +174,15 @@ Remaining work includes:
 
 The GPL-3.0 `meshtastic` crate remains reference-only. Offbeat owns only `PRIVATE_APP` payload bytes and uses official protobuf envelopes.
 
-## P2: event registry cache is incomplete
+## Resolved: event registry cache
 
 **Tracking:** `offbeat-t6a.5`
 
-The top-level list of possible Clashfinder-backed events remains server-authoritative. Cache successful discovery responses for offline browsing and expose stale/empty state honestly.
+Successful MainDO discovery responses are atomically normalized into app-side
+SQLite and loaded before an online refresh. Cached data carries its fetch time,
+remains visible when refresh fails, and is explicitly marked stale. A successful
+refresh replaces the complete cached registry, including removals; corrupt or
+missing cache data produces an honest offline/empty state.
 
 Registered users may now publish a validated public Clashfinder source through
 the online MainDO import workflow. This does not weaken registry authority:

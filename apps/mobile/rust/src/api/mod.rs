@@ -361,6 +361,53 @@ const MESHTASTIC_FROM_RADIO_CHAR_UUID: &str = "2c55e69e-4993-11ed-b878-0242ac120
 
 /// Opaque handle to the running Offbeat node, used by all Dart callers.
 #[flutter_rust_bridge::frb(opaque)]
+pub struct FestivalRegistryCacheStore {
+    db_path: std::path::PathBuf,
+}
+
+impl FestivalRegistryCacheStore {
+    /// Validate and retain the SQLite path without constructing any transports
+    /// or keeping a connection open across database recreation (for logout).
+    pub fn open(db_path: String) -> anyhow::Result<Self> {
+        let db_path = std::path::PathBuf::from(db_path);
+        offbeat_core::db::Database::new(&db_path)?;
+        Ok(Self { db_path })
+    }
+
+    pub fn replace(
+        &self,
+        payload_json: String,
+        fetched_at: String,
+        request_token: String,
+    ) -> anyhow::Result<bool> {
+        const MAX_REGISTRY_PAYLOAD_BYTES: usize = 2 * 1024 * 1024;
+        if payload_json.len() > MAX_REGISTRY_PAYLOAD_BYTES {
+            anyhow::bail!("festival registry response exceeds 2 MiB");
+        }
+        let festivals: Vec<offbeat_core::types::Festival> = serde_json::from_str(&payload_json)
+            .map_err(|error| anyhow::anyhow!("invalid festival registry JSON: {error}"))?;
+        offbeat_core::db::Database::new(&self.db_path)?.replace_festival_registry_cache(
+            &festivals,
+            &fetched_at,
+            &request_token,
+        )
+    }
+
+    pub fn load(&self) -> anyhow::Result<Option<FestivalRegistryCacheDto>> {
+        offbeat_core::db::Database::new(&self.db_path)?
+            .load_festival_registry_cache()?
+            .map(|cache| {
+                Ok(FestivalRegistryCacheDto {
+                    payload_json: serde_json::to_string(&cache.festivals)?,
+                    fetched_at: cache.fetched_at,
+                    request_token: cache.request_token,
+                })
+            })
+            .transpose()
+    }
+}
+
+#[flutter_rust_bridge::frb(opaque)]
 pub struct AppNode {
     inner: OffbeatNode,
     relay_festival_id: Arc<std::sync::RwLock<Option<String>>>,
@@ -425,6 +472,41 @@ impl AppNode {
     /// Return the set IDs that are starred for the given festival.
     pub fn get_stars(&self, festival_id: String) -> anyhow::Result<Vec<String>> {
         self.inner.db.get_stars(&festival_id)
+    }
+
+    /// Atomically replace the app-side cache of the server-authoritative registry.
+    pub fn replace_festival_registry_cache(
+        &self,
+        payload_json: String,
+        fetched_at: String,
+        request_token: String,
+    ) -> anyhow::Result<bool> {
+        const MAX_REGISTRY_PAYLOAD_BYTES: usize = 2 * 1024 * 1024;
+        if payload_json.len() > MAX_REGISTRY_PAYLOAD_BYTES {
+            anyhow::bail!("festival registry response exceeds 2 MiB");
+        }
+        let festivals: Vec<offbeat_core::types::Festival> = serde_json::from_str(&payload_json)
+            .map_err(|error| anyhow::anyhow!("invalid festival registry JSON: {error}"))?;
+        self.inner
+            .db
+            .replace_festival_registry_cache(&festivals, &fetched_at, &request_token)
+    }
+
+    /// Load the cached registry, if a successful server fetch has been persisted.
+    pub fn get_festival_registry_cache(
+        &self,
+    ) -> anyhow::Result<Option<FestivalRegistryCacheDto>> {
+        self.inner
+            .db
+            .load_festival_registry_cache()?
+            .map(|cache| {
+                Ok(FestivalRegistryCacheDto {
+                    payload_json: serde_json::to_string(&cache.festivals)?,
+                    fetched_at: cache.fetched_at,
+                    request_token: cache.request_token,
+                })
+            })
+            .transpose()
     }
 
     /// Toggle a personal star and reconcile the resulting schedule into every
@@ -2535,6 +2617,61 @@ impl AppNode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn festival_registry_bridge_persists_normalized_snapshot_without_networking() {
+        let path = std::env::temp_dir().join(format!(
+            "offbeat-registry-{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        let store = FestivalRegistryCacheStore::open(path.to_string_lossy().into_owned()).unwrap();
+        let payload = serde_json::json!([{
+            "id": "fieldday",
+            "name": "Field Day",
+            "year": 2027,
+            "location": "Brockwell Park",
+            "city": "London",
+            "country": "GB",
+            "startDate": "2027-05-29",
+            "endDate": "2027-05-29",
+            "stages": [{
+                "id": "main",
+                "name": "Main Stage",
+                "short": "MAIN",
+                "color": "#ff2d8f",
+                "order": 0
+            }],
+            "genres": ["electronic"],
+            "status": "upcoming",
+            "clashfinderId": "fieldday",
+            "publicKey": "",
+            "updatedAt": "2027-01-01T00:00:00Z",
+            "lat": 51.45,
+            "lon": -0.11
+        }])
+        .to_string();
+
+        store
+            .replace(
+                payload,
+                "2027-01-02T00:00:00Z".to_string(),
+                "00000000000000000001".to_string(),
+            )
+            .unwrap();
+        drop(store);
+        let reopened =
+            FestivalRegistryCacheStore::open(path.to_string_lossy().into_owned()).unwrap();
+        let cached = reopened.load().unwrap().unwrap();
+        let decoded: serde_json::Value = serde_json::from_str(&cached.payload_json).unwrap();
+        assert_eq!(decoded[0]["id"], "fieldday");
+        assert_eq!(decoded[0]["stages"][0]["name"], "Main Stage");
+        assert_eq!(cached.fetched_at, "2027-01-02T00:00:00Z");
+        assert_eq!(cached.request_token, "00000000000000000001");
+        drop(reopened);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("db-shm"));
+        let _ = std::fs::remove_file(path.with_extension("db-wal"));
+    }
 
     #[test]
     fn group_lifecycle_registers_notifies_and_deregisters_resources() {

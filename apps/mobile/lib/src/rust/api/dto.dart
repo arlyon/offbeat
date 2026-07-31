@@ -191,6 +191,31 @@ class ChatMessageDto {
           timestamp == other.timestamp;
 }
 
+class FestivalRegistryCacheDto {
+  final String payloadJson;
+  final String fetchedAt;
+  final String requestToken;
+
+  const FestivalRegistryCacheDto({
+    required this.payloadJson,
+    required this.fetchedAt,
+    required this.requestToken,
+  });
+
+  @override
+  int get hashCode =>
+      payloadJson.hashCode ^ fetchedAt.hashCode ^ requestToken.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is FestivalRegistryCacheDto &&
+          runtimeType == other.runtimeType &&
+          payloadJson == other.payloadJson &&
+          fetchedAt == other.fetchedAt &&
+          requestToken == other.requestToken;
+}
+
 class GroupCreateResultDto {
   final String groupId;
   final String festivalId;

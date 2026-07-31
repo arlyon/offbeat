@@ -38,3 +38,38 @@ CREATE TABLE IF NOT EXISTS starred_sets (
     starred_at TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (festival_id, set_id)
 );
+
+CREATE TABLE IF NOT EXISTS cached_festivals (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    year INTEGER NOT NULL,
+    location TEXT NOT NULL,
+    city TEXT NOT NULL,
+    country TEXT NOT NULL,
+    start_date TEXT NOT NULL,
+    end_date TEXT NOT NULL,
+    genres_json TEXT NOT NULL,
+    status TEXT NOT NULL,
+    clashfinder_id TEXT,
+    public_key TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    lat REAL,
+    lon REAL
+);
+
+CREATE TABLE IF NOT EXISTS cached_festival_stages (
+    festival_id TEXT NOT NULL,
+    id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    short TEXT NOT NULL,
+    color TEXT NOT NULL,
+    sort_order INTEGER NOT NULL,
+    PRIMARY KEY (festival_id, id)
+);
+CREATE INDEX IF NOT EXISTS idx_cached_festival_stages_order
+    ON cached_festival_stages(festival_id, sort_order, id);
+
+CREATE TABLE IF NOT EXISTS festival_registry_meta (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    fetched_at TEXT NOT NULL
+);

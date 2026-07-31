@@ -109,6 +109,46 @@ const MIGRATIONS: &[(u32, &str)] = &[
         CREATE INDEX idx_chat_topic_order
             ON chat_messages(topic, logical_time, user_id, writer_seq, id);",
     ),
+    (
+        7,
+        "CREATE TABLE IF NOT EXISTS cached_festivals (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            year INTEGER NOT NULL,
+            location TEXT NOT NULL,
+            city TEXT NOT NULL,
+            country TEXT NOT NULL,
+            start_date TEXT NOT NULL,
+            end_date TEXT NOT NULL,
+            genres_json TEXT NOT NULL,
+            status TEXT NOT NULL,
+            clashfinder_id TEXT,
+            public_key TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            lat REAL,
+            lon REAL
+        );
+        CREATE TABLE IF NOT EXISTS cached_festival_stages (
+            festival_id TEXT NOT NULL,
+            id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            short TEXT NOT NULL,
+            color TEXT NOT NULL,
+            sort_order INTEGER NOT NULL,
+            PRIMARY KEY (festival_id, id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_cached_festival_stages_order
+            ON cached_festival_stages(festival_id, sort_order, id);
+        CREATE TABLE IF NOT EXISTS festival_registry_meta (
+            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+            fetched_at TEXT NOT NULL
+        );",
+    ),
+    (
+        8,
+        "ALTER TABLE festival_registry_meta
+             ADD COLUMN request_token TEXT NOT NULL DEFAULT '00000000000000000000';",
+    ),
 ];
 
 /// Ensure the `_migrations` table exists and apply any pending migrations.
@@ -263,6 +303,54 @@ mod tests {
     }
 
     #[test]
+    fn migration_seven_adds_registry_cache_to_existing_database() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE _migrations (
+                version INTEGER PRIMARY KEY,
+                applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );",
+        )
+        .unwrap();
+        for &(version, sql) in MIGRATIONS.iter().take(6) {
+            conn.execute_batch(sql).unwrap();
+            conn.execute("INSERT INTO _migrations(version) VALUES (?1)", [version])
+                .unwrap();
+        }
+        conn.execute_batch(
+            "DROP TABLE cached_festival_stages;
+             DROP TABLE cached_festivals;
+             DROP TABLE festival_registry_meta;",
+        )
+        .unwrap();
+
+        apply_migrations(&conn).unwrap();
+        for table in [
+            "cached_festivals",
+            "cached_festival_stages",
+            "festival_registry_meta",
+        ] {
+            let exists: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                    [table],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(exists, 1, "migration should create {table}");
+        }
+        let request_token_column: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('festival_registry_meta')
+                 WHERE name = 'request_token'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(request_token_column, 1);
+    }
+
+    #[test]
     fn test_tables_created() {
         let conn = Connection::open_in_memory().unwrap();
         apply_migrations(&conn).unwrap();
@@ -289,6 +377,9 @@ mod tests {
         assert!(tables.contains(&"chat_topic_clocks".to_string()));
         assert!(tables.contains(&"chat_writer_sequences".to_string()));
         assert!(tables.contains(&"chat_sequence_conflicts".to_string()));
+        assert!(tables.contains(&"cached_festivals".to_string()));
+        assert!(tables.contains(&"cached_festival_stages".to_string()));
+        assert!(tables.contains(&"festival_registry_meta".to_string()));
         assert!(tables.contains(&"_migrations".to_string()));
     }
 }

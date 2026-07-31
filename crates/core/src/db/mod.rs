@@ -1,13 +1,22 @@
 mod migrations;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
 use std::sync::Mutex;
 
-use crate::types::{ChatMessage, SignedUpdate, VerifiedFestivalUpdate};
+use crate::types::{
+    ChatMessage, Festival, FestivalRegistryCache, FestivalStatus, SignedUpdate, Stage,
+    VerifiedFestivalUpdate,
+};
 
 const MAX_REMOTE_LAMPORT_ADVANCE: i64 = 1_000_000;
+const MAX_CACHED_FESTIVALS: usize = 2_000;
+const MAX_CACHED_STAGES: usize = 100_000;
+const MAX_CACHED_STAGES_PER_FESTIVAL: usize = 500;
+const MAX_CACHED_REGISTRY_STORAGE_BYTES: i64 = 4 * 1024 * 1024;
+const MAX_CACHE_TEXT_BYTES: usize = 1_024;
+const REQUEST_TOKEN_ROLLOVER_FLOOR: &str = "90000000000000000000";
 pub const EQUIVOCATED_HEAD_ID: &str = "__offbeat/equivocated__";
 
 pub fn chat_head_commitment(message_id: &str, logical_time: u64) -> String {
@@ -36,9 +45,141 @@ pub struct PendingGroupUpdate {
     pub envelope: Vec<u8>,
 }
 
+struct CachedFestivalRow {
+    id: String,
+    name: String,
+    year: u32,
+    location: String,
+    city: String,
+    country: String,
+    start_date: String,
+    end_date: String,
+    genres_json: String,
+    status: String,
+    clashfinder_id: Option<String>,
+    public_key: String,
+    updated_at: String,
+    lat: Option<f64>,
+    lon: Option<f64>,
+}
+
 // SAFETY: `Connection` is `Send` (rusqlite documents this), and we guard
 // all access with a `Mutex`, so `Database` can be shared across threads.
 unsafe impl Sync for Database {}
+
+fn festival_status_text(status: &FestivalStatus) -> &'static str {
+    match status {
+        FestivalStatus::Upcoming => "upcoming",
+        FestivalStatus::Live => "live",
+        FestivalStatus::Past => "past",
+    }
+}
+
+fn parse_festival_status(status: &str) -> Result<FestivalStatus> {
+    match status {
+        "upcoming" => Ok(FestivalStatus::Upcoming),
+        "live" => Ok(FestivalStatus::Live),
+        "past" => Ok(FestivalStatus::Past),
+        value => bail!("invalid cached festival status: {value}"),
+    }
+}
+
+fn validate_cache_text(value: &str, field: &str) -> Result<()> {
+    if value.len() > MAX_CACHE_TEXT_BYTES {
+        bail!("cached festival {field} is too long");
+    }
+    Ok(())
+}
+
+fn is_valid_request_token(request_token: &str) -> bool {
+    request_token.len() == 20
+        && request_token.bytes().all(|byte| byte.is_ascii_digit())
+        && request_token != "99999999999999999999"
+}
+
+fn validate_festival_registry(
+    festivals: &[Festival],
+    fetched_at: &str,
+    request_token: &str,
+) -> Result<()> {
+    if fetched_at.is_empty() {
+        bail!("cached festival fetch timestamp is empty");
+    }
+    validate_cache_text(fetched_at, "fetch timestamp")?;
+    if !is_valid_request_token(request_token) {
+        bail!("cached festival request token is invalid");
+    }
+    if festivals.len() > MAX_CACHED_FESTIVALS {
+        bail!("festival registry exceeds {MAX_CACHED_FESTIVALS} entries");
+    }
+    let mut stage_count = 0usize;
+    let mut storage_bytes = fetched_at.len().saturating_add(request_token.len());
+    for festival in festivals {
+        if festival.id.is_empty() || festival.name.is_empty() {
+            bail!("cached festival id and name are required");
+        }
+        for (field, value) in [
+            ("id", festival.id.as_str()),
+            ("name", festival.name.as_str()),
+            ("location", festival.location.as_str()),
+            ("city", festival.city.as_str()),
+            ("country", festival.country.as_str()),
+            ("start date", festival.start_date.as_str()),
+            ("end date", festival.end_date.as_str()),
+            ("public key", festival.public_key.as_str()),
+            ("updated timestamp", festival.updated_at.as_str()),
+        ] {
+            validate_cache_text(value, field)?;
+            storage_bytes = storage_bytes.saturating_add(value.len());
+        }
+        if let Some(clashfinder_id) = &festival.clashfinder_id {
+            validate_cache_text(clashfinder_id, "Clashfinder id")?;
+            storage_bytes = storage_bytes.saturating_add(clashfinder_id.len());
+        }
+        if festival.genres.len() > 100 {
+            bail!("festival {} has too many genres", festival.id);
+        }
+        for genre in &festival.genres {
+            validate_cache_text(genre, "genre")?;
+            storage_bytes = storage_bytes.saturating_add(genre.len().saturating_add(3));
+        }
+        storage_bytes = storage_bytes.saturating_add(32);
+        if festival.stages.len() > MAX_CACHED_STAGES_PER_FESTIVAL {
+            bail!(
+                "festival {} exceeds {MAX_CACHED_STAGES_PER_FESTIVAL} cached stages",
+                festival.id
+            );
+        }
+        stage_count = stage_count.saturating_add(festival.stages.len());
+        if stage_count > MAX_CACHED_STAGES {
+            bail!("festival registry exceeds {MAX_CACHED_STAGES} total stages");
+        }
+        if festival.lat.is_some_and(|value| !value.is_finite())
+            || festival.lon.is_some_and(|value| !value.is_finite())
+        {
+            bail!("festival {} has non-finite coordinates", festival.id);
+        }
+        for stage in &festival.stages {
+            if stage.id.is_empty() || stage.name.is_empty() {
+                bail!("cached stage id and name are required");
+            }
+            storage_bytes = storage_bytes.saturating_add(festival.id.len().saturating_add(8));
+            for (field, value) in [
+                ("stage id", stage.id.as_str()),
+                ("stage name", stage.name.as_str()),
+                ("stage short name", stage.short.as_str()),
+                ("stage color", stage.color.as_str()),
+            ] {
+                validate_cache_text(value, field)?;
+                storage_bytes = storage_bytes.saturating_add(value.len());
+            }
+        }
+        if storage_bytes > MAX_CACHED_REGISTRY_STORAGE_BYTES as usize {
+            bail!("festival registry exceeds local storage safety bounds");
+        }
+    }
+    Ok(())
+}
 
 fn sqlite_counter(value: u64, name: &str) -> Result<i64> {
     i64::try_from(value).map_err(|_| anyhow::anyhow!("chat {name} exceeds SQLite range"))
@@ -510,6 +651,264 @@ impl Database {
             .query_map(params![festival_id], |row| row.get(0))?
             .collect::<rusqlite::Result<Vec<String>>>()?;
         Ok(ids)
+    }
+
+    // --- server-authoritative festival registry cache ---
+
+    /// Atomically replace the complete server-authoritative festival registry cache.
+    pub fn replace_festival_registry_cache(
+        &self,
+        festivals: &[Festival],
+        fetched_at: &str,
+        request_token: &str,
+    ) -> Result<bool> {
+        validate_festival_registry(festivals, fetched_at, request_token)?;
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let current_request_token = tx
+            .query_row(
+                "SELECT request_token FROM festival_registry_meta WHERE singleton = 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        if current_request_token.as_deref().is_some_and(|current| {
+            is_valid_request_token(current)
+                && current < REQUEST_TOKEN_ROLLOVER_FLOOR
+                && current >= request_token
+        }) {
+            return Ok(false);
+        }
+        tx.execute("DELETE FROM cached_festival_stages", [])?;
+        tx.execute("DELETE FROM cached_festivals", [])?;
+
+        for festival in festivals {
+            let genres_json = serde_json::to_string(&festival.genres)?;
+            tx.execute(
+                "INSERT INTO cached_festivals
+                 (id, name, year, location, city, country, start_date, end_date,
+                  genres_json, status, clashfinder_id, public_key, updated_at, lat, lon)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                params![
+                    festival.id,
+                    festival.name,
+                    festival.year,
+                    festival.location,
+                    festival.city,
+                    festival.country,
+                    festival.start_date,
+                    festival.end_date,
+                    genres_json,
+                    festival_status_text(&festival.status),
+                    festival.clashfinder_id,
+                    festival.public_key,
+                    festival.updated_at,
+                    festival.lat,
+                    festival.lon,
+                ],
+            )?;
+            for stage in &festival.stages {
+                tx.execute(
+                    "INSERT INTO cached_festival_stages
+                     (festival_id, id, name, short, color, sort_order)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![
+                        festival.id,
+                        stage.id,
+                        stage.name,
+                        stage.short,
+                        stage.color,
+                        stage.order,
+                    ],
+                )?;
+            }
+        }
+
+        tx.execute(
+            "INSERT INTO festival_registry_meta(singleton, fetched_at, request_token)
+             VALUES (1, ?1, ?2)
+             ON CONFLICT(singleton) DO UPDATE SET
+                 fetched_at = excluded.fetched_at,
+                 request_token = excluded.request_token",
+            params![fetched_at, request_token],
+        )?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    /// Load the complete cached registry, or `None` before the first successful fetch.
+    pub fn load_festival_registry_cache(&self) -> Result<Option<FestivalRegistryCache>> {
+        let conn = self.conn.lock().unwrap();
+        let Some((meta_bytes, token_bytes)) = conn
+            .query_row(
+                "SELECT length(CAST(fetched_at AS BLOB)),
+                        length(CAST(request_token AS BLOB))
+                 FROM festival_registry_meta WHERE singleton = 1",
+                [],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .optional()?
+        else {
+            return Ok(None);
+        };
+        if meta_bytes > MAX_CACHE_TEXT_BYTES as i64 || token_bytes != 20 {
+            bail!("cached festival registry metadata exceeds local safety bounds");
+        }
+
+        let (festival_count, festival_bytes) = conn.query_row(
+            "SELECT COUNT(*), COALESCE(SUM(
+                length(CAST(id AS BLOB)) + length(CAST(name AS BLOB)) +
+                length(CAST(location AS BLOB)) + length(CAST(city AS BLOB)) +
+                length(CAST(country AS BLOB)) + length(CAST(start_date AS BLOB)) +
+                length(CAST(end_date AS BLOB)) + length(CAST(genres_json AS BLOB)) +
+                length(CAST(status AS BLOB)) +
+                length(CAST(COALESCE(clashfinder_id, '') AS BLOB)) +
+                length(CAST(public_key AS BLOB)) + length(CAST(updated_at AS BLOB)) + 32
+             ), 0)
+             FROM cached_festivals",
+            [],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        )?;
+        let (stage_count, stage_bytes) = conn.query_row(
+            "SELECT COUNT(*), COALESCE(SUM(
+                length(CAST(festival_id AS BLOB)) + length(CAST(id AS BLOB)) +
+                length(CAST(name AS BLOB)) + length(CAST(short AS BLOB)) +
+                length(CAST(color AS BLOB)) + 8
+             ), 0)
+             FROM cached_festival_stages",
+            [],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        )?;
+        let has_oversized_festival: bool = conn.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM cached_festivals WHERE
+                    length(CAST(id AS BLOB)) > ?1 OR length(CAST(name AS BLOB)) > ?1 OR
+                    length(CAST(location AS BLOB)) > ?1 OR length(CAST(city AS BLOB)) > ?1 OR
+                    length(CAST(country AS BLOB)) > ?1 OR
+                    length(CAST(start_date AS BLOB)) > ?1 OR
+                    length(CAST(end_date AS BLOB)) > ?1 OR
+                    length(CAST(status AS BLOB)) > ?1 OR
+                    length(CAST(COALESCE(clashfinder_id, '') AS BLOB)) > ?1 OR
+                    length(CAST(public_key AS BLOB)) > ?1 OR
+                    length(CAST(updated_at AS BLOB)) > ?1 OR
+                    length(CAST(genres_json AS BLOB)) > 131072
+            )",
+            params![MAX_CACHE_TEXT_BYTES as i64],
+            |row| row.get(0),
+        )?;
+        let has_oversized_stage: bool = conn.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM cached_festival_stages WHERE
+                    length(CAST(festival_id AS BLOB)) > ?1 OR
+                    length(CAST(id AS BLOB)) > ?1 OR length(CAST(name AS BLOB)) > ?1 OR
+                    length(CAST(short AS BLOB)) > ?1 OR length(CAST(color AS BLOB)) > ?1
+            )",
+            params![MAX_CACHE_TEXT_BYTES as i64],
+            |row| row.get(0),
+        )?;
+        let has_too_many_stages_for_festival: bool = conn.query_row(
+            "SELECT EXISTS(
+                SELECT festival_id FROM cached_festival_stages
+                GROUP BY festival_id HAVING COUNT(*) > ?1 LIMIT 1
+            )",
+            params![MAX_CACHED_STAGES_PER_FESTIVAL as i64],
+            |row| row.get(0),
+        )?;
+        if festival_count > MAX_CACHED_FESTIVALS as i64
+            || stage_count > MAX_CACHED_STAGES as i64
+            || meta_bytes
+                .saturating_add(token_bytes)
+                .saturating_add(festival_bytes)
+                .saturating_add(stage_bytes)
+                > MAX_CACHED_REGISTRY_STORAGE_BYTES
+            || has_oversized_festival
+            || has_oversized_stage
+            || has_too_many_stages_for_festival
+        {
+            bail!("cached festival registry exceeds local safety bounds");
+        }
+        let (fetched_at, request_token) = conn.query_row(
+            "SELECT fetched_at, request_token
+             FROM festival_registry_meta WHERE singleton = 1",
+            [],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )?;
+
+        let mut festival_stmt = conn.prepare(
+            "SELECT id, name, year, location, city, country, start_date, end_date,
+                    genres_json, status, clashfinder_id, public_key, updated_at, lat, lon
+             FROM cached_festivals
+             ORDER BY start_date, id",
+        )?;
+        let rows = festival_stmt
+            .query_map([], |row| {
+                Ok(CachedFestivalRow {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    year: row.get(2)?,
+                    location: row.get(3)?,
+                    city: row.get(4)?,
+                    country: row.get(5)?,
+                    start_date: row.get(6)?,
+                    end_date: row.get(7)?,
+                    genres_json: row.get(8)?,
+                    status: row.get(9)?,
+                    clashfinder_id: row.get(10)?,
+                    public_key: row.get(11)?,
+                    updated_at: row.get(12)?,
+                    lat: row.get(13)?,
+                    lon: row.get(14)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(festival_stmt);
+
+        let mut festivals = Vec::with_capacity(rows.len());
+        for row in rows {
+            let genres = serde_json::from_str(&row.genres_json)
+                .map_err(|error| anyhow::anyhow!("invalid cached festival genres: {error}"))?;
+            let mut stage_stmt = conn.prepare(
+                "SELECT id, name, short, color, sort_order
+                 FROM cached_festival_stages
+                 WHERE festival_id = ?1
+                 ORDER BY sort_order, id",
+            )?;
+            let stages = stage_stmt
+                .query_map(params![row.id], |stage_row| {
+                    Ok(Stage {
+                        id: stage_row.get(0)?,
+                        name: stage_row.get(1)?,
+                        short: stage_row.get(2)?,
+                        color: stage_row.get(3)?,
+                        order: stage_row.get(4)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            festivals.push(Festival {
+                id: row.id,
+                name: row.name,
+                year: row.year,
+                location: row.location,
+                city: row.city,
+                country: row.country,
+                start_date: row.start_date,
+                end_date: row.end_date,
+                stages,
+                genres,
+                status: parse_festival_status(&row.status)?,
+                clashfinder_id: row.clashfinder_id,
+                public_key: row.public_key,
+                updated_at: row.updated_at,
+                lat: row.lat,
+                lon: row.lon,
+            });
+        }
+        validate_festival_registry(&festivals, &fetched_at, &request_token)?;
+        Ok(Some(FestivalRegistryCache {
+            festivals,
+            fetched_at,
+            request_token,
+        }))
     }
 
     // --- chat messages ---
@@ -1023,6 +1422,228 @@ mod tests {
 
     fn test_db() -> Database {
         Database::new_in_memory().expect("in-memory db")
+    }
+
+    fn cached_festival(id: &str, start_date: &str) -> Festival {
+        Festival {
+            id: id.to_string(),
+            name: format!("Festival {id}"),
+            year: 2027,
+            location: "Test Park".to_string(),
+            city: "Bristol".to_string(),
+            country: "GB".to_string(),
+            start_date: start_date.to_string(),
+            end_date: "2027-06-13".to_string(),
+            stages: vec![Stage {
+                id: "main".to_string(),
+                name: "Main Stage".to_string(),
+                short: "MAIN".to_string(),
+                color: "#ff2d8f".to_string(),
+                order: 0,
+            }],
+            genres: vec!["electronic".to_string()],
+            status: FestivalStatus::Upcoming,
+            clashfinder_id: Some(format!("cf-{id}")),
+            public_key: String::new(),
+            updated_at: "2027-01-01T00:00:00Z".to_string(),
+            lat: Some(51.45),
+            lon: Some(-2.58),
+        }
+    }
+
+    #[test]
+    fn festival_registry_cache_roundtrips_and_replaces_authoritatively() {
+        let db = test_db();
+        assert!(db.load_festival_registry_cache().unwrap().is_none());
+
+        let first = cached_festival("first", "2027-06-12");
+        db.replace_festival_registry_cache(
+            std::slice::from_ref(&first),
+            "2027-01-01T00:00:00Z",
+            "00000000000000000001",
+        )
+        .unwrap();
+        let loaded = db.load_festival_registry_cache().unwrap().unwrap();
+        assert_eq!(loaded.festivals, vec![first]);
+        assert_eq!(loaded.fetched_at, "2027-01-01T00:00:00Z");
+        assert_eq!(loaded.request_token, "00000000000000000001");
+
+        let second = cached_festival("second", "2027-07-12");
+        db.replace_festival_registry_cache(
+            std::slice::from_ref(&second),
+            "2027-02-01T00:00:00Z",
+            "00000000000000000002",
+        )
+        .unwrap();
+        let replaced = db.load_festival_registry_cache().unwrap().unwrap();
+        assert_eq!(replaced.festivals, vec![second.clone()]);
+        assert_eq!(replaced.fetched_at, "2027-02-01T00:00:00Z");
+
+        let stale = cached_festival("stale", "2027-05-12");
+        assert!(!db
+            .replace_festival_registry_cache(
+                std::slice::from_ref(&stale),
+                "2027-03-01T00:00:00Z",
+                "00000000000000000001",
+            )
+            .unwrap());
+        assert!(!db
+            .replace_festival_registry_cache(
+                std::slice::from_ref(&stale),
+                "2027-03-01T00:00:00Z",
+                "00000000000000000002",
+            )
+            .unwrap());
+        let preserved = db.load_festival_registry_cache().unwrap().unwrap();
+        assert_eq!(preserved.festivals, vec![second]);
+        assert_eq!(preserved.fetched_at, "2027-02-01T00:00:00Z");
+    }
+
+    #[test]
+    fn festival_registry_replacement_rolls_back_on_invalid_snapshot() {
+        let db = test_db();
+        let original = cached_festival("original", "2027-06-12");
+        db.replace_festival_registry_cache(
+            std::slice::from_ref(&original),
+            "2027-01-01T00:00:00Z",
+            "00000000000000000001",
+        )
+        .unwrap();
+
+        let duplicate = cached_festival("duplicate", "2027-07-12");
+        assert!(db
+            .replace_festival_registry_cache(
+                &[duplicate.clone(), duplicate],
+                "2027-02-01T00:00:00Z",
+                "00000000000000000002",
+            )
+            .is_err());
+        let loaded = db.load_festival_registry_cache().unwrap().unwrap();
+        assert_eq!(loaded.festivals, vec![original]);
+        assert_eq!(loaded.fetched_at, "2027-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn festival_registry_cache_survives_database_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("registry.db");
+        let festival = cached_festival("restart", "2027-06-12");
+        {
+            let db = Database::new(&path).unwrap();
+            db.replace_festival_registry_cache(
+                std::slice::from_ref(&festival),
+                "2027-01-01T00:00:00Z",
+                "00000000000000000001",
+            )
+            .unwrap();
+        }
+        let reopened = Database::new(&path).unwrap();
+        let loaded = reopened.load_festival_registry_cache().unwrap().unwrap();
+        assert_eq!(loaded.festivals, vec![festival]);
+    }
+
+    #[test]
+    fn festival_registry_rejects_oversized_normalized_snapshot() {
+        let db = test_db();
+        let mut festivals = Vec::new();
+        for festival_index in 0..9 {
+            let mut festival = cached_festival(
+                &format!("{festival_index}{}", "x".repeat(1023)),
+                "2027-06-12",
+            );
+            festival.name = "Festival".to_string();
+            festival.clashfinder_id = None;
+            festival.stages = (0..500)
+                .map(|stage_index| Stage {
+                    id: format!("stage-{stage_index}"),
+                    name: "Main Stage".to_string(),
+                    short: "MAIN".to_string(),
+                    color: "#ff2d8f".to_string(),
+                    order: stage_index,
+                })
+                .collect();
+            festivals.push(festival);
+        }
+
+        assert!(db
+            .replace_festival_registry_cache(
+                &festivals,
+                "2027-01-01T00:00:00Z",
+                "00000000000000000001",
+            )
+            .is_err());
+        assert!(db.load_festival_registry_cache().unwrap().is_none());
+    }
+
+    #[test]
+    fn festival_registry_repairs_terminal_request_token() {
+        let db = test_db();
+        db.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO festival_registry_meta(singleton, fetched_at, request_token)
+                 VALUES (1, ?1, ?2)",
+                params!["2027-01-01T00:00:00Z", "99999999999999999999"],
+            )
+            .unwrap();
+        assert!(db.load_festival_registry_cache().is_err());
+
+        let festival = cached_festival("recovered", "2027-06-12");
+        assert!(db
+            .replace_festival_registry_cache(
+                std::slice::from_ref(&festival),
+                "2027-01-02T00:00:00Z",
+                "00000000000000000001",
+            )
+            .unwrap());
+        assert_eq!(
+            db.load_festival_registry_cache()
+                .unwrap()
+                .unwrap()
+                .festivals,
+            vec![festival]
+        );
+
+        db.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE festival_registry_meta SET request_token = ?1 WHERE singleton = 1",
+                ["99999999999999999998"],
+            )
+            .unwrap();
+        let after_rollover = cached_festival("after-rollover", "2027-07-12");
+        assert!(db
+            .replace_festival_registry_cache(
+                std::slice::from_ref(&after_rollover),
+                "2027-01-03T00:00:00Z",
+                "00000000000000000002",
+            )
+            .unwrap());
+        assert_eq!(
+            db.load_festival_registry_cache()
+                .unwrap()
+                .unwrap()
+                .festivals,
+            vec![after_rollover]
+        );
+    }
+
+    #[test]
+    fn festival_registry_rejects_oversized_metadata_before_loading_rows() {
+        let db = test_db();
+        db.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO festival_registry_meta(singleton, fetched_at, request_token)
+                 VALUES (1, ?1, ?2)",
+                params!["x".repeat(MAX_CACHE_TEXT_BYTES + 1), "00000000000000000001"],
+            )
+            .unwrap();
+
+        assert!(db.load_festival_registry_cache().is_err());
     }
 
     #[test]

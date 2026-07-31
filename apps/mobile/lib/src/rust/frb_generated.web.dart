@@ -30,6 +30,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDocManager;
 
   CrossPlatformFinalizerArg
+  get rust_arc_decrement_strong_count_FestivalRegistryCacheStorePtr => wire
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFestivalRegistryCacheStore;
+
+  CrossPlatformFinalizerArg
   get rust_arc_decrement_strong_count_OffbeatNodePtr => wire
       .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerOffbeatNode;
 
@@ -47,6 +51,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   AppNode
   dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerAppNode(
+    dynamic raw,
+  );
+
+  @protected
+  FestivalRegistryCacheStore
+  dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFestivalRegistryCacheStore(
     dynamic raw,
   );
 
@@ -75,6 +85,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  FestivalRegistryCacheStore
+  dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFestivalRegistryCacheStore(
+    dynamic raw,
+  );
+
+  @protected
   OffbeatNode
   dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerOffbeatNode(
     dynamic raw,
@@ -95,6 +111,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   DocManager
   dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDocManager(
+    dynamic raw,
+  );
+
+  @protected
+  FestivalRegistryCacheStore
+  dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFestivalRegistryCacheStore(
     dynamic raw,
   );
 
@@ -168,6 +190,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ChatMessageDto dco_decode_box_autoadd_chat_message_dto(dynamic raw);
 
   @protected
+  FestivalRegistryCacheDto dco_decode_box_autoadd_festival_registry_cache_dto(
+    dynamic raw,
+  );
+
+  @protected
   int dco_decode_box_autoadd_i_16(dynamic raw);
 
   @protected
@@ -181,6 +208,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   double dco_decode_f_64(dynamic raw);
+
+  @protected
+  FestivalRegistryCacheDto dco_decode_festival_registry_cache_dto(dynamic raw);
 
   @protected
   GroupCreateResultDto dco_decode_group_create_result_dto(dynamic raw);
@@ -297,6 +327,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   AttestationDto? dco_decode_opt_box_autoadd_attestation_dto(dynamic raw);
 
   @protected
+  FestivalRegistryCacheDto?
+  dco_decode_opt_box_autoadd_festival_registry_cache_dto(dynamic raw);
+
+  @protected
   int? dco_decode_opt_box_autoadd_i_16(dynamic raw);
 
   @protected
@@ -356,6 +390,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  FestivalRegistryCacheStore
+  sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFestivalRegistryCacheStore(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   PeerEntry
   sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerEntry(
     SseDeserializer deserializer,
@@ -380,6 +420,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  FestivalRegistryCacheStore
+  sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFestivalRegistryCacheStore(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   OffbeatNode
   sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerOffbeatNode(
     SseDeserializer deserializer,
@@ -400,6 +446,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   DocManager
   sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDocManager(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  FestivalRegistryCacheStore
+  sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFestivalRegistryCacheStore(
     SseDeserializer deserializer,
   );
 
@@ -481,6 +533,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  FestivalRegistryCacheDto sse_decode_box_autoadd_festival_registry_cache_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   int sse_decode_box_autoadd_i_16(SseDeserializer deserializer);
 
   @protected
@@ -496,6 +553,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   double sse_decode_f_64(SseDeserializer deserializer);
+
+  @protected
+  FestivalRegistryCacheDto sse_decode_festival_registry_cache_dto(
+    SseDeserializer deserializer,
+  );
 
   @protected
   GroupCreateResultDto sse_decode_group_create_result_dto(
@@ -638,6 +700,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  FestivalRegistryCacheDto?
+  sse_decode_opt_box_autoadd_festival_registry_cache_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   int? sse_decode_opt_box_autoadd_i_16(SseDeserializer deserializer);
 
   @protected
@@ -710,6 +778,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void
+  sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFestivalRegistryCacheStore(
+    FestivalRegistryCacheStore self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
   sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerEntry(
     PeerEntry self,
     SseSerializer serializer,
@@ -738,6 +813,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void
+  sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFestivalRegistryCacheStore(
+    FestivalRegistryCacheStore self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
   sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerOffbeatNode(
     OffbeatNode self,
     SseSerializer serializer,
@@ -761,6 +843,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void
   sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDocManager(
     DocManager self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
+  sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFestivalRegistryCacheStore(
+    FestivalRegistryCacheStore self,
     SseSerializer serializer,
   );
 
@@ -858,6 +947,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_box_autoadd_festival_registry_cache_dto(
+    FestivalRegistryCacheDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_box_autoadd_i_16(int self, SseSerializer serializer);
 
   @protected
@@ -880,6 +975,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_f_64(double self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_festival_registry_cache_dto(
+    FestivalRegistryCacheDto self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_group_create_result_dto(
@@ -1062,6 +1163,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_opt_box_autoadd_festival_registry_cache_dto(
+    FestivalRegistryCacheDto? self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_opt_box_autoadd_i_16(int? self, SseSerializer serializer);
 
   @protected
@@ -1172,6 +1279,22 @@ class RustLibWire implements BaseWire {
       );
 
   void
+  rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFestivalRegistryCacheStore(
+    int ptr,
+  ) => wasmModule
+      .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFestivalRegistryCacheStore(
+        ptr,
+      );
+
+  void
+  rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFestivalRegistryCacheStore(
+    int ptr,
+  ) => wasmModule
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFestivalRegistryCacheStore(
+        ptr,
+      );
+
+  void
   rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerOffbeatNode(
     int ptr,
   ) => wasmModule
@@ -1243,6 +1366,16 @@ extension type RustLibWasmModule._(JSObject _) implements JSObject {
 
   external void
   rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDocManager(
+    int ptr,
+  );
+
+  external void
+  rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFestivalRegistryCacheStore(
+    int ptr,
+  );
+
+  external void
+  rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFestivalRegistryCacheStore(
     int ptr,
   );
 
