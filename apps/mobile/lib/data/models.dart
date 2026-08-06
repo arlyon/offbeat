@@ -149,6 +149,15 @@ class Stage {
     required this.color,
   });
 
+  String get timelineShort {
+    final words = name.trim().split(RegExp(r'\s+'));
+    final word = words.length > 1 && words.first.toLowerCase() == 'the'
+        ? words[1]
+        : words.firstOrNull ?? short;
+    final length = word.length < 3 ? word.length : 3;
+    return word.substring(0, length).toUpperCase();
+  }
+
   factory Stage.fromJson(Map<String, dynamic> j) {
     final colorStr = j['color'] as String? ?? '#FF2D8F';
     final hex = colorStr.replaceFirst('#', '');
@@ -185,6 +194,29 @@ class Day {
       month: j['month'] as String,
       year: (j['year'] as num?)?.toInt() ?? 0,
     );
+  }
+
+  DateTime? get date {
+    const months = {
+      'jan': 1,
+      'feb': 2,
+      'mar': 3,
+      'apr': 4,
+      'may': 5,
+      'jun': 6,
+      'jul': 7,
+      'aug': 8,
+      'sep': 9,
+      'oct': 10,
+      'nov': 11,
+      'dec': 12,
+    };
+    final monthKey = month.trim().toLowerCase();
+    final monthNumber = months[
+        monthKey.length >= 3 ? monthKey.substring(0, 3) : monthKey];
+    final day = int.tryParse(dayNum);
+    if (year <= 0 || monthNumber == null || day == null) return null;
+    return DateTime(year, monthNumber, day);
   }
 }
 
@@ -237,6 +269,7 @@ class FestSet {
 
   FestSet copyWith({
     bool? starred,
+    bool? live,
     int? t,
     bool? likedByGroup,
     List<ScheduleSupporter>? supporters,
@@ -250,7 +283,7 @@ class FestSet {
     dur: dur,
     genre: genre,
     starred: starred ?? this.starred,
-    live: live,
+    live: live ?? this.live,
     cancelled: cancelled,
     likedByGroup: likedByGroup ?? this.likedByGroup,
     supporters: supporters ?? this.supporters,

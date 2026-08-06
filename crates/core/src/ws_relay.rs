@@ -49,11 +49,35 @@ type WsStream =
 type GossipAcknowledgementWaiters = HashMap<[u8; 32], Vec<oneshot::Sender<()>>>;
 const RELAY_ACK_CAPABILITY_TOPIC: &str = "__offbeat/relay-ack/v1";
 
+async fn read_relay_hello(
+    stream: &mut WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
+) -> anyhow::Result<proto::RelayHello> {
+    let frame = tokio::time::timeout(std::time::Duration::from_secs(5), stream.next())
+        .await
+        .map_err(|_| anyhow::anyhow!("relay hello timed out"))?
+        .ok_or_else(|| anyhow::anyhow!("relay closed before hello"))??;
+    let tungstenite::Message::Binary(bytes) = frame else {
+        anyhow::bail!("relay hello must be a binary frame");
+    };
+    let message = proto::RelayServerMessage::decode(bytes.as_ref())?;
+    match message.msg {
+        Some(proto::relay_server_message::Msg::Hello(hello)) => Ok(hello),
+        _ => anyhow::bail!("relay did not send hello first"),
+    }
+}
+
 #[derive(Clone)]
 struct ReconnectAuth {
     public_key_hex: String,
     attestation: Attestation,
     signing_key: ed25519_dalek::SigningKey,
+}
+
+#[derive(Clone)]
+struct RelayAuthChallenge {
+    bytes: Vec<u8>,
+    festival_id: String,
+    expires_at: u64,
 }
 
 /// Cloneable handle for sending messages to the Festival DO over WebSocket.
@@ -73,6 +97,7 @@ pub struct WsRelaySink {
     /// The DO's endpoint_id, received from the Hello message on connect.
     /// This is the hex-encoded 32-byte Ed25519 public key of the Festival DO.
     do_endpoint_id: Arc<Mutex<Option<String>>>,
+    auth_challenge: Arc<Mutex<Option<RelayAuthChallenge>>>,
 }
 
 impl WsRelaySink {
@@ -93,14 +118,26 @@ impl WsRelaySink {
     }
 
     async fn send_auth(&self, auth: &ReconnectAuth) -> anyhow::Result<()> {
-        let timestamp = std::time::SystemTime::now()
+        let challenge = self
+            .auth_challenge
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("relay auth challenge is unavailable"))?;
+        let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
-            .as_secs()
-            .to_string();
-        let session_msg = format!("session:{timestamp}");
-        let sig = crate::signing::sign(&auth.signing_key, session_msg.as_bytes());
+            .as_secs();
+        if now > challenge.expires_at {
+            anyhow::bail!("relay auth challenge expired");
+        }
 
         let public_key_bytes = hex_to_bytes(&auth.public_key_hex)?;
+        let payload = crate::signing::relay_auth_signing_payload(
+            &challenge.festival_id,
+            &challenge.bytes,
+            &public_key_bytes,
+        )?;
+        let sig = crate::signing::sign(&auth.signing_key, &payload);
         let issuer_bytes = hex_to_bytes(&auth.attestation.issuer)?;
         let att_sig_bytes = hex_to_bytes(&auth.attestation.signature)?;
 
@@ -113,7 +150,8 @@ impl WsRelaySink {
                     issuer: issuer_bytes,
                 }),
                 signature: sig,
-                timestamp,
+                timestamp: String::new(),
+                challenge: challenge.bytes,
             })),
         })
         .await
@@ -161,6 +199,36 @@ impl WsRelaySink {
     /// Returns `None` if the Hello message has not yet been received.
     pub async fn do_endpoint_id(&self) -> Option<String> {
         self.do_endpoint_id.lock().await.clone()
+    }
+
+    async fn record_hello(
+        &self,
+        hello: proto::RelayHello,
+        connection_manager: &Option<Arc<ConnectionManager>>,
+    ) -> anyhow::Result<()> {
+        if hello.auth_challenge.len() != 32 || hello.festival_id.is_empty() {
+            anyhow::bail!("relay hello contains an invalid auth challenge");
+        }
+        *self.auth_challenge.lock().await = Some(RelayAuthChallenge {
+            bytes: hello.auth_challenge,
+            festival_id: hello.festival_id,
+            expires_at: hello.challenge_expires_at,
+        });
+        *self.do_endpoint_id.lock().await = Some(hello.endpoint_id.clone());
+
+        if let Some(cm) = connection_manager {
+            let now_secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            cm.on_peer_list_updated(vec![crate::types::PeerInfo {
+                endpoint_id: hello.endpoint_id,
+                relay_url: None,
+                last_seen: now_secs,
+                user_id: "festival-do".to_string(),
+            }]);
+        }
+        Ok(())
     }
 
     /// Send a gossip envelope to the DO on the given topic.
@@ -407,10 +475,11 @@ pub async fn connect(
     std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>>,
 )> {
     tracing::info!("ws_relay: connecting to {url}");
-    let (ws_stream, _response) =
+    let (mut ws_stream, _response) =
         tokio::time::timeout(std::time::Duration::from_secs(10), connect_async(url))
             .await
             .map_err(|_| anyhow::anyhow!("ws connect timed out after 10s"))??;
+    let hello = read_relay_hello(&mut ws_stream).await?;
     tracing::info!("ws_relay: connected, splitting stream");
     let (sink, stream) = ws_stream.split();
 
@@ -427,7 +496,9 @@ pub async fn connect(
         tx_bytes: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         rx_bytes: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         do_endpoint_id: Arc::new(Mutex::new(None)),
+        auth_challenge: Arc::new(Mutex::new(None)),
     };
+    relay_sink.record_hello(hello, &connection_manager).await?;
 
     let recv_sink = relay_sink.clone();
     let recv_url = url.to_string();
@@ -559,7 +630,20 @@ async fn run_receive_loop_with_reconnect(
             }
 
             match connection {
-                Ok(Ok((ws_stream, _))) => {
+                Ok(Ok((mut ws_stream, _))) => {
+                    let hello = match read_relay_hello(&mut ws_stream).await {
+                        Ok(hello) => hello,
+                        Err(error) => {
+                            tracing::warn!(%error, "ws_relay: reconnect hello failed");
+                            reconnect_attempt = reconnect_attempt.saturating_add(1);
+                            continue;
+                        }
+                    };
+                    if let Err(error) = sink.record_hello(hello, &connection_manager).await {
+                        tracing::warn!(%error, "ws_relay: reconnect challenge rejected");
+                        reconnect_attempt = reconnect_attempt.saturating_add(1);
+                        continue;
+                    }
                     let (new_sink, new_stream) = ws_stream.split();
                     sink.authenticated
                         .store(false, std::sync::atomic::Ordering::Relaxed);
@@ -701,40 +785,7 @@ async fn handle_server_message(
     };
 
     match msg_inner {
-        Msg::Hello(hello) => {
-            tracing::info!(
-                "ws_relay: received hello from DO, endpoint_id={}",
-                hello.endpoint_id,
-            );
-
-            // Store the DO's endpoint_id
-            {
-                let mut do_eid = sink.do_endpoint_id.lock().await;
-                *do_eid = Some(hello.endpoint_id.clone());
-            }
-
-            // Register the DO as a known peer in the ConnectionManager
-            if let Some(cm) = connection_manager {
-                let now_secs = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs();
-
-                let peers = vec![crate::types::PeerInfo {
-                    endpoint_id: hello.endpoint_id.clone(),
-                    relay_url: None,
-                    last_seen: now_secs,
-                    user_id: "festival-do".to_string(),
-                }];
-                cm.on_peer_list_updated(peers);
-
-                tracing::info!(
-                    "ws_relay: registered DO {} as peer in ConnectionManager",
-                    hello.endpoint_id,
-                );
-            }
-            Ok(())
-        }
+        Msg::Hello(hello) => sink.record_hello(hello, connection_manager).await,
 
         Msg::AuthOk(auth_ok) => {
             sink.authenticated
@@ -913,6 +964,8 @@ mod tests {
                 timestamp: "now".to_string(),
                 writer_seq: 0,
                 logical_time: 0,
+                writer_key: Vec::new(),
+                signature: Vec::new(),
             })),
         };
         let msg = proto::RelayClientMessage {
@@ -961,6 +1014,8 @@ mod tests {
                             timestamp: "now".to_string(),
                             writer_seq: 0,
                             logical_time: 0,
+                            writer_key: Vec::new(),
+                            signature: Vec::new(),
                         })),
                     }),
                 },
@@ -1017,6 +1072,9 @@ mod tests {
         let msg = proto::RelayServerMessage {
             msg: Some(proto::relay_server_message::Msg::Hello(proto::RelayHello {
                 endpoint_id: "a".repeat(64),
+                auth_challenge: vec![7; 32],
+                festival_id: "festival-1".to_string(),
+                challenge_expires_at: 42,
             })),
         };
         let bytes = proto::encode_server_msg(&msg);

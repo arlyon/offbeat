@@ -7,7 +7,7 @@ import 'api/dto.dart';
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `deregister_group_resources`, `ensure_group_chat_access`, `flush_pending_group_updates`, `group_id_from_chat_topic`, `group_publish_lock`, `publish_group_state_update`, `reconcile_shared_stars`, `register_group_resources`, `relay_matches_festival`, `schedule_pending_group_retry`, `send_group_state_update`, `send_pending_group_update`
+// These functions are ignored because they are not marked as `pub`: `deregister_group_resources`, `ensure_group_chat_access`, `flush_pending_group_updates`, `flush_pending_public_chats`, `group_id_from_chat_topic`, `group_publish_lock`, `publish_group_state_update`, `reconcile_shared_stars`, `register_group_resources`, `relay_matches_festival`, `schedule_pending_group_retry`, `send_group_state_update`, `send_pending_group_update`
 
 Future<List<MeshtasticDebugDeviceDto>> meshtasticDebugScan({
   required int scanMs,
@@ -96,6 +96,9 @@ abstract class AppNode implements RustOpaqueInterface {
     required int offset,
   });
 
+  /// Return the locally owned app-wide check-in for a festival.
+  Future<FestivalCheckInDto?> getFestivalCheckIn({required String festivalId});
+
   /// Load the cached registry, if a successful server fetch has been persisted.
   Future<FestivalRegistryCacheDto?> getFestivalRegistryCache();
 
@@ -171,6 +174,9 @@ abstract class AppNode implements RustOpaqueInterface {
   /// Useful for breaking sync deadlocks.
   Future<void> nudgeGossip();
 
+  /// Pin the MainDO key used to verify portable public-chat attestations.
+  Future<void> pinMainDoPublicKey({required String publicKeyHex});
+
   /// Broadcast a chat message on the given gossip topic.
   Future<void> publishChat({
     required String topic,
@@ -212,6 +218,13 @@ abstract class AppNode implements RustOpaqueInterface {
 
   /// Persist a display name for the local user.
   Future<void> setDisplayName({required String name});
+
+  /// Persist one festival check-in and fan it out to every joined group.
+  Future<FestivalCheckInDto> setFestivalCheckIn({
+    required String festivalId,
+    required String kind,
+    String? value,
+  });
 
   /// Cache a festival's Ed25519 public key (hex-encoded, 64 chars).
   Future<void> setFestivalPublicKey({
@@ -304,7 +317,8 @@ abstract class AppNode implements RustOpaqueInterface {
 abstract class FestivalRegistryCacheStore implements RustOpaqueInterface {
   Future<FestivalRegistryCacheDto?> load();
 
-  /// Open only the local SQLite cache, without constructing any transports.
+  /// Validate and retain the SQLite path without constructing any transports
+  /// or keeping a connection open across database recreation (for logout).
   static Future<FestivalRegistryCacheStore> open({required String dbPath}) =>
       RustLib.instance.api.crateApiFestivalRegistryCacheStoreOpen(
         dbPath: dbPath,

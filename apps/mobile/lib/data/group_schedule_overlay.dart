@@ -129,7 +129,9 @@ class GroupScheduleOverlayController extends ChangeNotifier {
 
     final groupIds = groups.map((group) => group.id).toSet();
     for (final removedId
-        in _states.keys.where((groupId) => !groupIds.contains(groupId)).toList()) {
+        in _states.keys
+            .where((groupId) => !groupIds.contains(groupId))
+            .toList()) {
       _subscriptionTokens.remove(removedId);
       await _subscriptions.remove(removedId)?.cancel();
       _states.remove(removedId);

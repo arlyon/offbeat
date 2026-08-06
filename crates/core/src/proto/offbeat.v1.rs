@@ -32,10 +32,16 @@ pub struct ChatMessage {
     /// per-topic Lamport clock; authoritative order
     #[prost(uint64, tag = "9")]
     pub logical_time: u64,
+    /// raw 32-byte Ed25519 public key
+    #[prost(bytes = "vec", tag = "10")]
+    pub writer_key: ::prost::alloc::vec::Vec<u8>,
+    /// Ed25519 signature over canonical public-chat bytes
+    #[prost(bytes = "vec", tag = "11")]
+    pub signature: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GossipEnvelope {
-    #[prost(oneof = "gossip_envelope::Payload", tags = "1, 2, 3, 4, 5, 6, 7")]
+    #[prost(oneof = "gossip_envelope::Payload", tags = "1, 2, 3, 4, 5, 6, 7, 8")]
     pub payload: ::core::option::Option<gossip_envelope::Payload>,
 }
 /// Nested message and enum types in `GossipEnvelope`.
@@ -56,7 +62,20 @@ pub mod gossip_envelope {
         SyncResponse(super::SyncResponse),
         #[prost(message, tag = "7")]
         SyncUpdate(super::SyncUpdate),
+        #[prost(message, tag = "8")]
+        ChatAuthorProof(super::ChatAuthorProof),
     }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ChatAuthorProof {
+    #[prost(bytes = "vec", tag = "1")]
+    pub writer_key: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, tag = "2")]
+    pub attestation_message: ::prost::alloc::string::String,
+    #[prost(bytes = "vec", tag = "3")]
+    pub attestation_signature: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "4")]
+    pub issuer: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FestivalUpdate {
@@ -202,8 +221,11 @@ pub struct AuthRequest {
     pub attestation: ::core::option::Option<Attestation>,
     #[prost(bytes = "vec", tag = "3")]
     pub signature: ::prost::alloc::vec::Vec<u8>,
+    /// deprecated legacy field
     #[prost(string, tag = "4")]
     pub timestamp: ::prost::alloc::string::String,
+    #[prost(bytes = "vec", tag = "5")]
+    pub challenge: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Attestation {
@@ -298,6 +320,13 @@ pub struct RelayHello {
     /// hex-encoded 32-byte Ed25519 public key
     #[prost(string, tag = "1")]
     pub endpoint_id: ::prost::alloc::string::String,
+    /// single-use random challenge for this socket
+    #[prost(bytes = "vec", tag = "2")]
+    pub auth_challenge: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, tag = "3")]
+    pub festival_id: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "4")]
+    pub challenge_expires_at: u64,
 }
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct AuthOk {

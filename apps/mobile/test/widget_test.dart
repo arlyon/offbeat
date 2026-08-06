@@ -6,6 +6,9 @@ import 'package:offbeat_mobile/data/group_schedule_overlay.dart';
 import 'package:offbeat_mobile/data/models.dart';
 import 'package:offbeat_mobile/data/serial_keyed_queue.dart';
 import 'package:offbeat_mobile/screens/festival_detail/festival_detail_screen.dart';
+import 'package:offbeat_mobile/screens/festival_detail/lineup_search_screen.dart';
+import 'package:offbeat_mobile/screens/festival_detail/set_details_sheet.dart';
+import 'package:offbeat_mobile/screens/social/group_members_sheet.dart';
 import 'package:offbeat_mobile/screens/social/member_sheet.dart';
 import 'package:offbeat_mobile/src/rust/api/dto.dart';
 import 'package:offbeat_mobile/widgets/co_liker_pins.dart';
@@ -16,13 +19,15 @@ FestSet set({
   required int start,
   bool starred = false,
   String day = 'fri',
+  String stage = 'main',
   bool cancelled = false,
   bool likedByGroup = false,
   List<ScheduleSupporter> supporters = const [],
+  List<String> clashes = const [],
 }) => FestSet(
   id: id,
   day: day,
-  stage: 'main',
+  stage: stage,
   artist: artist,
   t: start,
   dur: 60,
@@ -31,6 +36,7 @@ FestSet set({
   cancelled: cancelled,
   likedByGroup: likedByGroup,
   supporters: supporters,
+  clashes: clashes,
 );
 
 void main() {
@@ -101,55 +107,45 @@ void main() {
     expect(events, ['first-start', 'other', 'first-end', 'second']);
   });
 
-  testWidgets('My Schedule shows only liked sets', (tester) async {
+  testWidgets('Mine filter shows only liked sets', (tester) async {
     final sets = withScheduleClashes([
       set(id: 'liked', artist: 'LIKED ARTIST', start: 60, starred: true),
       set(id: 'other', artist: 'OTHER ARTIST', start: 180),
     ]);
-    final festival = Festival.fromJson({
-      'id': 'fest',
-      'name': 'Test Fest',
-      'year': 2026,
-      'location': 'Field',
-      'city': 'City',
-      'country': 'GB',
-      'genres': <String>[],
-      'stages': <Object>[],
-    });
 
     await tester.pumpWidget(
       MaterialApp(
-        home: Scaffold(
-          body: FestivalDetailScreen(
-            festival: festival,
-            now: DateTime(2026),
-            stages: const [
-              Stage(id: 'main', name: 'Main', short: 'M', color: 0xFFFF2D8F),
-            ],
-            days: const [
-              Day(
-                id: 'fri',
-                label: 'Friday',
-                dayNum: '1',
-                month: 'JUL',
-                year: 2026,
-              ),
-            ],
-            sets: sets,
-          ),
+        home: LineupSearchScreen(
+          sets: sets,
+          stages: const [
+            Stage(id: 'main', name: 'Main', short: 'M', color: 0xFFFF2D8F),
+          ],
+          days: const [
+            Day(
+              id: 'fri',
+              label: 'Friday',
+              dayNum: '1',
+              month: 'JUL',
+              year: 2026,
+            ),
+          ],
+          onSetTap: (_) {},
         ),
       ),
     );
 
+    await tester.tap(find.bySemanticsLabel('Open lineup filters'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('MINE'));
-    await tester.tap(find.text('DAYS'));
+    await tester.pump();
+    await tester.tap(find.textContaining('SHOW ').last);
     await tester.pumpAndSettle();
 
     expect(find.text('LIKED ARTIST'), findsOneWidget);
     expect(find.text('OTHER ARTIST'), findsNothing);
   });
 
-  testWidgets('Ours shows group picks and reveals co-likers', (tester) async {
+  testWidgets('Ours filter includes local and group picks', (tester) async {
     const luke = ScheduleSupporter(userId: 'luke', displayName: 'Luke Smith');
     final sets = withScheduleClashes([
       set(id: 'mine', artist: 'MY PICK', start: 60, starred: true),
@@ -162,54 +158,183 @@ void main() {
       ),
       set(id: 'other', artist: 'OTHER SET', start: 300),
     ]);
-    final festival = Festival.fromJson({
-      'id': 'fest',
-      'name': 'Test Fest',
-      'year': 2026,
-      'location': 'Field',
-      'city': 'City',
-      'country': 'GB',
-      'genres': <String>[],
-      'stages': <Object>[],
-    });
 
     await tester.pumpWidget(
       MaterialApp(
-        home: Scaffold(
-          body: FestivalDetailScreen(
-            festival: festival,
-            now: DateTime(2026),
-            stages: const [
-              Stage(id: 'main', name: 'Main', short: 'M', color: 0xFFFF2D8F),
-            ],
-            days: const [
-              Day(
-                id: 'fri',
-                label: 'Friday',
-                dayNum: '1',
-                month: 'JUL',
-                year: 2026,
-              ),
-            ],
-            sets: sets,
-          ),
+        home: LineupSearchScreen(
+          sets: sets,
+          stages: const [
+            Stage(id: 'main', name: 'Main', short: 'M', color: 0xFFFF2D8F),
+          ],
+          days: const [
+            Day(
+              id: 'fri',
+              label: 'Friday',
+              dayNum: '1',
+              month: 'JUL',
+              year: 2026,
+            ),
+          ],
+          onSetTap: (_) {},
         ),
       ),
     );
 
+    await tester.tap(find.bySemanticsLabel('Open lineup filters'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('OURS'));
-    await tester.tap(find.text('DAYS'));
+    await tester.pump();
+    await tester.tap(find.textContaining('SHOW ').last);
     await tester.pumpAndSettle();
 
     expect(find.text('MY PICK'), findsOneWidget);
     expect(find.text('GROUP PICK'), findsOneWidget);
     expect(find.text('OTHER SET'), findsNothing);
-    expect(find.text('LUKE'), findsOneWidget);
+  });
 
-    await tester.tap(find.text('LUKE'));
+  testWidgets('set drawer shows offline artist path and connections', (
+    tester,
+  ) async {
+    const luke = ScheduleSupporter(userId: 'luke', displayName: 'Luke Smith');
+    final first = set(
+      id: 'artist-fri',
+      artist: 'The Artist',
+      start: 60,
+      starred: true,
+      supporters: const [luke],
+      clashes: const ['clash'],
+    );
+    final second = set(
+      id: 'artist-sat',
+      artist: '  the   artist ',
+      start: 180,
+      day: 'sat',
+      stage: 'quarry',
+      supporters: const [luke],
+    );
+    final clash = set(id: 'clash', artist: 'OTHER ACT', start: 90);
+    final allSets = [first, second, clash];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => TextButton(
+              onPressed: () => showSetDetailsSheet(
+                context,
+                set: first,
+                stages: const [
+                  Stage(
+                    id: 'main',
+                    name: 'Main',
+                    short: 'M',
+                    color: 0xFFFF2D8F,
+                  ),
+                  Stage(
+                    id: 'quarry',
+                    name: 'The Quarry',
+                    short: 'Q',
+                    color: 0xFF4CC9F0,
+                  ),
+                ],
+                days: const [
+                  Day(
+                    id: 'fri',
+                    label: 'Friday',
+                    dayNum: '1',
+                    month: 'JUL',
+                    year: 2026,
+                  ),
+                  Day(
+                    id: 'sat',
+                    label: 'Saturday',
+                    dayNum: '2',
+                    month: 'JUL',
+                    year: 2026,
+                  ),
+                ],
+                allSets: allSets,
+              ),
+              child: const Text('OPEN'),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('OPEN'));
     await tester.pumpAndSettle();
-    expect(find.text('1 ALSO SAVED'), findsOneWidget);
+
+    expect(find.text('ARTIST PATH'), findsOneWidget);
+    expect(find.text('2 APPEARANCES · 120 MIN'), findsOneWidget);
+    expect(find.byIcon(Icons.close), findsNothing);
+    expect(find.text('LIKED'), findsNothing);
+    expect(find.text('CLASH'), findsNothing);
+
+    await tester.scrollUntilVisible(
+      find.text('EXPAND CONNECTIONS'),
+      160,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await tester.tap(find.text('EXPAND CONNECTIONS'));
+    await tester.pumpAndSettle();
+    expect(find.text('FRIEND OVERLAP'), findsOneWidget);
+    expect(find.text('CLASH LINKS'), findsOneWidget);
+  });
+
+  testWidgets('group members drawer filters presence and reveals all', (
+    tester,
+  ) async {
+    const members = [
+      GroupMemberDto(
+        userId: 'me',
+        displayName: 'Me Person',
+        status: 'active',
+        locationKind: 'stage',
+        stageId: 'main',
+        starredSetIds: ['a'],
+      ),
+      GroupMemberDto(
+        userId: 'luke',
+        displayName: 'Luke Smith',
+        status: 'offline',
+        locationKind: 'none',
+        starredSetIds: [],
+      ),
+      GroupMemberDto(
+        userId: 'ali',
+        displayName: 'Ali Jones',
+        status: 'active',
+        locationKind: 'stage',
+        stageId: 'quarry',
+        starredSetIds: ['b', 'c'],
+      ),
+    ];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: GroupMembersSheet(
+            members: members,
+            stages: const {'main': 'Main Stage', 'quarry': 'The Quarry'},
+            userId: 'me',
+            initialStageId: 'main',
+            onMemberTap: (_) {},
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('YOU'), findsOneWidget);
+    expect(find.text('Luke Smith'), findsNothing);
+    expect(find.text('Ali Jones'), findsNothing);
+    expect(find.text('FILTERED · MAIN STAGE'), findsOneWidget);
+
+    await tester.tap(find.text('SHOW ALL ×'));
+    await tester.pumpAndSettle();
     expect(find.text('Luke Smith'), findsOneWidget);
+    expect(find.text('Ali Jones'), findsOneWidget);
   });
 
   testWidgets(
@@ -251,6 +376,7 @@ void main() {
         userId: 'luke',
         displayName: 'Luke Smith',
         status: 'active',
+        locationKind: 'none',
         starredSetIds: ['known', 'missing'],
       );
 
@@ -308,6 +434,7 @@ void main() {
           body: FestivalDetailScreen(
             festival: festival,
             now: DateTime(2026),
+            initialView: FestDetailView.clashRadar,
             stages: const [
               Stage(id: 'main', name: 'Main', short: 'M', color: 0xFFFF2D8F),
             ],
@@ -326,9 +453,9 @@ void main() {
       ),
     );
 
-    await tester.tap(find.text('CLASHES'));
     await tester.pumpAndSettle();
 
+    expect(find.text('LIKED'), findsOneWidget);
     expect(find.text('1 conflict'), findsOneWidget);
     expect(find.text('★ ARTIST A'), findsOneWidget);
     expect(find.text('★ ARTIST B'), findsOneWidget);

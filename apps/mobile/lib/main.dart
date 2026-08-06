@@ -11,12 +11,17 @@ import 'theme/app_theme.dart';
 import 'theme/tokens.dart';
 import 'shell/bottom_tab_bar.dart';
 import 'shell/top_nav.dart';
+import 'data/check_in_controller.dart';
 import 'data/group_schedule_overlay.dart';
 import 'data/models.dart';
 import 'data/serial_keyed_queue.dart';
 import 'screens/festival_list/festival_list_screen.dart';
 import 'screens/festival_detail/festival_detail_screen.dart';
 import 'screens/festival_detail/admin_panel.dart';
+import 'screens/festival_detail/lineup_search_screen.dart';
+import 'screens/festival_detail/now_strip_view.dart';
+import 'screens/festival_detail/set_details_sheet.dart';
+import 'screens/chat/public_chat_screen.dart';
 import 'screens/you/registration_screen.dart';
 import 'screens/you/you_screen.dart';
 import 'screens/social/social_screen.dart';
@@ -73,6 +78,8 @@ class _OffbeatShellState extends State<_OffbeatShell>
   Festival? _selectedFestival;
   AppTab _activeTab = AppTab.schedule;
   final _festivalContentKey = GlobalKey();
+  final _socialActionsController = SocialActionsController();
+  final _scheduleViewsByFestival = <String, FestDetailView>{};
 
   // Navigation animation
   late final AnimationController _navController;
@@ -112,6 +119,7 @@ class _OffbeatShellState extends State<_OffbeatShell>
   final SerialKeyedQueue _starToggleQueue = SerialKeyedQueue();
   GroupScheduleOverlayController? _groupScheduleController;
   GroupScheduleOverlay _groupScheduleOverlay = GroupScheduleOverlay.empty;
+  CheckInController? _checkInController;
 
   // Weather state
   StreamSubscription<WeatherForecastDto?>? _weatherSub;
@@ -180,6 +188,7 @@ class _OffbeatShellState extends State<_OffbeatShell>
     _lineupSub?.cancel();
     _weatherSub?.cancel();
     _groupScheduleController?.dispose();
+    _checkInController?.dispose();
     _transportSub?.cancel();
     _relayRetryTimer?.cancel();
     _deepLinkSub?.cancel();
@@ -500,7 +509,12 @@ class _OffbeatShellState extends State<_OffbeatShell>
       },
     );
 
-    // Store attestation in Rust DB
+    // Pin the server trust root before accepting its portable attestation.
+    final rootKey = mainDoPublicKeyHex.isNotEmpty
+        ? mainDoPublicKeyHex
+        : await _authService.fetchServerPublicKey();
+    await node.pinMainDoPublicKey(publicKeyHex: rootKey);
+
     final att = result.attestation;
     await node.storeAttestation(
       message: att['message'] as String,
@@ -593,6 +607,9 @@ class _OffbeatShellState extends State<_OffbeatShell>
       _groupScheduleOverlay = GroupScheduleOverlay.empty;
     });
     _startGroupScheduleOverlay(node, fest.id);
+    _checkInController?.dispose();
+    _checkInController = CheckInController(node: node, festivalId: fest.id);
+    unawaited(_checkInController!.load());
 
     // Load persisted stars from Rust SQLite
     try {
@@ -1005,7 +1022,18 @@ class _OffbeatShellState extends State<_OffbeatShell>
                               child: Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  NavIconButton(icon: Icons.search),
+                                  if (_activeTab == AppTab.social &&
+                                      _authState != 'unregistered')
+                                    NavIconButton(
+                                      icon: Icons.more_vert,
+                                      onTap: _socialActionsController
+                                          .openGroupActions,
+                                    )
+                                  else if (_activeTab != AppTab.social)
+                                    NavIconButton(
+                                      icon: Icons.search,
+                                      onTap: _openLineupSearch,
+                                    ),
                                   if (_isAdmin)
                                     NavIconButton(
                                       icon: Icons.shield,
@@ -1052,11 +1080,30 @@ class _OffbeatShellState extends State<_OffbeatShell>
                 },
                 child: OffbeatTabBar(
                   activeTab: _activeTab,
+                  currentSetCount: _currentSetCount,
                   onTabChanged: (tab) => setState(() => _activeTab = tab),
                 ),
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+
+  void _openPublicChat({required String channelId, required String title}) {
+    final node = _node;
+    final festival = _selectedFestival;
+    if (node == null || festival == null) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => PublicChatScreen(
+          node: node,
+          festivalId: festival.id,
+          channelId: channelId,
+          title: title,
+          userId: _userId,
+          checkInController: _checkInController,
         ),
       ),
     );
@@ -1143,11 +1190,12 @@ class _OffbeatShellState extends State<_OffbeatShell>
       case AppTab.schedule:
         return _buildScheduleTab();
       case AppTab.now:
-        return _NowTabContent(festivalName: _selectedFestival!.name);
+        return _buildNowTab();
       case AppTab.social:
         if (_authState == 'unregistered') {
           return RegistrationScreen(onRegister: _handleRegister);
         }
+        final schedule = _lineupModels();
         return SocialScreen(
           node: _node!,
           festivalId: _selectedFestival!.id,
@@ -1159,6 +1207,10 @@ class _OffbeatShellState extends State<_OffbeatShell>
           userId: _userId,
           displayName: _displayName,
           lineup: _lineup,
+          actionsController: _socialActionsController,
+          checkInController: _checkInController,
+          scheduleStages: schedule?.stages ?? const [],
+          scheduleSets: schedule?.sets ?? const [],
           onGroupsChanged: () => _groupScheduleController?.refresh(),
         );
     }
@@ -1212,114 +1264,163 @@ class _OffbeatShellState extends State<_OffbeatShell>
     });
   }
 
-  Widget _buildScheduleTab() {
+  ({List<Stage> stages, List<Day> days, List<FestSet> sets})? _lineupModels() {
     final lineup = _lineup;
+    if (lineup == null) return null;
 
-    List<Stage>? stages;
-    List<Day>? days;
-    List<FestSet>? sets;
+    final stages = lineup.stages
+        .map(
+          (stage) => Stage.fromJson({
+            'id': stage.id,
+            'name': stage.name,
+            'short': stage.short,
+            'color': stage.color,
+            'order': stage.order,
+          }),
+        )
+        .toList();
+    final days = lineup.days
+        .map(
+          (day) => Day.fromJson({
+            'id': day.id,
+            'label': day.label,
+            'num': day.num,
+            'month': day.month,
+            'year': day.year,
+          }),
+        )
+        .toList();
+    final dayById = {for (final day in days) day.id: day};
+    final today = DateTime(_now.year, _now.month, _now.day);
+    final currentMinute = _now.hour * 60 + _now.minute;
+    final builtSets = lineup.sets.map((lineupSet) {
+      final set = FestSet.fromJson({
+        'id': lineupSet.id,
+        'day': lineupSet.day,
+        'stage': lineupSet.stage,
+        'artist': lineupSet.artist,
+        'startMin': lineupSet.startMin,
+        'durationMin': lineupSet.durationMin,
+        'genre': lineupSet.genre,
+        'cancelled': lineupSet.cancelled,
+      });
+      final day = dayById[lineupSet.day];
+      final live =
+          day?.date == today &&
+          !lineupSet.cancelled &&
+          lineupSet.startMin <= currentMinute &&
+          lineupSet.startMin + lineupSet.durationMin > currentMinute;
+      return set.copyWith(
+        live: live,
+        starred: _starredSetIds.contains(lineupSet.id),
+        likedByGroup: _groupScheduleOverlay.groupLikedSetIds.contains(
+          lineupSet.id,
+        ),
+        supporters: _groupScheduleOverlay.supportersBySetId[lineupSet.id],
+      );
+    }).toList();
 
-    if (lineup != null) {
-      stages = lineup.stages
-          .map(
-            (s) => Stage.fromJson({
-              'id': s.id,
-              'name': s.name,
-              'short': s.short,
-              'color': s.color,
-              'order': s.order,
-            }),
-          )
-          .toList();
+    return (stages: stages, days: days, sets: withScheduleClashes(builtSets));
+  }
 
-      days = lineup.days
-          .map(
-            (d) => Day.fromJson({
-              'id': d.id,
-              'label': d.label,
-              'num': d.num,
-              'month': d.month,
-              'year': d.year,
-            }),
-          )
-          .toList();
+  int get _currentSetCount {
+    final data = _lineupModels();
+    if (data == null) return 0;
+    final today = DateTime(_now.year, _now.month, _now.day);
+    final day = data.days.where((day) => day.date == today).firstOrNull;
+    if (day == null) return 0;
+    final minute = _now.hour * 60 + _now.minute;
+    return data.sets.where((set) {
+      return set.day == day.id &&
+          !set.cancelled &&
+          set.t <= minute &&
+          set.t + set.dur > minute;
+    }).length;
+  }
 
-      final builtSets = lineup.sets.map((s) {
-        final festSet = FestSet.fromJson({
-          'id': s.id,
-          'day': s.day,
-          'stage': s.stage,
-          'artist': s.artist,
-          'startMin': s.startMin,
-          'durationMin': s.durationMin,
-          'genre': s.genre,
-          'cancelled': s.cancelled,
-        });
-        return festSet.copyWith(
-          starred: _starredSetIds.contains(s.id),
-          likedByGroup: _groupScheduleOverlay.groupLikedSetIds.contains(s.id),
-          supporters: _groupScheduleOverlay.supportersBySetId[s.id],
-        );
-      }).toList();
-      sets = withScheduleClashes(builtSets);
-    }
+  void _showSetDetails(
+    FestSet set,
+    ({List<Stage> stages, List<Day> days, List<FestSet> sets}) data,
+  ) {
+    showSetDetailsSheet(
+      context,
+      set: set,
+      stages: data.stages,
+      days: data.days,
+      allSets: data.sets,
+      onStar: _handleStarToggle,
+      onStageChat: (stage) =>
+          _openPublicChat(channelId: stage.id, title: '${stage.name} chat'),
+    );
+  }
 
+  void _openLineupSearch() {
+    final data = _lineupModels();
+    if (data == null) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => LineupSearchScreen(
+          sets: data.sets,
+          stages: data.stages,
+          days: data.days,
+          onSetTap: (set) => _showSetDetails(set, data),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildScheduleTab() {
+    final data = _lineupModels();
     return FestivalDetailScreen(
       key: _festivalContentKey,
       festival: _selectedFestival!,
       now: _now,
-      stages: stages,
-      days: days,
-      sets: sets,
+      initialView:
+          _scheduleViewsByFestival[_selectedFestival!.id] ??
+          FestDetailView.gantt,
+      onViewChanged: (view) =>
+          _scheduleViewsByFestival[_selectedFestival!.id] = view,
+      stages: data?.stages,
+      days: data?.days,
+      sets: data?.sets,
       loading: _lineupLoading,
       onStar: _handleStarToggle,
+      onStageChat: (stage) =>
+          _openPublicChat(channelId: stage.id, title: '${stage.name} chat'),
     );
   }
-}
 
-class _NowTabContent extends StatelessWidget {
-  final String festivalName;
-  const _NowTabContent({required this.festivalName});
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 8,
-            height: 8,
-            decoration: const BoxDecoration(
-              shape: BoxShape.circle,
-              color: colorAccent,
-            ),
+  Widget _buildNowTab() {
+    if (_lineupLoading) {
+      return const Center(
+        child: CircularProgressIndicator(color: colorAccent, strokeWidth: 1.5),
+      );
+    }
+    final data = _lineupModels();
+    if (data == null) {
+      return const Center(
+        child: Text(
+          'NO LINEUP DATA',
+          style: TextStyle(
+            fontFamily: 'JetBrainsMono',
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            color: colorFg4,
           ),
-          const SizedBox(height: 8),
-          const Text(
-            'NOW',
-            style: TextStyle(
-              fontFamily: 'JetBrainsMono',
-              fontSize: 11,
-              fontWeight: FontWeight.w700,
-              letterSpacing: 0.1 * 11,
-              color: colorAccent,
-              height: 1,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'LIVE AT ${festivalName.toUpperCase()}',
-            style: const TextStyle(
-              fontFamily: 'JetBrainsMono',
-              fontSize: 9,
-              letterSpacing: 0.08 * 9,
-              color: colorFg4,
-              height: 1,
-            ),
-          ),
-        ],
-      ),
+        ),
+      );
+    }
+    return NowStripView(
+      sets: data.sets,
+      stages: data.stages,
+      days: data.days,
+      now: _now,
+      checkInController: _checkInController,
+      onSetTap: (set) => _showSetDetails(set, data),
+      onStageChat: (stage) =>
+          _openPublicChat(channelId: stage.id, title: '${stage.name} chat'),
+      onGlobalChat: () =>
+          _openPublicChat(channelId: 'campsite', title: 'Camp chat'),
     );
   }
 }

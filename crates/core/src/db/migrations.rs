@@ -149,6 +149,52 @@ const MIGRATIONS: &[(u32, &str)] = &[
         "ALTER TABLE festival_registry_meta
              ADD COLUMN request_token TEXT NOT NULL DEFAULT '00000000000000000000';",
     ),
+    (
+        9,
+        "ALTER TABLE chat_messages
+             ADD COLUMN writer_key BLOB NOT NULL DEFAULT X'';
+         ALTER TABLE chat_messages
+             ADD COLUMN signature BLOB NOT NULL DEFAULT X'';
+         ALTER TABLE chat_messages
+             ADD COLUMN writer_id TEXT NOT NULL DEFAULT '';
+         UPDATE chat_messages SET writer_id = user_id WHERE writer_id = '';
+         CREATE INDEX idx_chat_writer_id_seq
+             ON chat_messages(topic, writer_id, writer_seq);",
+    ),
+    (
+        10,
+        "ALTER TABLE chat_messages
+             ADD COLUMN trust_state INTEGER NOT NULL DEFAULT 0;
+         CREATE TABLE chat_author_proofs (
+             writer_id TEXT PRIMARY KEY,
+             writer_key BLOB NOT NULL,
+             attestation_message TEXT NOT NULL,
+             attestation_signature BLOB NOT NULL,
+             issuer BLOB NOT NULL,
+             issued_at INTEGER NOT NULL,
+             expires_at INTEGER NOT NULL,
+             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+         );
+         CREATE TABLE pending_public_chat (
+             message_id TEXT PRIMARY KEY,
+             topic TEXT NOT NULL,
+             message_json BLOB NOT NULL,
+             created_at TEXT NOT NULL DEFAULT (datetime('now'))
+         );
+         CREATE INDEX idx_pending_public_chat_topic
+             ON pending_public_chat(topic, created_at, message_id);",
+    ),
+    (
+        11,
+        "CREATE TABLE IF NOT EXISTS festival_checkins (
+             festival_id TEXT PRIMARY KEY,
+             kind TEXT NOT NULL CHECK(kind IN ('stage', 'campsite', 'custom')),
+             value TEXT,
+             checked_at INTEGER NOT NULL,
+             expires_at INTEGER NOT NULL,
+             revision INTEGER NOT NULL
+         );",
+    ),
 ];
 
 /// Ensure the `_migrations` table exists and apply any pending migrations.
@@ -376,6 +422,7 @@ mod tests {
         assert!(tables.contains(&"pending_group_updates".to_string()));
         assert!(tables.contains(&"chat_topic_clocks".to_string()));
         assert!(tables.contains(&"chat_writer_sequences".to_string()));
+        assert!(tables.contains(&"festival_checkins".to_string()));
         assert!(tables.contains(&"chat_sequence_conflicts".to_string()));
         assert!(tables.contains(&"cached_festivals".to_string()));
         assert!(tables.contains(&"cached_festival_stages".to_string()));

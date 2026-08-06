@@ -1,12 +1,12 @@
 mod migrations;
 
-use anyhow::{bail, Result};
-use rusqlite::{params, Connection, OptionalExtension};
+use anyhow::{Result, bail};
+use rusqlite::{Connection, OptionalExtension, params};
 use std::path::Path;
 use std::sync::Mutex;
 
 use crate::types::{
-    ChatMessage, Festival, FestivalRegistryCache, FestivalStatus, SignedUpdate, Stage,
+    ChatMessage, ChatTrust, Festival, FestivalRegistryCache, FestivalStatus, SignedUpdate, Stage,
     VerifiedFestivalUpdate,
 };
 
@@ -18,6 +18,103 @@ const MAX_CACHED_REGISTRY_STORAGE_BYTES: i64 = 4 * 1024 * 1024;
 const MAX_CACHE_TEXT_BYTES: usize = 1_024;
 const REQUEST_TOKEN_ROLLOVER_FLOOR: &str = "90000000000000000000";
 pub const EQUIVOCATED_HEAD_ID: &str = "__offbeat/equivocated__";
+const ATTESTATION_GRACE_SECONDS: i64 = 7 * 24 * 60 * 60;
+const MAX_UNVERIFIED_MESSAGES_PER_WRITER_TOPIC: i64 = 200;
+const MAX_UNVERIFIED_MESSAGES_PER_TOPIC: i64 = 2_000;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredChatAuthorProof {
+    pub writer_key: Vec<u8>,
+    pub attestation_message: String,
+    pub attestation_signature: Vec<u8>,
+    pub issuer: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PendingPublicChat {
+    pub message_id: String,
+    pub message: ChatMessage,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FestivalCheckIn {
+    pub festival_id: String,
+    pub kind: String,
+    pub value: Option<String>,
+    pub checked_at: i64,
+    pub expires_at: i64,
+    pub revision: i64,
+}
+
+struct ExistingSignedChat {
+    user_id: String,
+    display_name: String,
+    text: String,
+    topic: String,
+    stage_id: Option<String>,
+    timestamp: String,
+    writer_seq: i64,
+    logical_time: i64,
+    writer_key: Vec<u8>,
+    signature: Vec<u8>,
+}
+
+impl ExistingSignedChat {
+    fn matches(&self, message: &ChatMessage, writer_seq: i64, logical_time: i64) -> bool {
+        self.user_id == message.user_id
+            && self.display_name == message.display_name
+            && self.text == message.text
+            && self.topic == message.topic
+            && self.stage_id == message.stage_id
+            && self.timestamp == message.timestamp
+            && self.writer_seq == writer_seq
+            && self.logical_time == logical_time
+            && self.writer_key == message.writer_key
+            && self.signature == message.signature
+    }
+}
+
+fn chat_trust_value(trust: ChatTrust) -> i64 {
+    match trust {
+        ChatTrust::Unverified => 0,
+        ChatTrust::Verified => 1,
+        ChatTrust::VerifiedGrace => 2,
+    }
+}
+
+fn chat_trust_from_value(value: i64) -> rusqlite::Result<ChatTrust> {
+    match value {
+        0 => Ok(ChatTrust::Unverified),
+        1 => Ok(ChatTrust::Verified),
+        2 => Ok(ChatTrust::VerifiedGrace),
+        _ => Err(rusqlite::Error::IntegralValueOutOfRange(11, value)),
+    }
+}
+
+fn encode_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn current_unix_seconds() -> Result<i64> {
+    Ok(i64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs(),
+    )?)
+}
+
+fn parse_chat_attestation(message: &str) -> Result<(&str, i64, i64)> {
+    let parts: Vec<&str> = message.split(':').collect();
+    if parts.len() != 5 || parts[0] != "attestation" || parts[1] != "v1" {
+        anyhow::bail!("invalid chat attestation format");
+    }
+    let issued_at = parts[3].parse::<i64>()?;
+    let expires_at = parts[4].parse::<i64>()?;
+    if issued_at < 0 || expires_at <= issued_at {
+        anyhow::bail!("invalid chat attestation lifetime");
+    }
+    Ok((parts[2], issued_at, expires_at))
+}
 
 pub fn chat_head_commitment(message_id: &str, logical_time: u64) -> String {
     format!("{message_id}@{logical_time}")
@@ -194,14 +291,39 @@ fn effective_logical_time(message: &ChatMessage) -> Result<i64> {
     sqlite_counter(value, "Lamport time")
 }
 
-fn insert_chat_message(tx: &rusqlite::Transaction<'_>, message: &ChatMessage) -> Result<usize> {
+fn chat_trust_for_writer(tx: &rusqlite::Transaction<'_>, writer_id: &str) -> Result<ChatTrust> {
+    let expires_at: Option<i64> = tx
+        .query_row(
+            "SELECT expires_at FROM chat_author_proofs WHERE writer_id = ?1",
+            [writer_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(expires_at) = expires_at else {
+        return Ok(ChatTrust::Unverified);
+    };
+    let now = current_unix_seconds()?;
+    if now <= expires_at {
+        Ok(ChatTrust::Verified)
+    } else if now <= expires_at.saturating_add(ATTESTATION_GRACE_SECONDS) {
+        Ok(ChatTrust::VerifiedGrace)
+    } else {
+        Ok(ChatTrust::Unverified)
+    }
+}
+
+fn insert_chat_message(
+    tx: &rusqlite::Transaction<'_>,
+    message: &ChatMessage,
+    trust: ChatTrust,
+) -> Result<usize> {
     let writer_seq = sqlite_counter(message.writer_seq, "writer sequence")?;
     let logical_time = effective_logical_time(message)?;
     Ok(tx.execute(
         "INSERT OR IGNORE INTO chat_messages
          (id, topic, user_id, display_name, text, stage_id, timestamp,
-          writer_seq, logical_time, received_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, datetime('now'))",
+          writer_seq, logical_time, writer_key, signature, writer_id, trust_state, received_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, datetime('now'))",
         params![
             message.id,
             message.topic,
@@ -212,6 +334,10 @@ fn insert_chat_message(tx: &rusqlite::Transaction<'_>, message: &ChatMessage) ->
             message.timestamp,
             writer_seq,
             logical_time,
+            message.writer_key,
+            message.signature,
+            message.writer_id(),
+            chat_trust_value(trust),
         ],
     )?)
 }
@@ -265,6 +391,9 @@ fn chat_message_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChatMessag
         timestamp: row.get(6)?,
         writer_seq: row_counter(row, 7, "writer sequence")?,
         logical_time: row_counter(row, 8, "Lamport time")?,
+        writer_key: row.get(9)?,
+        signature: row.get(10)?,
+        trust: chat_trust_from_value(row.get(11)?)?,
     })
 }
 
@@ -476,6 +605,60 @@ impl Database {
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(groups)
+    }
+
+    pub fn save_festival_checkin(&self, checkin: &FestivalCheckIn) -> Result<()> {
+        self.conn.lock().unwrap().execute(
+            "INSERT INTO festival_checkins
+             (festival_id, kind, value, checked_at, expires_at, revision)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(festival_id) DO UPDATE SET
+                 kind = excluded.kind,
+                 value = excluded.value,
+                 checked_at = excluded.checked_at,
+                 expires_at = excluded.expires_at,
+                 revision = excluded.revision",
+            params![
+                checkin.festival_id,
+                checkin.kind,
+                checkin.value,
+                checkin.checked_at,
+                checkin.expires_at,
+                checkin.revision,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn load_festival_checkin(&self, festival_id: &str) -> Result<Option<FestivalCheckIn>> {
+        self.conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT kind, value, checked_at, expires_at, revision
+                 FROM festival_checkins WHERE festival_id = ?1",
+                params![festival_id],
+                |row| {
+                    Ok(FestivalCheckIn {
+                        festival_id: festival_id.to_string(),
+                        kind: row.get(0)?,
+                        value: row.get(1)?,
+                        checked_at: row.get(2)?,
+                        expires_at: row.get(3)?,
+                        revision: row.get(4)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    pub fn clear_festival_checkin(&self, festival_id: &str) -> Result<()> {
+        self.conn.lock().unwrap().execute(
+            "DELETE FROM festival_checkins WHERE festival_id = ?1",
+            params![festival_id],
+        )?;
+        Ok(())
     }
 
     pub fn load_group_festival_id(&self, group_id: &str) -> Result<Option<String>> {
@@ -915,22 +1098,42 @@ impl Database {
 
     /// Allocate a writer sequence and per-topic Lamport time, then persist the
     /// local message in the same transaction.
-    pub fn save_local_chat_message(&self, mut msg: ChatMessage) -> Result<ChatMessage> {
+    pub fn save_local_chat_message(&self, msg: ChatMessage) -> Result<ChatMessage> {
+        self.save_local_chat_message_with(msg, |_| Ok(()))
+    }
+
+    pub fn save_local_signed_chat_message(
+        &self,
+        mut msg: ChatMessage,
+        signing_key: &ed25519_dalek::SigningKey,
+    ) -> Result<ChatMessage> {
+        msg.writer_key = signing_key.verifying_key().to_bytes().to_vec();
+        self.save_local_chat_message_with(msg, |message| {
+            crate::signing::sign_public_chat_message(signing_key, message)
+        })
+    }
+
+    fn save_local_chat_message_with(
+        &self,
+        mut msg: ChatMessage,
+        finalize: impl FnOnce(&mut ChatMessage) -> Result<()>,
+    ) -> Result<ChatMessage> {
         if msg.writer_seq != 0 || msg.logical_time != 0 {
             anyhow::bail!("local chat position must be allocated by the database");
         }
 
+        let writer_id = msg.writer_id();
         let conn = self.conn.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
         tx.execute(
             "INSERT OR IGNORE INTO chat_writer_sequences(topic, user_id, writer_seq)
              VALUES (?1, ?2, 0)",
-            params![msg.topic, msg.user_id],
+            params![msg.topic, writer_id],
         )?;
         let current_writer_seq: i64 = tx.query_row(
             "SELECT writer_seq FROM chat_writer_sequences
              WHERE topic = ?1 AND user_id = ?2",
-            params![msg.topic, msg.user_id],
+            params![msg.topic, writer_id],
             |row| row.get(0),
         )?;
         let next_writer_seq = current_writer_seq
@@ -953,7 +1156,7 @@ impl Database {
         tx.execute(
             "UPDATE chat_writer_sequences SET writer_seq = ?3
              WHERE topic = ?1 AND user_id = ?2",
-            params![msg.topic, msg.user_id, next_writer_seq],
+            params![msg.topic, writer_id, next_writer_seq],
         )?;
         tx.execute(
             "UPDATE chat_topic_clocks SET logical_time = ?2 WHERE topic = ?1",
@@ -962,8 +1165,18 @@ impl Database {
 
         msg.writer_seq = next_writer_seq as u64;
         msg.logical_time = next_logical_time as u64;
-        if insert_chat_message(&tx, &msg)? != 1 {
+        finalize(&mut msg)?;
+        let trust = chat_trust_for_writer(&tx, &writer_id)?;
+        msg.trust = trust;
+        if insert_chat_message(&tx, &msg, trust)? != 1 {
             anyhow::bail!("chat message ID already exists");
+        }
+        if !msg.signature.is_empty() {
+            tx.execute(
+                "INSERT INTO pending_public_chat(message_id, topic, message_json)
+                 VALUES (?1, ?2, ?3)",
+                params![msg.id, msg.topic, serde_json::to_vec(&msg)?],
+            )?;
         }
         tx.commit()?;
         Ok(msg)
@@ -996,13 +1209,14 @@ impl Database {
                 anyhow::bail!("remote chat Lamport clock exceeds accepted advance");
             }
             let writer_seq = sqlite_counter(msg.writer_seq, "writer sequence")?;
-            let writer_key = (msg.topic.clone(), msg.user_id.clone());
+            let writer_id = msg.writer_id();
+            let writer_key = (msg.topic.clone(), writer_id.clone());
             let initial_writer_sequence: i64 =
                 *initial_writer_sequences.entry(writer_key).or_insert(
                     tx.query_row(
                         "SELECT writer_seq FROM chat_writer_sequences
                      WHERE topic = ?1 AND user_id = ?2",
-                        params![msg.topic, msg.user_id],
+                        params![msg.topic, writer_id],
                         |row| row.get(0),
                     )
                     .optional()?
@@ -1011,23 +1225,79 @@ impl Database {
             if writer_seq > initial_writer_sequence.saturating_add(MAX_REMOTE_LAMPORT_ADVANCE) {
                 anyhow::bail!("remote chat writer sequence exceeds accepted advance");
             }
+            if !msg.signature.is_empty() {
+                let existing: Option<ExistingSignedChat> = tx
+                    .query_row(
+                        "SELECT user_id, display_name, text, topic, stage_id, timestamp,
+                                writer_seq, logical_time, writer_key, signature
+                         FROM chat_messages WHERE id = ?1",
+                        [&msg.id],
+                        |row| {
+                            Ok(ExistingSignedChat {
+                                user_id: row.get(0)?,
+                                display_name: row.get(1)?,
+                                text: row.get(2)?,
+                                topic: row.get(3)?,
+                                stage_id: row.get(4)?,
+                                timestamp: row.get(5)?,
+                                writer_seq: row.get(6)?,
+                                logical_time: row.get(7)?,
+                                writer_key: row.get(8)?,
+                                signature: row.get(9)?,
+                            })
+                        },
+                    )
+                    .optional()?;
+                if let Some(existing) = existing
+                    && !existing.matches(msg, writer_seq, logical_time)
+                {
+                    anyhow::bail!("signed chat message ID collision");
+                }
+            }
+
             let has_conflict: bool = writer_seq > 0
                 && tx.query_row(
                     "SELECT EXISTS(
                         SELECT 1 FROM chat_messages
-                        WHERE topic = ?1 AND user_id = ?2 AND writer_seq = ?3 AND id <> ?4
+                        WHERE topic = ?1 AND writer_id = ?2 AND writer_seq = ?3 AND id <> ?4
                     )",
-                    params![msg.topic, msg.user_id, writer_seq, msg.id],
+                    params![msg.topic, writer_id, writer_seq, msg.id],
                     |row| row.get(0),
                 )?;
             if has_conflict {
                 tx.execute(
                     "INSERT OR IGNORE INTO chat_sequence_conflicts(topic, user_id, writer_seq)
                      VALUES (?1, ?2, ?3)",
-                    params![msg.topic, msg.user_id, writer_seq],
+                    params![msg.topic, writer_id, writer_seq],
                 )?;
             }
-            let inserted = insert_chat_message(&tx, msg)?;
+            let trust = chat_trust_for_writer(&tx, &writer_id)?;
+            if trust == ChatTrust::Unverified && msg.writer_key.len() == 32 {
+                let already_stored: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM chat_messages WHERE id = ?1)",
+                    [&msg.id],
+                    |row| row.get(0),
+                )?;
+                if !already_stored {
+                    let writer_count: i64 = tx.query_row(
+                        "SELECT COUNT(*) FROM chat_messages
+                         WHERE topic = ?1 AND writer_id = ?2 AND trust_state = 0",
+                        params![msg.topic, writer_id],
+                        |row| row.get(0),
+                    )?;
+                    let topic_count: i64 = tx.query_row(
+                        "SELECT COUNT(*) FROM chat_messages WHERE topic = ?1 AND trust_state = 0",
+                        [&msg.topic],
+                        |row| row.get(0),
+                    )?;
+                    if writer_count >= MAX_UNVERIFIED_MESSAGES_PER_WRITER_TOPIC
+                        || topic_count >= MAX_UNVERIFIED_MESSAGES_PER_TOPIC
+                    {
+                        anyhow::bail!("unverified public chat admission quota exceeded");
+                    }
+                }
+            }
+            let inserted = insert_chat_message(&tx, msg, trust)?;
             let reconciled = if inserted == 0 {
                 reconcile_legacy_chat_order(&tx, msg, logical_time)?
             } else {
@@ -1047,7 +1317,7 @@ impl Database {
                  VALUES (?1, ?2, ?3)
                  ON CONFLICT(topic, user_id) DO UPDATE SET
                     writer_seq = MAX(writer_seq, excluded.writer_seq)",
-                params![msg.topic, msg.user_id, writer_seq],
+                params![msg.topic, writer_id, writer_seq],
             )?;
         }
         tx.commit()?;
@@ -1058,6 +1328,10 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
         tx.execute("DELETE FROM chat_messages WHERE topic = ?1", params![topic])?;
+        tx.execute(
+            "DELETE FROM pending_public_chat WHERE topic = ?1",
+            params![topic],
+        )?;
         tx.execute(
             "DELETE FROM chat_topic_clocks WHERE topic = ?1",
             params![topic],
@@ -1082,17 +1356,69 @@ impl Database {
     ) -> Result<Vec<ChatMessage>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, user_id, display_name, text, topic, stage_id, timestamp,
-                    writer_seq, logical_time
-             FROM chat_messages
-             WHERE topic = ?1
-             ORDER BY logical_time ASC, user_id ASC, writer_seq ASC, id ASC
+            "SELECT c.id, c.user_id, c.display_name, c.text, c.topic, c.stage_id, c.timestamp,
+                    c.writer_seq, c.logical_time, c.writer_key, c.signature,
+                    CASE
+                      WHEN p.writer_id IS NULL THEN 0
+                      WHEN p.expires_at >= CAST(strftime('%s','now') AS INTEGER) THEN 1
+                      WHEN p.expires_at + 604800 >= CAST(strftime('%s','now') AS INTEGER) THEN 2
+                      ELSE 0
+                    END
+             FROM chat_messages c
+             LEFT JOIN chat_author_proofs p ON p.writer_id = c.writer_id
+             WHERE c.topic = ?1
+               AND NOT EXISTS (
+                 SELECT 1 FROM chat_sequence_conflicts x
+                 WHERE x.topic = c.topic AND x.user_id = c.writer_id
+                   AND x.writer_seq = c.writer_seq
+               )
+             ORDER BY c.logical_time ASC, c.writer_id ASC, c.writer_seq ASC, c.id ASC
              LIMIT ?2 OFFSET ?3",
         )?;
         let msgs = stmt
             .query_map(params![topic, limit, offset], chat_message_from_row)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(msgs)
+    }
+
+    /// Return a newest-first page while preserving chronological order inside
+    /// that page. Increasing offset walks backward through older history.
+    pub fn get_recent_chat_messages(
+        &self,
+        topic: &str,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<ChatMessage>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, user_id, display_name, text, topic, stage_id, timestamp,
+                    writer_seq, logical_time, writer_key, signature, trust_state
+             FROM (
+               SELECT c.id, c.user_id, c.display_name, c.text, c.topic, c.stage_id,
+                      c.timestamp, c.writer_seq, c.logical_time, c.writer_key, c.signature,
+                      CASE
+                        WHEN p.writer_id IS NULL THEN 0
+                        WHEN p.expires_at >= CAST(strftime('%s','now') AS INTEGER) THEN 1
+                        WHEN p.expires_at + 604800 >= CAST(strftime('%s','now') AS INTEGER) THEN 2
+                        ELSE 0
+                      END AS trust_state,
+                      c.writer_id
+               FROM chat_messages c
+               LEFT JOIN chat_author_proofs p ON p.writer_id = c.writer_id
+               WHERE c.topic = ?1
+                 AND NOT EXISTS (
+                   SELECT 1 FROM chat_sequence_conflicts x
+                   WHERE x.topic = c.topic AND x.user_id = c.writer_id
+                     AND x.writer_seq = c.writer_seq
+                 )
+               ORDER BY c.logical_time DESC, c.writer_id DESC, c.writer_seq DESC, c.id DESC
+               LIMIT ?2 OFFSET ?3
+             ) recent
+             ORDER BY logical_time ASC, writer_id ASC, writer_seq ASC, id ASC",
+        )?;
+        stmt.query_map(params![topic, limit, offset], chat_message_from_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
     }
 
     /// Get the next writer sequence without reserving it. Local sends must use
@@ -1119,16 +1445,16 @@ impl Database {
     pub fn get_chat_writer_heads(&self, topic: &str) -> Result<Vec<(String, u64, String)>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT c.user_id, c.writer_seq,
+            "SELECT c.writer_id, c.writer_seq,
                     CASE WHEN EXISTS(
                         SELECT 1 FROM chat_sequence_conflicts x
-                        WHERE x.topic = c.topic AND x.user_id = c.user_id
+                        WHERE x.topic = c.topic AND x.user_id = c.writer_id
                           AND x.writer_seq = c.writer_seq
                     ) THEN '__offbeat/equivocated__' ELSE MIN(c.id) END,
                     MAX(c.logical_time)
              FROM chat_messages c WHERE c.topic = ?1
-             GROUP BY c.user_id, c.writer_seq
-             ORDER BY c.user_id, c.writer_seq",
+             GROUP BY c.writer_id, c.writer_seq
+             ORDER BY c.writer_id, c.writer_seq",
         )?;
         let mut rows = stmt.query(params![topic])?;
         let mut heads = Vec::new();
@@ -1236,10 +1562,22 @@ impl Database {
         let messages = {
             let mut stmt = tx.prepare(
                 "SELECT c.id, c.user_id, c.display_name, c.text, c.topic, c.stage_id,
-                        c.timestamp, c.writer_seq, c.logical_time
+                        c.timestamp, c.writer_seq, c.logical_time, c.writer_key, c.signature,
+                        CASE
+                          WHEN p.writer_id IS NULL THEN 0
+                          WHEN p.expires_at >= CAST(strftime('%s','now') AS INTEGER) THEN 1
+                          WHEN p.expires_at + 604800 >= CAST(strftime('%s','now') AS INTEGER) THEN 2
+                          ELSE 0
+                        END
                  FROM chat_messages c
-                 LEFT JOIN requested_chat_heads h ON h.writer_id = c.user_id
+                 LEFT JOIN chat_author_proofs p ON p.writer_id = c.writer_id
+                 LEFT JOIN requested_chat_heads h ON h.writer_id = c.writer_id
                  WHERE c.topic = ?1
+                   AND (
+                     length(c.writer_key) <> 32 OR
+                     (p.writer_id IS NOT NULL AND
+                      p.expires_at + 604800 >= CAST(strftime('%s','now') AS INTEGER))
+                   )
                    AND c.logical_time <= ?4
                    AND c.writer_seq <= COALESCE(h.writer_seq, 0) + ?5
                    AND (
@@ -1264,6 +1602,186 @@ impl Database {
         };
         tx.commit()?;
         Ok(messages)
+    }
+
+    // --- public chat trust proofs ---
+
+    pub fn pin_main_do_public_key(&self, public_key: &[u8; 32]) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let existing: Option<Vec<u8>> = conn
+            .query_row(
+                "SELECT value FROM credentials WHERE key = 'main_do_public_key'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(existing) = existing {
+            if existing.as_slice() != public_key {
+                anyhow::bail!("MainDO public key does not match the pinned trust root");
+            }
+            return Ok(());
+        }
+        conn.execute(
+            "INSERT INTO credentials(key, value) VALUES ('main_do_public_key', ?1)",
+            [public_key.as_slice()],
+        )?;
+        Ok(())
+    }
+
+    pub fn load_main_do_public_key(&self) -> Result<Option<[u8; 32]>> {
+        self.get_credential("main_do_public_key")?
+            .map(|bytes| {
+                bytes
+                    .try_into()
+                    .map_err(|_| anyhow::anyhow!("stored MainDO public key has wrong length"))
+            })
+            .transpose()
+    }
+
+    pub fn save_chat_author_proof(
+        &self,
+        writer_key: &[u8],
+        attestation_message: &str,
+        attestation_signature: &[u8],
+        issuer: &[u8],
+    ) -> Result<Vec<String>> {
+        let writer_key: [u8; 32] = writer_key
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("chat proof writer key must be 32 bytes"))?;
+        let issuer: [u8; 32] = issuer
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("chat proof issuer must be 32 bytes"))?;
+        let pinned = self
+            .load_main_do_public_key()?
+            .ok_or_else(|| anyhow::anyhow!("MainDO trust root is not pinned"))?;
+        if issuer != pinned {
+            anyhow::bail!("chat proof issuer does not match the pinned MainDO root");
+        }
+        let (attested_key, issued_at, expires_at) = parse_chat_attestation(attestation_message)?;
+        let writer_id = encode_hex(&writer_key);
+        if attested_key != writer_id {
+            anyhow::bail!("chat proof does not bind the writer key");
+        }
+        if issued_at > current_unix_seconds()?.saturating_add(300) {
+            anyhow::bail!("chat proof issue time is in the future");
+        }
+        if current_unix_seconds()? > expires_at.saturating_add(ATTESTATION_GRACE_SECONDS) {
+            anyhow::bail!("chat proof is outside its grace period");
+        }
+        if !crate::signing::verify(
+            &pinned,
+            attestation_message.as_bytes(),
+            attestation_signature,
+        ) {
+            anyhow::bail!("invalid chat proof signature");
+        }
+
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        tx.execute(
+            "INSERT INTO chat_author_proofs
+             (writer_id, writer_key, attestation_message, attestation_signature, issuer,
+              issued_at, expires_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(writer_id) DO UPDATE SET
+               writer_key = excluded.writer_key,
+               attestation_message = excluded.attestation_message,
+               attestation_signature = excluded.attestation_signature,
+               issuer = excluded.issuer,
+               issued_at = excluded.issued_at,
+               expires_at = excluded.expires_at,
+               updated_at = datetime('now')
+             WHERE excluded.issued_at >= chat_author_proofs.issued_at",
+            params![
+                writer_id,
+                writer_key,
+                attestation_message,
+                attestation_signature,
+                issuer,
+                issued_at,
+                expires_at,
+            ],
+        )?;
+        let trust = chat_trust_for_writer(&tx, &writer_id)?;
+        tx.execute(
+            "UPDATE chat_messages SET trust_state = ?2 WHERE writer_id = ?1",
+            params![writer_id, chat_trust_value(trust)],
+        )?;
+        let topics = {
+            let mut stmt = tx.prepare(
+                "SELECT DISTINCT topic FROM chat_messages WHERE writer_id = ?1 ORDER BY topic",
+            )?;
+            stmt.query_map([writer_id], |row| row.get(0))?
+                .collect::<rusqlite::Result<Vec<String>>>()?
+        };
+        tx.commit()?;
+        Ok(topics)
+    }
+
+    pub fn get_chat_author_proof(
+        &self,
+        writer_key: &[u8; 32],
+    ) -> Result<Option<StoredChatAuthorProof>> {
+        let writer_id = encode_hex(writer_key);
+        let now = current_unix_seconds()?;
+        self.conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT writer_key, attestation_message, attestation_signature, issuer
+                 FROM chat_author_proofs
+                 WHERE writer_id = ?1 AND expires_at + ?3 >= ?2",
+                params![writer_id, now, ATTESTATION_GRACE_SECONDS],
+                |row| {
+                    Ok(StoredChatAuthorProof {
+                        writer_key: row.get(0)?,
+                        attestation_message: row.get(1)?,
+                        attestation_signature: row.get(2)?,
+                        issuer: row.get(3)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    pub fn load_pending_public_chats(
+        &self,
+        festival_id: &str,
+        limit: u32,
+    ) -> Result<Vec<PendingPublicChat>> {
+        let prefix = format!("festival/{festival_id}/chat/");
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT message_id, message_json FROM pending_public_chat
+             WHERE substr(topic, 1, length(?1)) = ?1
+             ORDER BY created_at, message_id LIMIT ?2",
+        )?;
+        stmt.query_map(params![prefix, limit.clamp(1, 1000)], |row| {
+            let message_id: String = row.get(0)?;
+            let bytes: Vec<u8> = row.get(1)?;
+            let message = serde_json::from_slice(&bytes).map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    1,
+                    rusqlite::types::Type::Blob,
+                    Box::new(error),
+                )
+            })?;
+            Ok(PendingPublicChat {
+                message_id,
+                message,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
+    }
+
+    pub fn delete_pending_public_chat(&self, message_id: &str) -> Result<()> {
+        self.conn.lock().unwrap().execute(
+            "DELETE FROM pending_public_chat WHERE message_id = ?1",
+            [message_id],
+        )?;
+        Ok(())
     }
 
     // --- credentials ---
@@ -1480,20 +1998,22 @@ mod tests {
         assert_eq!(replaced.fetched_at, "2027-02-01T00:00:00Z");
 
         let stale = cached_festival("stale", "2027-05-12");
-        assert!(!db
-            .replace_festival_registry_cache(
+        assert!(
+            !db.replace_festival_registry_cache(
                 std::slice::from_ref(&stale),
                 "2027-03-01T00:00:00Z",
                 "00000000000000000001",
             )
-            .unwrap());
-        assert!(!db
-            .replace_festival_registry_cache(
+            .unwrap()
+        );
+        assert!(
+            !db.replace_festival_registry_cache(
                 std::slice::from_ref(&stale),
                 "2027-03-01T00:00:00Z",
                 "00000000000000000002",
             )
-            .unwrap());
+            .unwrap()
+        );
         let preserved = db.load_festival_registry_cache().unwrap().unwrap();
         assert_eq!(preserved.festivals, vec![second]);
         assert_eq!(preserved.fetched_at, "2027-02-01T00:00:00Z");
@@ -1511,13 +2031,14 @@ mod tests {
         .unwrap();
 
         let duplicate = cached_festival("duplicate", "2027-07-12");
-        assert!(db
-            .replace_festival_registry_cache(
+        assert!(
+            db.replace_festival_registry_cache(
                 &[duplicate.clone(), duplicate],
                 "2027-02-01T00:00:00Z",
                 "00000000000000000002",
             )
-            .is_err());
+            .is_err()
+        );
         let loaded = db.load_festival_registry_cache().unwrap().unwrap();
         assert_eq!(loaded.festivals, vec![original]);
         assert_eq!(loaded.fetched_at, "2027-01-01T00:00:00Z");
@@ -1565,13 +2086,14 @@ mod tests {
             festivals.push(festival);
         }
 
-        assert!(db
-            .replace_festival_registry_cache(
+        assert!(
+            db.replace_festival_registry_cache(
                 &festivals,
                 "2027-01-01T00:00:00Z",
                 "00000000000000000001",
             )
-            .is_err());
+            .is_err()
+        );
         assert!(db.load_festival_registry_cache().unwrap().is_none());
     }
 
@@ -1590,13 +2112,14 @@ mod tests {
         assert!(db.load_festival_registry_cache().is_err());
 
         let festival = cached_festival("recovered", "2027-06-12");
-        assert!(db
-            .replace_festival_registry_cache(
+        assert!(
+            db.replace_festival_registry_cache(
                 std::slice::from_ref(&festival),
                 "2027-01-02T00:00:00Z",
                 "00000000000000000001",
             )
-            .unwrap());
+            .unwrap()
+        );
         assert_eq!(
             db.load_festival_registry_cache()
                 .unwrap()
@@ -1614,13 +2137,14 @@ mod tests {
             )
             .unwrap();
         let after_rollover = cached_festival("after-rollover", "2027-07-12");
-        assert!(db
-            .replace_festival_registry_cache(
+        assert!(
+            db.replace_festival_registry_cache(
                 std::slice::from_ref(&after_rollover),
                 "2027-01-03T00:00:00Z",
                 "00000000000000000002",
             )
-            .unwrap());
+            .unwrap()
+        );
         assert_eq!(
             db.load_festival_registry_cache()
                 .unwrap()
@@ -1751,15 +2275,19 @@ mod tests {
                 timestamp: "2026-01-01T00:00:00Z".to_string(),
                 writer_seq: 1,
                 logical_time: 1,
+                writer_key: Vec::new(),
+                signature: Vec::new(),
+                trust: crate::types::ChatTrust::Unverified,
             })
             .unwrap();
         }
 
         db.delete_chat_messages("group/g1/chat").unwrap();
-        assert!(db
-            .get_chat_messages("group/g1/chat", 10, 0)
-            .unwrap()
-            .is_empty());
+        assert!(
+            db.get_chat_messages("group/g1/chat", 10, 0)
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(
             db.get_chat_messages("group/g2/chat", 10, 0).unwrap().len(),
             1
@@ -1840,6 +2368,9 @@ mod tests {
             timestamp: "2026-01-01T00:00:00Z".to_string(),
             writer_seq: 1,
             logical_time: 1,
+            writer_key: Vec::new(),
+            signature: Vec::new(),
+            trust: crate::types::ChatTrust::Unverified,
         })
         .unwrap();
         db.enqueue_group_update("festival-a", "g1", &[3]).unwrap();
@@ -1853,10 +2384,11 @@ mod tests {
         assert!(db.load_group_key("g1").unwrap().is_none());
         assert!(db.load_doc("group/g1/state").unwrap().is_none());
         assert!(db.load_doc_updates("group/g1/state").unwrap().is_empty());
-        assert!(db
-            .get_chat_messages("group/g1/chat", 10, 0)
-            .unwrap()
-            .is_empty());
+        assert!(
+            db.get_chat_messages("group/g1/chat", 10, 0)
+                .unwrap()
+                .is_empty()
+        );
         let after_leave = db
             .save_local_chat_message(ChatMessage {
                 id: "after-leave".to_string(),
@@ -1868,6 +2400,9 @@ mod tests {
                 timestamp: "not-authoritative".to_string(),
                 writer_seq: 0,
                 logical_time: 0,
+                writer_key: Vec::new(),
+                signature: Vec::new(),
+                trust: crate::types::ChatTrust::Unverified,
             })
             .unwrap();
         assert_eq!((after_leave.writer_seq, after_leave.logical_time), (1, 1));
@@ -1894,10 +2429,11 @@ mod tests {
         assert_eq!(pending[0].group_id, "group-a");
         assert_eq!(pending[0].envelope, vec![2, 3]);
         db.delete_pending_group_update(first_id).unwrap();
-        assert!(db
-            .load_pending_group_updates("festival-a")
-            .unwrap()
-            .is_empty());
+        assert!(
+            db.load_pending_group_updates("festival-a")
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(
             db.load_pending_group_updates("festival-b").unwrap().len(),
             1
@@ -1967,12 +2503,59 @@ mod tests {
             timestamp: "2026-06-13T20:00:00Z".to_string(),
             writer_seq: 0,
             logical_time: 0,
+            writer_key: Vec::new(),
+            signature: Vec::new(),
+            trust: crate::types::ChatTrust::Unverified,
         };
         db.save_chat_message(&msg).unwrap();
         let msgs = db.get_chat_messages("festival/f1", 10, 0).unwrap();
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0].id, "m1");
         assert_eq!(msgs[0].text, "hello");
+    }
+
+    #[test]
+    fn recent_chat_pages_walk_backward_and_stay_chronological() {
+        let db = test_db();
+        for i in 0..5_u64 {
+            db.save_chat_message(&ChatMessage {
+                id: format!("recent-{i}"),
+                user_id: "u1".to_string(),
+                display_name: "Alice".to_string(),
+                text: format!("message {i}"),
+                topic: "festival/f1/chat/campsite".to_string(),
+                stage_id: None,
+                timestamp: "2026-06-13T20:00:00Z".to_string(),
+                writer_seq: i,
+                logical_time: i,
+                writer_key: Vec::new(),
+                signature: Vec::new(),
+                trust: crate::types::ChatTrust::Unverified,
+            })
+            .unwrap();
+        }
+
+        let newest = db
+            .get_recent_chat_messages("festival/f1/chat/campsite", 2, 0)
+            .unwrap();
+        assert_eq!(
+            newest
+                .iter()
+                .map(|message| message.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["recent-3", "recent-4"]
+        );
+
+        let previous = db
+            .get_recent_chat_messages("festival/f1/chat/campsite", 2, 2)
+            .unwrap();
+        assert_eq!(
+            previous
+                .iter()
+                .map(|message| message.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["recent-1", "recent-2"]
+        );
     }
 
     #[test]
@@ -1989,6 +2572,9 @@ mod tests {
                 timestamp: format!("2026-06-13T20:{:02}:00Z", i % 60),
                 writer_seq: i as u64,
                 logical_time: i as u64,
+                writer_key: Vec::new(),
+                signature: Vec::new(),
+                trust: crate::types::ChatTrust::Unverified,
             })
             .collect();
         db.save_chat_messages_batch(&msgs).unwrap();
@@ -2010,6 +2596,9 @@ mod tests {
                 timestamp: format!("2026-06-13T2{i}:00:00Z"),
                 writer_seq: i as u64,
                 logical_time: i as u64,
+                writer_key: Vec::new(),
+                signature: Vec::new(),
+                trust: crate::types::ChatTrust::Unverified,
             })
             .unwrap();
         }
@@ -2023,6 +2612,9 @@ mod tests {
             timestamp: "2026-06-13T20:00:00Z".to_string(),
             writer_seq: 0,
             logical_time: 0,
+            writer_key: Vec::new(),
+            signature: Vec::new(),
+            trust: crate::types::ChatTrust::Unverified,
         })
         .unwrap();
         let msgs = db.get_chat_messages("topic/a", 10, 0).unwrap();
@@ -2042,6 +2634,9 @@ mod tests {
             timestamp: "2026-06-13T20:00:00Z".to_string(),
             writer_seq: 0,
             logical_time: 0,
+            writer_key: Vec::new(),
+            signature: Vec::new(),
+            trust: crate::types::ChatTrust::Unverified,
         };
         db.save_chat_message(&msg).unwrap();
 
@@ -2067,6 +2662,9 @@ mod tests {
             timestamp: "2026-06-13T21:00:00Z".to_string(),
             writer_seq: 1,
             logical_time: 1,
+            writer_key: Vec::new(),
+            signature: Vec::new(),
+            trust: crate::types::ChatTrust::Unverified,
         };
         db.save_chat_message(&msg2).unwrap();
 
@@ -2102,6 +2700,9 @@ mod tests {
             timestamp: "2026-06-13T20:00:00Z".to_string(),
             writer_seq: 0,
             logical_time: 0,
+            writer_key: Vec::new(),
+            signature: Vec::new(),
+            trust: crate::types::ChatTrust::Unverified,
         };
         db.save_chat_message(&msg).unwrap();
 
@@ -2117,6 +2718,9 @@ mod tests {
                 timestamp: "2026-06-13T21:00:00Z".to_string(),
                 writer_seq: 1,
                 logical_time: 1,
+                writer_key: Vec::new(),
+                signature: Vec::new(),
+                trust: ChatTrust::Unverified,
             },
             ChatMessage {
                 id: "batch_new".to_string(),
@@ -2128,6 +2732,9 @@ mod tests {
                 timestamp: "2026-06-13T22:00:00Z".to_string(),
                 writer_seq: 2,
                 logical_time: 2,
+                writer_key: Vec::new(),
+                signature: Vec::new(),
+                trust: ChatTrust::Unverified,
             },
         ];
         db.save_chat_messages_batch(&msgs).unwrap();
@@ -2162,6 +2769,9 @@ mod tests {
             timestamp: "2026-06-13T20:00:00Z".to_string(),
             writer_seq: 1,
             logical_time: 1,
+            writer_key: Vec::new(),
+            signature: Vec::new(),
+            trust: crate::types::ChatTrust::Unverified,
         })
         .unwrap();
 
@@ -2185,6 +2795,9 @@ mod tests {
                 timestamp: "not-authoritative".to_string(),
                 writer_seq: sequence,
                 logical_time: sequence,
+                writer_key: Vec::new(),
+                signature: Vec::new(),
+                trust: crate::types::ChatTrust::Unverified,
             })
             .unwrap();
         }
@@ -2211,6 +2824,9 @@ mod tests {
                 timestamp: format!("2026-06-13T20:0{seq}:00Z"),
                 writer_seq: seq,
                 logical_time: seq,
+                writer_key: Vec::new(),
+                signature: Vec::new(),
+                trust: crate::types::ChatTrust::Unverified,
             })
             .unwrap();
         }
@@ -2225,6 +2841,9 @@ mod tests {
                 timestamp: format!("2026-06-13T21:0{seq}:00Z"),
                 writer_seq: seq,
                 logical_time: seq,
+                writer_key: Vec::new(),
+                signature: Vec::new(),
+                trust: crate::types::ChatTrust::Unverified,
             })
             .unwrap();
         }
@@ -2263,6 +2882,9 @@ mod tests {
             timestamp: "2099-01-01T00:00:00Z".to_string(),
             writer_seq: 4,
             logical_time: 50,
+            writer_key: Vec::new(),
+            signature: Vec::new(),
+            trust: crate::types::ChatTrust::Unverified,
         })
         .unwrap();
 
@@ -2277,6 +2899,9 @@ mod tests {
                 timestamp: "1970-01-01T00:00:00Z".to_string(),
                 writer_seq: 0,
                 logical_time: 0,
+                writer_key: Vec::new(),
+                signature: Vec::new(),
+                trust: crate::types::ChatTrust::Unverified,
             })
             .unwrap();
 
@@ -2304,6 +2929,9 @@ mod tests {
             timestamp: "not-authoritative".to_string(),
             writer_seq: 1,
             logical_time: 1_000_001,
+            writer_key: Vec::new(),
+            signature: Vec::new(),
+            trust: crate::types::ChatTrust::Unverified,
         });
         assert!(rejected.is_err());
         let local = db
@@ -2317,6 +2945,9 @@ mod tests {
                 timestamp: "not-authoritative".to_string(),
                 writer_seq: 0,
                 logical_time: 0,
+                writer_key: Vec::new(),
+                signature: Vec::new(),
+                trust: crate::types::ChatTrust::Unverified,
             })
             .unwrap();
         assert_eq!(local.logical_time, 1);
@@ -2336,6 +2967,9 @@ mod tests {
                 timestamp: "display-only".to_string(),
                 writer_seq: 1,
                 logical_time: 1_000_000,
+                writer_key: Vec::new(),
+                signature: Vec::new(),
+                trust: crate::types::ChatTrust::Unverified,
             },
             ChatMessage {
                 id: "second".to_string(),
@@ -2347,6 +2981,9 @@ mod tests {
                 timestamp: "display-only".to_string(),
                 writer_seq: 2,
                 logical_time: 2_000_000,
+                writer_key: Vec::new(),
+                signature: Vec::new(),
+                trust: crate::types::ChatTrust::Unverified,
             },
         ];
         assert!(db.save_chat_messages_batch(&messages).is_err());
@@ -2362,6 +2999,9 @@ mod tests {
                 timestamp: "display-only".to_string(),
                 writer_seq: 0,
                 logical_time: 0,
+                writer_key: Vec::new(),
+                signature: Vec::new(),
+                trust: crate::types::ChatTrust::Unverified,
             })
             .unwrap();
         assert_eq!(local.logical_time, 1);
@@ -2381,6 +3021,9 @@ mod tests {
                 timestamp: "display-only".to_string(),
                 writer_seq: sequence,
                 logical_time,
+                writer_key: Vec::new(),
+                signature: Vec::new(),
+                trust: crate::types::ChatTrust::Unverified,
             })
             .unwrap();
         }
@@ -2430,6 +3073,9 @@ mod tests {
             timestamp: "display-only".to_string(),
             writer_seq: 1,
             logical_time: 0,
+            writer_key: Vec::new(),
+            signature: Vec::new(),
+            trust: crate::types::ChatTrust::Unverified,
         };
         db.save_chat_message(&message).unwrap();
         let local_heads = db.get_chat_writer_heads("topic").unwrap();
@@ -2461,6 +3107,9 @@ mod tests {
                 timestamp: "display-only".to_string(),
                 writer_seq: 0,
                 logical_time: 0,
+                writer_key: Vec::new(),
+                signature: Vec::new(),
+                trust: crate::types::ChatTrust::Unverified,
             })
             .unwrap();
         assert_eq!(local.logical_time, 51);
@@ -2483,6 +3132,9 @@ mod tests {
                 timestamp: timestamp.to_string(),
                 writer_seq: 1,
                 logical_time: 10,
+                writer_key: Vec::new(),
+                signature: Vec::new(),
+                trust: crate::types::ChatTrust::Unverified,
             })
             .unwrap();
         }
@@ -2513,6 +3165,9 @@ mod tests {
                         timestamp: "not-authoritative".to_string(),
                         writer_seq: 0,
                         logical_time: 0,
+                        writer_key: Vec::new(),
+                        signature: Vec::new(),
+                        trust: crate::types::ChatTrust::Unverified,
                     })
                     .unwrap()
                 })
@@ -2546,6 +3201,9 @@ mod tests {
                 timestamp: "not-authoritative".to_string(),
                 writer_seq: sequence,
                 logical_time: sequence,
+                writer_key: Vec::new(),
+                signature: Vec::new(),
+                trust: crate::types::ChatTrust::Unverified,
             })
             .collect();
         db.save_chat_messages_batch(&messages).unwrap();
@@ -2603,6 +3261,9 @@ mod tests {
                 timestamp: "2099-01-01".to_string(),
                 writer_seq: 7,
                 logical_time: 42,
+                writer_key: Vec::new(),
+                signature: Vec::new(),
+                trust: crate::types::ChatTrust::Unverified,
             })
             .unwrap();
         }
@@ -2618,9 +3279,105 @@ mod tests {
                 timestamp: "1970-01-01".to_string(),
                 writer_seq: 0,
                 logical_time: 0,
+                writer_key: Vec::new(),
+                signature: Vec::new(),
+                trust: crate::types::ChatTrust::Unverified,
             })
             .unwrap();
         assert_eq!((next.writer_seq, next.logical_time), (8, 43));
+    }
+
+    #[test]
+    fn public_chat_proof_promotes_signed_history_and_pins_root() {
+        let db = test_db();
+        let writer = crate::signing::generate_signing_key();
+        let root = crate::signing::generate_signing_key();
+        let root_key = root.verifying_key().to_bytes();
+        db.pin_main_do_public_key(&root_key).unwrap();
+        assert!(db.pin_main_do_public_key(&[9; 32]).is_err());
+
+        let now = current_unix_seconds().unwrap();
+        let writer_key = writer.verifying_key().to_bytes();
+        let message_text = format!(
+            "attestation:v1:{}:{}:{}",
+            encode_hex(&writer_key),
+            now - 60,
+            now + 3600,
+        );
+        let proof_signature = crate::signing::sign(&root, message_text.as_bytes());
+        let topic = "festival/f/chat/campsite";
+        let mut message = ChatMessage {
+            id: "proof-message".to_string(),
+            user_id: crate::auth::get_user_id(&writer),
+            display_name: "Alice".to_string(),
+            text: "hello".to_string(),
+            topic: topic.to_string(),
+            stage_id: None,
+            timestamp: "display-only".to_string(),
+            writer_seq: 1,
+            logical_time: 1,
+            writer_key: Vec::new(),
+            signature: Vec::new(),
+            trust: ChatTrust::Unverified,
+        };
+        crate::signing::sign_public_chat_message(&writer, &mut message).unwrap();
+        db.save_chat_message(&message).unwrap();
+        assert_eq!(
+            db.get_chat_messages(topic, 10, 0).unwrap()[0].trust,
+            ChatTrust::Unverified
+        );
+        assert!(
+            db.get_messages_since_heads(
+                topic,
+                &std::collections::HashMap::new(),
+                &std::collections::HashMap::new(),
+                10,
+            )
+            .unwrap()
+            .is_empty(),
+            "signed messages without a usable registration proof are live-only",
+        );
+
+        let topics = db
+            .save_chat_author_proof(&writer_key, &message_text, &proof_signature, &root_key)
+            .unwrap();
+        assert_eq!(topics, vec![topic]);
+        assert_eq!(
+            db.get_chat_messages(topic, 10, 0).unwrap()[0].trust,
+            ChatTrust::Verified
+        );
+        assert_eq!(
+            db.get_messages_since_heads(
+                topic,
+                &std::collections::HashMap::new(),
+                &std::collections::HashMap::new(),
+                10,
+            )
+            .unwrap()
+            .len(),
+            1,
+        );
+        assert!(
+            db.save_chat_author_proof(&writer_key, &message_text, &[0; 64], &root_key)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn festival_checkin_round_trip_and_clear() {
+        let db = test_db();
+        let checkin = FestivalCheckIn {
+            festival_id: "fest".to_string(),
+            kind: "campsite".to_string(),
+            value: None,
+            checked_at: 100,
+            expires_at: 7300,
+            revision: 1,
+        };
+        db.save_festival_checkin(&checkin).unwrap();
+        assert_eq!(db.load_festival_checkin("fest").unwrap(), Some(checkin));
+        db.clear_festival_checkin("fest").unwrap();
+        assert!(db.load_festival_checkin("fest").unwrap().is_none());
     }
 
     #[test]

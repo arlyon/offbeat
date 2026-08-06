@@ -32,6 +32,12 @@ pub enum GossipMessage {
         group_key: [u8; 32],
     },
     Chat(ChatMessage),
+    ChatAuthorProof {
+        writer_key: Vec<u8>,
+        attestation_message: String,
+        attestation_signature: Vec<u8>,
+        issuer: Vec<u8>,
+    },
     EncryptedChat {
         group_key: [u8; 32],
         encrypted: Vec<u8>,
@@ -80,6 +86,8 @@ pub enum DispatchResult {
     /// An encrypted chat was decrypted; carries the plaintext topic so the
     /// caller can notify chat watchers.
     DecryptedChat { topic: String },
+    /// A valid MainDO proof promoted existing messages on these topics.
+    ChatProofUpdated { topics: Vec<String> },
 }
 
 /// Dispatch an incoming gossip message to the appropriate handler.
@@ -123,7 +131,22 @@ pub fn dispatch_message(
             if msg.writer_seq == 0 {
                 anyhow::bail!("chat message is missing a writer sequence");
             }
-            db.save_chat_message(&msg)?;
+            crate::chat::receive_festival_chat(db, msg)?;
+        }
+
+        GossipMessage::ChatAuthorProof {
+            writer_key,
+            attestation_message,
+            attestation_signature,
+            issuer,
+        } => {
+            let topics = db.save_chat_author_proof(
+                &writer_key,
+                &attestation_message,
+                &attestation_signature,
+                &issuer,
+            )?;
+            return Ok(DispatchResult::ChatProofUpdated { topics });
         }
 
         GossipMessage::EncryptedChat {
@@ -389,6 +412,13 @@ pub async fn decode_envelope_to_message(
 
         Payload::Chat(chat) => Ok(Some(GossipMessage::Chat(chat.clone().into()))),
 
+        Payload::ChatAuthorProof(proof) => Ok(Some(GossipMessage::ChatAuthorProof {
+            writer_key: proof.writer_key.clone(),
+            attestation_message: proof.attestation_message.clone(),
+            attestation_signature: proof.attestation_signature.clone(),
+            issuer: proof.issuer.clone(),
+        })),
+
         Payload::GroupUpdate(gu) => {
             let db_clone = Arc::clone(db);
             let key_id = gu.group_key_id.clone();
@@ -479,17 +509,22 @@ mod tests {
         let db_arc = test_db();
         let doc_mgr = DocManager::new(db_arc.clone());
 
-        let msg = ChatMessage {
+        let signing_key = signing::generate_signing_key();
+        let mut msg = ChatMessage {
             id: "m1".to_string(),
-            user_id: "u1".to_string(),
+            user_id: crate::auth::get_user_id(&signing_key),
             display_name: "Alice".to_string(),
             text: "hello festival!".to_string(),
-            topic: "festival/f1".to_string(),
+            topic: "festival/f1/chat/campsite".to_string(),
             stage_id: None,
             timestamp: "2026-06-14T20:00:00Z".to_string(),
             writer_seq: 1,
             logical_time: 1,
+            writer_key: Vec::new(),
+            signature: Vec::new(),
+            trust: crate::types::ChatTrust::Unverified,
         };
+        signing::sign_public_chat_message(&signing_key, &mut msg).unwrap();
 
         let dummy_pk = [0u8; 32];
         dispatch_message(
@@ -500,7 +535,9 @@ mod tests {
         )
         .unwrap();
 
-        let stored = db_arc.get_chat_messages("festival/f1", 10, 0).unwrap();
+        let stored = db_arc
+            .get_chat_messages("festival/f1/chat/campsite", 10, 0)
+            .unwrap();
         assert_eq!(stored.len(), 1);
         assert_eq!(stored[0].text, "hello festival!");
     }
@@ -619,6 +656,9 @@ mod tests {
             timestamp: "2026-06-14T21:00:00Z".to_string(),
             writer_seq: 1,
             logical_time: 1,
+            writer_key: Vec::new(),
+            signature: Vec::new(),
+            trust: crate::types::ChatTrust::Unverified,
         };
         let bytes = encode_gossip_message(&GossipMessage::Chat(chat.clone()));
         let envelope = proto::decode_envelope(&bytes).unwrap();

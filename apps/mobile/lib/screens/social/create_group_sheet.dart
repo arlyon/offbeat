@@ -11,6 +11,7 @@ class CreateGroupSheet extends StatefulWidget {
   final void Function(String name) onCreate;
   final void Function(String code) onJoin;
   final VoidCallback? onScanQr;
+  final String initialTab;
 
   const CreateGroupSheet({
     super.key,
@@ -18,6 +19,7 @@ class CreateGroupSheet extends StatefulWidget {
     required this.onCreate,
     required this.onJoin,
     this.onScanQr,
+    this.initialTab = 'new',
   });
 
   @override
@@ -25,10 +27,16 @@ class CreateGroupSheet extends StatefulWidget {
 }
 
 class _CreateGroupSheetState extends State<CreateGroupSheet> {
-  String _tab = 'new'; // 'new' | 'join'
+  late String _tab; // 'new' | 'join'
   final _nameController = TextEditingController();
   final _codeController = TextEditingController();
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _tab = widget.initialTab;
+  }
 
   @override
   void dispose() {

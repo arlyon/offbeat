@@ -14,7 +14,9 @@ pub use offbeat_core::OffbeatNode;
 use offbeat_core::auth;
 pub use offbeat_core::connection_manager::PeerEntry;
 pub use offbeat_core::doc_manager::DocManager;
+use offbeat_core::gossip_manager::GossipMessage;
 pub use offbeat_core::notifier::SyncStatus;
+use offbeat_core::proto::GossipEnvelope;
 
 /// Global tokio runtime for spawning watch tasks.
 /// FRB's async executor isn't a full tokio runtime, so we need our own.
@@ -414,11 +416,8 @@ pub struct AppNode {
     pending_group_retries: Arc<std::sync::Mutex<std::collections::HashSet<i64>>>,
     group_retry_generations: Arc<std::sync::Mutex<std::collections::HashMap<String, u64>>>,
     relay_task_handle: Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
-    group_publish_locks: Arc<
-        std::sync::Mutex<
-            std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>,
-        >,
-    >,
+    group_publish_locks:
+        Arc<std::sync::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
     /// Join handles for BLE connection background tasks.
     ble_task_handles: Vec<tokio::task::JoinHandle<()>>,
 }
@@ -434,16 +433,14 @@ impl AppNode {
         Ok(AppNode {
             inner,
             relay_festival_id: Arc::new(std::sync::RwLock::new(None)),
-            pending_group_retries: Arc::new(std::sync::Mutex::new(
-                std::collections::HashSet::new(),
-            )),
+            pending_group_retries: Arc::new(
+                std::sync::Mutex::new(std::collections::HashSet::new()),
+            ),
             group_retry_generations: Arc::new(std::sync::Mutex::new(
                 std::collections::HashMap::new(),
             )),
             relay_task_handle: Arc::new(std::sync::Mutex::new(None)),
-            group_publish_locks: Arc::new(std::sync::Mutex::new(
-                std::collections::HashMap::new(),
-            )),
+            group_publish_locks: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             ble_task_handles: Vec::new(),
         })
     }
@@ -455,16 +452,14 @@ impl AppNode {
         Ok(AppNode {
             inner,
             relay_festival_id: Arc::new(std::sync::RwLock::new(None)),
-            pending_group_retries: Arc::new(std::sync::Mutex::new(
-                std::collections::HashSet::new(),
-            )),
+            pending_group_retries: Arc::new(
+                std::sync::Mutex::new(std::collections::HashSet::new()),
+            ),
             group_retry_generations: Arc::new(std::sync::Mutex::new(
                 std::collections::HashMap::new(),
             )),
             relay_task_handle: Arc::new(std::sync::Mutex::new(None)),
-            group_publish_locks: Arc::new(std::sync::Mutex::new(
-                std::collections::HashMap::new(),
-            )),
+            group_publish_locks: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             ble_task_handles: Vec::new(),
         })
     }
@@ -493,9 +488,7 @@ impl AppNode {
     }
 
     /// Load the cached registry, if a successful server fetch has been persisted.
-    pub fn get_festival_registry_cache(
-        &self,
-    ) -> anyhow::Result<Option<FestivalRegistryCacheDto>> {
+    pub fn get_festival_registry_cache(&self) -> anyhow::Result<Option<FestivalRegistryCacheDto>> {
         self.inner
             .db
             .load_festival_registry_cache()?
@@ -605,7 +598,10 @@ impl AppNode {
         offset: u32,
     ) -> anyhow::Result<Vec<ChatMessageDto>> {
         self.ensure_group_chat_access(&topic)?;
-        let msgs = self.inner.db.get_chat_messages(&topic, limit, offset)?;
+        let msgs = self
+            .inner
+            .db
+            .get_recent_chat_messages(&topic, limit, offset)?;
         Ok(msgs
             .into_iter()
             .map(|m| ChatMessageDto {
@@ -616,6 +612,7 @@ impl AppNode {
                 topic: m.topic,
                 stage_id: m.stage_id,
                 timestamp: m.timestamp,
+                trust: chat_trust_label(m.trust),
             })
             .collect())
     }
@@ -640,6 +637,7 @@ impl AppNode {
             &user_id,
             &display_name,
             &text,
+            &signing_key,
         )?;
 
         {
@@ -648,9 +646,30 @@ impl AppNode {
             let gossip_msg = GossipMessage::Chat(msg.clone());
             let envelope = GossipEnvelope::from_gossip_message(&gossip_msg);
             let bytes = encode_gossip_message(&gossip_msg);
+            let writer_key = signing_key.verifying_key().to_bytes();
+            let proof = self
+                .inner
+                .db
+                .get_chat_author_proof(&writer_key)?
+                .map(|proof| {
+                    let message = GossipMessage::ChatAuthorProof {
+                        writer_key: proof.writer_key,
+                        attestation_message: proof.attestation_message,
+                        attestation_signature: proof.attestation_signature,
+                        issuer: proof.issuer,
+                    };
+                    (
+                        GossipEnvelope::from_gossip_message(&message),
+                        encode_gossip_message(&message),
+                    )
+                });
 
             if let Some(gm) = &self.inner.gossip_manager {
-                let _ = gm.lock().await.broadcast(topic_id, bytes).await;
+                let mut gm = gm.lock().await;
+                if let Some((_, proof_bytes)) = &proof {
+                    let _ = gm.broadcast(topic_id, proof_bytes.clone()).await;
+                }
+                let _ = gm.broadcast(topic_id, bytes).await;
             }
 
             if self.relay_matches_festival(&festival_id)
@@ -659,9 +678,20 @@ impl AppNode {
                 let topic_str = format!(
                     "festival/{}/chat/{}",
                     festival_id,
-                    stage_id.as_deref().unwrap_or("general")
+                    stage_id.as_deref().unwrap_or("campsite")
                 );
-                let _ = ws.send_gossip(&topic_str, &envelope).await;
+                if let Some((proof_envelope, _)) = &proof {
+                    let _ = ws.send_gossip(&topic_str, proof_envelope).await;
+                }
+                let db = Arc::clone(&self.inner.db);
+                let message_id = msg.id.clone();
+                RUNTIME.spawn(async move {
+                    if ws.send_gossip_confirmed(&topic_str, &envelope).await.is_ok()
+                        && let Err(error) = db.delete_pending_public_chat(&message_id)
+                    {
+                        tracing::warn!(%error, %message_id, "public chat acknowledgement was not recorded");
+                    }
+                });
             }
         }
 
@@ -675,7 +705,54 @@ impl AppNode {
             topic: msg.topic,
             stage_id: msg.stage_id,
             timestamp: msg.timestamp,
+            trust: chat_trust_label(msg.trust),
         })
+    }
+
+    async fn flush_pending_public_chats(&self, festival_id: &str) -> anyhow::Result<()> {
+        if !self.relay_matches_festival(festival_id) {
+            return Ok(());
+        }
+        let Some(ws) = self.inner.ws_relay.read().clone() else {
+            return Ok(());
+        };
+        for pending in self.inner.db.load_pending_public_chats(festival_id, 100)? {
+            if !offbeat_core::signing::verify_public_chat_message(&pending.message) {
+                tracing::warn!(message_id = %pending.message_id, "corrupt pending public chat retained");
+                continue;
+            }
+            let writer_key: [u8; 32] = pending
+                .message
+                .writer_key
+                .as_slice()
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("pending public chat writer key is malformed"))?;
+            if let Some(proof) = self.inner.db.get_chat_author_proof(&writer_key)? {
+                let proof_message = GossipMessage::ChatAuthorProof {
+                    writer_key: proof.writer_key,
+                    attestation_message: proof.attestation_message,
+                    attestation_signature: proof.attestation_signature,
+                    issuer: proof.issuer,
+                };
+                let proof_envelope = GossipEnvelope::from_gossip_message(&proof_message);
+                let _ = ws
+                    .send_gossip(&pending.message.topic, &proof_envelope)
+                    .await;
+            }
+            let envelope =
+                GossipEnvelope::from_gossip_message(&GossipMessage::Chat(pending.message.clone()));
+            if ws
+                .send_gossip_confirmed(&pending.message.topic, &envelope)
+                .await
+                .is_err()
+            {
+                break;
+            }
+            self.inner
+                .db
+                .delete_pending_public_chat(&pending.message_id)?;
+        }
+        Ok(())
     }
 
     /// Send an encrypted group chat message and broadcast it via gossip if
@@ -702,10 +779,10 @@ impl AppNode {
                 .chat_manager
                 .send_group_chat(&group_id, &user_id, &display_name, &text)?;
 
-        let stored = self
-            .inner
-            .db
-            .get_chat_messages(&format!("group/{group_id}/chat"), 1, 0)?;
+        let stored =
+            self.inner
+                .db
+                .get_recent_chat_messages(&format!("group/{group_id}/chat"), 1, 0)?;
         let msg = stored
             .into_iter()
             .next()
@@ -753,6 +830,7 @@ impl AppNode {
             topic: msg.topic,
             stage_id: msg.stage_id,
             timestamp: msg.timestamp,
+            trust: chat_trust_label(msg.trust),
         })
     }
 
@@ -800,6 +878,9 @@ impl AppNode {
                 timestamp: format!("{timestamp_secs}Z"),
                 writer_seq: 0,
                 logical_time: 0,
+                writer_key: Vec::new(),
+                signature: Vec::new(),
+                trust: offbeat_core::types::ChatTrust::Unverified,
             })?;
             let compact = CompactGroupChat {
                 message_uuid: *message_uuid.as_bytes(),
@@ -998,6 +1079,9 @@ impl AppNode {
                                     timestamp: format!("{}Z", compact.timestamp_secs),
                                     writer_seq: compact.writer_seq,
                                     logical_time: compact.logical_time,
+                                    writer_key: Vec::new(),
+                                    signature: Vec::new(),
+                                    trust: offbeat_core::types::ChatTrust::Unverified,
                                 };
                                 self.inner.db.save_chat_message(&message)?;
                                 self.inner.notifier.record_received(&topic);
@@ -1045,7 +1129,10 @@ impl AppNode {
         offset: u32,
     ) -> anyhow::Result<Vec<ChatMessageDto>> {
         self.ensure_group_chat_access(&topic)?;
-        let msgs = self.inner.chat_manager.get_history(&topic, limit, offset)?;
+        let msgs = self
+            .inner
+            .db
+            .get_recent_chat_messages(&topic, limit, offset)?;
         Ok(msgs
             .into_iter()
             .map(|m| ChatMessageDto {
@@ -1056,6 +1143,7 @@ impl AppNode {
                 topic: m.topic,
                 stage_id: m.stage_id,
                 timestamp: m.timestamp,
+                trust: chat_trust_label(m.trust),
             })
             .collect())
     }
@@ -1171,6 +1259,9 @@ impl AppNode {
         });
         *self.relay_task_handle.lock().unwrap() = Some(relay_task);
 
+        if let Err(error) = self.flush_pending_public_chats(&festival_id).await {
+            tracing::warn!(%error, "queued public chat remains pending");
+        }
         if let Err(error) = self.flush_pending_group_updates(&festival_id).await {
             tracing::warn!(%error, "queued group updates remain pending");
         }
@@ -1303,17 +1394,25 @@ impl AppNode {
         use offbeat_core::proto::GossipEnvelope;
         use offbeat_core::types::ChatMessage;
 
-        let chat = self.inner.db.save_local_chat_message(ChatMessage {
-            id: message.id,
-            user_id: message.user_id,
-            display_name: message.display_name,
-            text: message.text,
-            topic: topic.clone(),
-            stage_id: message.stage_id,
-            timestamp: message.timestamp,
-            writer_seq: 0,
-            logical_time: 0,
-        })?;
+        let signing_key = auth::generate_or_load_identity(&self.inner.db)?;
+        let user_id = auth::get_user_id(&signing_key);
+        let chat = self.inner.db.save_local_signed_chat_message(
+            ChatMessage {
+                id: message.id,
+                user_id,
+                display_name: message.display_name,
+                text: message.text,
+                topic: topic.clone(),
+                stage_id: message.stage_id,
+                timestamp: message.timestamp,
+                writer_seq: 0,
+                logical_time: 0,
+                writer_key: Vec::new(),
+                signature: Vec::new(),
+                trust: offbeat_core::types::ChatTrust::Unverified,
+            },
+            &signing_key,
+        )?;
 
         let parts: Vec<&str> = topic.splitn(3, '/').collect();
         let topic_id = if parts.len() == 3 && parts[0] == "festival" {
@@ -1389,6 +1488,11 @@ impl AppNode {
             state: state_str,
             expires_at,
         })
+    }
+
+    /// Pin the MainDO key used to verify portable public-chat attestations.
+    pub fn pin_main_do_public_key(&self, public_key_hex: String) -> anyhow::Result<()> {
+        offbeat_core::auth::pin_main_do_public_key(&self.inner.db, &public_key_hex)
     }
 
     /// Store an attestation received from the MainDO.
@@ -1657,9 +1761,7 @@ impl AppNode {
                     .unwrap()
                     .get(&pending.group_id)
                     .is_some_and(|current| *current == generation);
-                let row_exists = db
-                    .pending_group_update_exists(pending.id)
-                    .unwrap_or(false);
+                let row_exists = db.pending_group_update_exists(pending.id).unwrap_or(false);
                 if !is_current_generation || !row_exists {
                     pending_group_retries.lock().unwrap().remove(&pending.id);
                     break;
@@ -1921,6 +2023,131 @@ impl AppNode {
         Ok(())
     }
 
+    /// Return the locally owned app-wide check-in for a festival.
+    pub fn get_festival_check_in(
+        &self,
+        festival_id: String,
+    ) -> anyhow::Result<Option<FestivalCheckInDto>> {
+        let Some(checkin) = self.inner.db.load_festival_checkin(&festival_id)? else {
+            return Ok(None);
+        };
+        let now = i64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_secs(),
+        )?;
+        if checkin.expires_at <= now {
+            self.inner.db.clear_festival_checkin(&festival_id)?;
+            return Ok(None);
+        }
+        Ok(Some(FestivalCheckInDto {
+            festival_id: checkin.festival_id,
+            kind: checkin.kind,
+            value: checkin.value,
+            checked_at: checkin.checked_at,
+            expires_at: checkin.expires_at,
+            revision: checkin.revision,
+            pending_group_count: 0,
+        }))
+    }
+
+    /// Persist one festival check-in and fan it out to every joined group.
+    pub async fn set_festival_check_in(
+        &self,
+        festival_id: String,
+        kind: String,
+        value: Option<String>,
+    ) -> anyhow::Result<FestivalCheckInDto> {
+        use offbeat_core::auth;
+        let normalized_value = value.map(|value| value.trim().to_string());
+        let (stage_id, custom_location) = match kind.as_str() {
+            "stage" => {
+                let value = normalized_value
+                    .as_deref()
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| anyhow::anyhow!("stage check-in requires a stage ID"))?;
+                (Some(value), None)
+            }
+            "campsite" => (None, Some("Campsite")),
+            "custom" => {
+                let value = normalized_value
+                    .as_deref()
+                    .filter(|value| !value.is_empty() && value.len() <= 80)
+                    .ok_or_else(|| anyhow::anyhow!("custom location must be 1-80 characters"))?;
+                if value.chars().any(char::is_control) {
+                    anyhow::bail!("custom location contains control characters");
+                }
+                (None, Some(value))
+            }
+            "none" => (None, None),
+            _ => anyhow::bail!("unknown check-in kind"),
+        };
+
+        let now = i64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_secs(),
+        )?;
+        let revision = self
+            .inner
+            .db
+            .load_festival_checkin(&festival_id)?
+            .map_or(1, |checkin| checkin.revision + 1);
+        if kind == "none" {
+            self.inner.db.clear_festival_checkin(&festival_id)?;
+        } else {
+            self.inner
+                .db
+                .save_festival_checkin(&offbeat_core::db::FestivalCheckIn {
+                    festival_id: festival_id.clone(),
+                    kind: kind.clone(),
+                    value: normalized_value.clone(),
+                    checked_at: now,
+                    expires_at: now + 2 * 60 * 60,
+                    revision,
+                })?;
+        }
+
+        let signing_key = auth::generate_or_load_identity(&self.inner.db)?;
+        let user_id = auth::get_user_id(&signing_key);
+        let groups = self.inner.db.load_groups(&festival_id)?;
+        let mut pending_group_count = 0u32;
+        for (group_id, _, _) in groups {
+            let encrypted = self
+                .inner
+                .group_manager
+                .check_in(&group_id, &user_id, stage_id, custom_location)
+                .await?;
+            let group_key = self
+                .inner
+                .db
+                .load_group_key(&group_id)?
+                .ok_or_else(|| anyhow::anyhow!("group key not found for {group_id}"))?;
+            if self
+                .publish_group_state_update(&group_id, group_key, encrypted)
+                .await
+                .is_err()
+            {
+                pending_group_count += 1;
+            }
+        }
+        if let Some(stage_id) = stage_id {
+            let _ = self
+                .subscribe_chat_topics(festival_id.clone(), vec![stage_id.to_string()])
+                .await;
+        }
+
+        Ok(FestivalCheckInDto {
+            festival_id,
+            kind,
+            value: normalized_value,
+            checked_at: now,
+            expires_at: now + 2 * 60 * 60,
+            revision,
+            pending_group_count,
+        })
+    }
+
     /// Update the shared stars for the current user in a group.
     pub async fn update_shared_stars(
         &self,
@@ -1991,8 +2218,11 @@ impl AppNode {
                     user_id: m.user_id,
                     display_name: m.display_name,
                     status: m.status,
+                    location_kind: m.location_kind,
                     stage_id: m.stage_id,
                     custom_location: m.custom_location,
+                    updated_at: m.updated_at,
+                    expires_at: m.expires_at,
                     starred_set_ids: m.starred_set_ids,
                 })
                 .collect(),
@@ -2158,8 +2388,11 @@ impl AppNode {
                             user_id: m.user_id,
                             display_name: m.display_name,
                             status: m.status,
+                            location_kind: m.location_kind,
                             stage_id: m.stage_id,
                             custom_location: m.custom_location,
+                            updated_at: m.updated_at,
+                            expires_at: m.expires_at,
                             starred_set_ids: m.starred_set_ids,
                         })
                         .collect(),
@@ -2193,8 +2426,11 @@ impl AppNode {
                                 user_id: m.user_id,
                                 display_name: m.display_name,
                                 status: m.status,
+                                location_kind: m.location_kind,
                                 stage_id: m.stage_id,
                                 custom_location: m.custom_location,
+                                updated_at: m.updated_at,
+                                expires_at: m.expires_at,
                                 starred_set_ids: m.starred_set_ids,
                             })
                             .collect(),
@@ -2242,7 +2478,7 @@ impl AppNode {
 
         RUNTIME.spawn(async move {
             // Emit initial messages
-            if let Ok(msgs) = db.get_chat_messages(&topic_clone, last_n, 0) {
+            if let Ok(msgs) = db.get_recent_chat_messages(&topic_clone, last_n, 0) {
                 let dtos: Vec<ChatMessageDto> = msgs
                     .into_iter()
                     .map(|m| ChatMessageDto {
@@ -2253,6 +2489,7 @@ impl AppNode {
                         topic: m.topic,
                         stage_id: m.stage_id,
                         timestamp: m.timestamp,
+                        trust: chat_trust_label(m.trust),
                     })
                     .collect();
                 let sink = sink_clone.lock().await;
@@ -2264,7 +2501,7 @@ impl AppNode {
                 if rx.changed().await.is_err() {
                     break;
                 }
-                if let Ok(msgs) = db.get_chat_messages(&topic_clone, last_n, 0) {
+                if let Ok(msgs) = db.get_recent_chat_messages(&topic_clone, last_n, 0) {
                     let dtos: Vec<ChatMessageDto> = msgs
                         .into_iter()
                         .map(|m| ChatMessageDto {
@@ -2275,6 +2512,7 @@ impl AppNode {
                             topic: m.topic,
                             stage_id: m.stage_id,
                             timestamp: m.timestamp,
+                            trust: chat_trust_label(m.trust),
                         })
                         .collect();
                     let sink = sink_clone.lock().await;
@@ -2620,10 +2858,8 @@ mod tests {
 
     #[test]
     fn festival_registry_bridge_persists_normalized_snapshot_without_networking() {
-        let path = std::env::temp_dir().join(format!(
-            "offbeat-registry-{}.db",
-            uuid::Uuid::new_v4()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("offbeat-registry-{}.db", uuid::Uuid::new_v4()));
         let store = FestivalRegistryCacheStore::open(path.to_string_lossy().into_owned()).unwrap();
         let payload = serde_json::json!([{
             "id": "fieldday",
@@ -2826,6 +3062,9 @@ mod tests {
                     timestamp: "2026-01-01T00:00:00Z".to_string(),
                     writer_seq: 1,
                     logical_time: 1,
+                    writer_key: Vec::new(),
+                    signature: Vec::new(),
+                    trust: offbeat_core::types::ChatTrust::Unverified,
                 })
                 .unwrap();
             assert_eq!(
@@ -2851,7 +3090,9 @@ mod tests {
                 offbeat_core::proto::decode_envelope(&pending_leave[0].envelope).unwrap();
             assert!(matches!(
                 leave_envelope.payload,
-                Some(offbeat_core::proto::gossip_envelope::Payload::GroupUpdate(_))
+                Some(offbeat_core::proto::gossip_envelope::Payload::GroupUpdate(
+                    _
+                ))
             ));
             assert!(
                 joiner

@@ -55,7 +55,7 @@ impl ChatStateVector {
             HashMap::new();
         for message in messages {
             sequences
-                .entry(message.user_id.clone())
+                .entry(message.writer_id())
                 .or_default()
                 .entry(message.writer_seq)
                 .and_modify(|(id, logical_time)| {
@@ -658,6 +658,21 @@ impl SyncOrchestrator {
         topic: &str,
         envelopes: &[proto::GossipEnvelope],
     ) -> anyhow::Result<()> {
+        for envelope in envelopes {
+            if let Some(proto::gossip_envelope::Payload::ChatAuthorProof(proof)) = &envelope.payload
+            {
+                let updated_topics = self.db.save_chat_author_proof(
+                    &proof.writer_key,
+                    &proof.attestation_message,
+                    &proof.attestation_signature,
+                    &proof.issuer,
+                )?;
+                for updated_topic in updated_topics {
+                    self.notifier.notify_chat(&updated_topic);
+                }
+            }
+        }
+
         let mut messages = Vec::with_capacity(envelopes.len());
         for envelope in envelopes {
             let message = match self.decode_envelope(envelope)? {
@@ -670,10 +685,16 @@ impl SyncOrchestrator {
                     serde_json::from_slice(&plaintext)
                         .map_err(|error| anyhow::anyhow!("deserialise chat: {error}"))?
                 }
+                Some(GossipMessage::ChatAuthorProof { .. }) => continue,
                 _ => anyhow::bail!("chat catch-up contained a non-chat envelope"),
             };
             if message.topic != topic {
                 anyhow::bail!("chat topic mismatch");
+            }
+            if topic.starts_with("festival/")
+                && !crate::signing::verify_public_chat_message(&message)
+            {
+                anyhow::bail!("invalid public chat signature");
             }
             if message.writer_seq == 0 {
                 anyhow::bail!("chat message is missing a writer sequence");
@@ -731,6 +752,12 @@ impl SyncOrchestrator {
                 }
                 None
             }
+            GossipMessage::ChatAuthorProof { .. } => {
+                if !topic.starts_with("festival/") || !topic.contains("/chat/") {
+                    anyhow::bail!("chat proof routed on a non-public topic");
+                }
+                None
+            }
             _ => None,
         };
         let pk = festival_pk.unwrap_or([0u8; 32]);
@@ -757,6 +784,13 @@ impl SyncOrchestrator {
                 if let DispatchResult::DecryptedChat { topic } = &result {
                     self.notifier.record_received(topic);
                     self.notifier.notify_chat(topic);
+                }
+            }
+            GossipMessage::ChatAuthorProof { .. } => {
+                if let DispatchResult::ChatProofUpdated { topics } = &result {
+                    for topic in topics {
+                        self.notifier.notify_chat(topic);
+                    }
                 }
             }
             GossipMessage::SyncRequest { .. } => {}
@@ -799,6 +833,13 @@ impl SyncOrchestrator {
             }
 
             Payload::Chat(chat) => Ok(Some(GossipMessage::Chat(chat.clone().into()))),
+
+            Payload::ChatAuthorProof(proof) => Ok(Some(GossipMessage::ChatAuthorProof {
+                writer_key: proof.writer_key.clone(),
+                attestation_message: proof.attestation_message.clone(),
+                attestation_signature: proof.attestation_signature.clone(),
+                issuer: proof.issuer.clone(),
+            })),
 
             Payload::GroupUpdate(gu) => {
                 let group_id = group_id_from_state_doc(&gu.doc_id).ok_or_else(|| {
@@ -932,6 +973,9 @@ mod tests {
                 timestamp: "2026-01-01".to_string(),
                 writer_seq: 1,
                 logical_time: 1,
+                writer_key: Vec::new(),
+                signature: Vec::new(),
+                trust: crate::types::ChatTrust::Unverified,
             },
             ChatMessage {
                 id: "m2".to_string(),
@@ -943,6 +987,9 @@ mod tests {
                 timestamp: "2026-01-01".to_string(),
                 writer_seq: 2,
                 logical_time: 2,
+                writer_key: Vec::new(),
+                signature: Vec::new(),
+                trust: crate::types::ChatTrust::Unverified,
             },
             ChatMessage {
                 id: "m3".to_string(),
@@ -954,6 +1001,9 @@ mod tests {
                 timestamp: "2026-01-01".to_string(),
                 writer_seq: 1,
                 logical_time: 1,
+                writer_key: Vec::new(),
+                signature: Vec::new(),
+                trust: crate::types::ChatTrust::Unverified,
             },
         ];
 
@@ -1115,6 +1165,8 @@ mod tests {
                     timestamp: "display-only".to_string(),
                     writer_seq: index as u64 + 1,
                     logical_time,
+                    writer_key: Vec::new(),
+                    signature: Vec::new(),
                 })),
             })
             .collect();
@@ -1127,18 +1179,25 @@ mod tests {
     async fn test_handle_incoming_chat() {
         let orch = create_orchestrator();
 
+        let signing_key = crate::signing::generate_signing_key();
+        let topic = "festival/test/chat/campsite";
+        let mut message = ChatMessage {
+            id: "msg1".to_string(),
+            user_id: crate::auth::get_user_id(&signing_key),
+            display_name: "User".to_string(),
+            text: "hello".to_string(),
+            topic: topic.to_string(),
+            stage_id: None,
+            timestamp: "2026-01-01".to_string(),
+            writer_seq: 1,
+            logical_time: 1,
+            writer_key: Vec::new(),
+            signature: Vec::new(),
+            trust: crate::types::ChatTrust::Unverified,
+        };
+        crate::signing::sign_public_chat_message(&signing_key, &mut message).unwrap();
         let envelope = proto::GossipEnvelope {
-            payload: Some(proto::gossip_envelope::Payload::Chat(proto::ChatMessage {
-                id: "msg1".to_string(),
-                user_id: "user1".to_string(),
-                display_name: "User".to_string(),
-                text: "hello".to_string(),
-                topic: "test".to_string(),
-                stage_id: None,
-                timestamp: "2026-01-01".to_string(),
-                writer_seq: 1,
-                logical_time: 1,
-            })),
+            payload: Some(proto::gossip_envelope::Payload::Chat(message.into())),
         };
 
         assert!(
@@ -1146,7 +1205,7 @@ mod tests {
                 .await
                 .is_err()
         );
-        orch.handle_incoming_envelope("test", &envelope)
+        orch.handle_incoming_envelope(topic, &envelope)
             .await
             .unwrap();
 

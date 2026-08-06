@@ -1,6 +1,6 @@
 # Auth & Identity Protocol
 
-> **Status: accepted trust policy.** Public-chat authorship, offline attestation, and unknown-sender behaviour are defined below. Delivery implementation is tracked by `offbeat-t6a.4`; causal ordering is tracked separately by `offbeat-t6a.11`.
+> **Status: signed-chat baseline implemented.** Public messages carry offline-verifiable Ed25519 authorship, cached MainDO proofs drive visible trust, and relay sessions use pinned-issuer, festival-bound single-use challenges. Advanced key rotation, revocation snapshots, and complete equivocation-proof propagation remain hardening work.
 
 This document describes the identity, authentication, and message-signing
 protocol proposed across Offbeat transports. It supersedes the "Future
@@ -19,7 +19,7 @@ work" section of `admin-protocol.md` where the implementation adopts it.
    check-ins) is authenticated by AES-256-GCM encryption alone. If you
    have the group key, you're trusted. No per-message signatures.
 5. **Public-chat signing** — attendee Ed25519 signatures prove authorship
-   for public stage/general/campsite messages
+   for public stage and festival-wide campsite messages
 6. **Festival authority** — festival state has a separate organiser/DO
    signing key and is never authorised by an attendee attestation
 7. **Session-level access control** — expensive auth checks happen once

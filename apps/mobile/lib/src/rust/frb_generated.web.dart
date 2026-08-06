@@ -190,6 +190,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ChatMessageDto dco_decode_box_autoadd_chat_message_dto(dynamic raw);
 
   @protected
+  FestivalCheckInDto dco_decode_box_autoadd_festival_check_in_dto(dynamic raw);
+
+  @protected
   FestivalRegistryCacheDto dco_decode_box_autoadd_festival_registry_cache_dto(
     dynamic raw,
   );
@@ -208,6 +211,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   double dco_decode_f_64(dynamic raw);
+
+  @protected
+  FestivalCheckInDto dco_decode_festival_check_in_dto(dynamic raw);
 
   @protected
   FestivalRegistryCacheDto dco_decode_festival_registry_cache_dto(dynamic raw);
@@ -238,6 +244,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   int dco_decode_i_32(dynamic raw);
+
+  @protected
+  PlatformInt64 dco_decode_i_64(dynamic raw);
 
   @protected
   IdentityDto dco_decode_identity_dto(dynamic raw);
@@ -325,6 +334,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   AttestationDto? dco_decode_opt_box_autoadd_attestation_dto(dynamic raw);
+
+  @protected
+  FestivalCheckInDto? dco_decode_opt_box_autoadd_festival_check_in_dto(
+    dynamic raw,
+  );
 
   @protected
   FestivalRegistryCacheDto?
@@ -533,6 +547,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  FestivalCheckInDto sse_decode_box_autoadd_festival_check_in_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   FestivalRegistryCacheDto sse_decode_box_autoadd_festival_registry_cache_dto(
     SseDeserializer deserializer,
   );
@@ -553,6 +572,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   double sse_decode_f_64(SseDeserializer deserializer);
+
+  @protected
+  FestivalCheckInDto sse_decode_festival_check_in_dto(
+    SseDeserializer deserializer,
+  );
 
   @protected
   FestivalRegistryCacheDto sse_decode_festival_registry_cache_dto(
@@ -589,6 +613,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   int sse_decode_i_32(SseDeserializer deserializer);
+
+  @protected
+  PlatformInt64 sse_decode_i_64(SseDeserializer deserializer);
 
   @protected
   IdentityDto sse_decode_identity_dto(SseDeserializer deserializer);
@@ -696,6 +723,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   AttestationDto? sse_decode_opt_box_autoadd_attestation_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  FestivalCheckInDto? sse_decode_opt_box_autoadd_festival_check_in_dto(
     SseDeserializer deserializer,
   );
 
@@ -947,6 +979,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_box_autoadd_festival_check_in_dto(
+    FestivalCheckInDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_box_autoadd_festival_registry_cache_dto(
     FestivalRegistryCacheDto self,
     SseSerializer serializer,
@@ -975,6 +1013,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_f_64(double self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_festival_check_in_dto(
+    FestivalCheckInDto self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_festival_registry_cache_dto(
@@ -1020,6 +1064,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_i_32(int self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_i_64(PlatformInt64 self, SseSerializer serializer);
 
   @protected
   void sse_encode_identity_dto(IdentityDto self, SseSerializer serializer);
@@ -1159,6 +1206,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_opt_box_autoadd_attestation_dto(
     AttestationDto? self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_opt_box_autoadd_festival_check_in_dto(
+    FestivalCheckInDto? self,
     SseSerializer serializer,
   );
 

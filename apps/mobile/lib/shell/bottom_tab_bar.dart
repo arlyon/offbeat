@@ -6,7 +6,6 @@
 
 import 'package:flutter/material.dart';
 import '../theme/tokens.dart';
-import '../widgets/live_dot.dart';
 import '../widgets/dotted_border.dart';
 
 enum AppTab { schedule, now, social }
@@ -14,11 +13,13 @@ enum AppTab { schedule, now, social }
 class OffbeatTabBar extends StatelessWidget {
   final AppTab activeTab;
   final ValueChanged<AppTab> onTabChanged;
+  final int currentSetCount;
 
   const OffbeatTabBar({
     super.key,
     required this.activeTab,
     required this.onTabChanged,
+    this.currentSetCount = 0,
   });
 
   @override
@@ -41,7 +42,7 @@ class OffbeatTabBar extends StatelessWidget {
               icon: Icons.radio,
               activeTab: activeTab,
               onTap: onTabChanged,
-              showLiveDot: true,
+              badgeCount: currentSetCount,
             ),
             _TabItem(
               tab: AppTab.social,
@@ -63,7 +64,7 @@ class _TabItem extends StatelessWidget {
   final IconData icon;
   final AppTab activeTab;
   final ValueChanged<AppTab> onTap;
-  final bool showLiveDot;
+  final int badgeCount;
 
   const _TabItem({
     required this.tab,
@@ -71,7 +72,7 @@ class _TabItem extends StatelessWidget {
     required this.icon,
     required this.activeTab,
     required this.onTap,
-    this.showLiveDot = false,
+    this.badgeCount = 0,
   });
 
   @override
@@ -103,11 +104,27 @@ class _TabItem extends StatelessWidget {
                     clipBehavior: Clip.none,
                     children: [
                       Icon(icon, size: 18, color: color),
-                      if (showLiveDot)
-                        const Positioned(
-                          top: -2,
-                          right: -4,
-                          child: LiveDot(size: 6),
+                      if (badgeCount > 0)
+                        Positioned(
+                          top: -8,
+                          right: -11,
+                          child: Container(
+                            constraints: const BoxConstraints(minWidth: 16),
+                            height: 16,
+                            padding: const EdgeInsets.symmetric(horizontal: 3),
+                            color: colorAccent,
+                            alignment: Alignment.center,
+                            child: Text(
+                              '$badgeCount',
+                              style: const TextStyle(
+                                fontFamily: 'JetBrainsMono',
+                                fontSize: 9,
+                                fontWeight: FontWeight.w700,
+                                color: colorAccentInk,
+                                height: 1,
+                              ),
+                            ),
+                          ),
                         ),
                     ],
                   ),

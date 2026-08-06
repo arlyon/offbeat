@@ -119,6 +119,15 @@ pub struct GroupPin {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ChatTrust {
+    #[default]
+    Unverified,
+    Verified,
+    VerifiedGrace,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatMessage {
@@ -134,6 +143,30 @@ pub struct ChatMessage {
     /// Per-topic Lamport clock used for authoritative ordering.
     #[serde(default)]
     pub logical_time: u64,
+    /// Raw Ed25519 public key for public-chat authorship. Empty for encrypted group chat.
+    #[serde(default)]
+    pub writer_key: Vec<u8>,
+    /// Ed25519 signature over the canonical public-chat message bytes.
+    #[serde(default)]
+    pub signature: Vec<u8>,
+    /// Local trust classification. Never accepted from the wire.
+    #[serde(default)]
+    pub trust: ChatTrust,
+}
+
+impl ChatMessage {
+    /// Collision-resistant append-log writer identity. Legacy/group messages
+    /// without an authorship key retain their existing user ID.
+    pub fn writer_id(&self) -> String {
+        if self.writer_key.len() == 32 {
+            self.writer_key
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect()
+        } else {
+            self.user_id.clone()
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

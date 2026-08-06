@@ -6,6 +6,8 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
+// These functions are ignored because they are not marked as `pub`: `chat_trust_label`, `month_number`, `sort_lineup_days`
+
 /// Read lineup from a doc manager (used by watch_lineup).
 ///
 /// Reads from top-level named maps `"stages"`, `"days"`, `"sets"` where each
@@ -156,6 +158,7 @@ class ChatMessageDto {
   final String topic;
   final String? stageId;
   final String timestamp;
+  final String trust;
 
   const ChatMessageDto({
     required this.id,
@@ -165,6 +168,7 @@ class ChatMessageDto {
     required this.topic,
     this.stageId,
     required this.timestamp,
+    required this.trust,
   });
 
   @override
@@ -175,7 +179,8 @@ class ChatMessageDto {
       text.hashCode ^
       topic.hashCode ^
       stageId.hashCode ^
-      timestamp.hashCode;
+      timestamp.hashCode ^
+      trust.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -188,7 +193,51 @@ class ChatMessageDto {
           text == other.text &&
           topic == other.topic &&
           stageId == other.stageId &&
-          timestamp == other.timestamp;
+          timestamp == other.timestamp &&
+          trust == other.trust;
+}
+
+class FestivalCheckInDto {
+  final String festivalId;
+  final String kind;
+  final String? value;
+  final PlatformInt64 checkedAt;
+  final PlatformInt64 expiresAt;
+  final PlatformInt64 revision;
+  final int pendingGroupCount;
+
+  const FestivalCheckInDto({
+    required this.festivalId,
+    required this.kind,
+    this.value,
+    required this.checkedAt,
+    required this.expiresAt,
+    required this.revision,
+    required this.pendingGroupCount,
+  });
+
+  @override
+  int get hashCode =>
+      festivalId.hashCode ^
+      kind.hashCode ^
+      value.hashCode ^
+      checkedAt.hashCode ^
+      expiresAt.hashCode ^
+      revision.hashCode ^
+      pendingGroupCount.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is FestivalCheckInDto &&
+          runtimeType == other.runtimeType &&
+          festivalId == other.festivalId &&
+          kind == other.kind &&
+          value == other.value &&
+          checkedAt == other.checkedAt &&
+          expiresAt == other.expiresAt &&
+          revision == other.revision &&
+          pendingGroupCount == other.pendingGroupCount;
 }
 
 class FestivalRegistryCacheDto {
@@ -281,16 +330,22 @@ class GroupMemberDto {
   final String userId;
   final String displayName;
   final String status;
+  final String locationKind;
   final String? stageId;
   final String? customLocation;
+  final String? updatedAt;
+  final String? expiresAt;
   final List<String> starredSetIds;
 
   const GroupMemberDto({
     required this.userId,
     required this.displayName,
     required this.status,
+    required this.locationKind,
     this.stageId,
     this.customLocation,
+    this.updatedAt,
+    this.expiresAt,
     required this.starredSetIds,
   });
 
@@ -299,8 +354,11 @@ class GroupMemberDto {
       userId.hashCode ^
       displayName.hashCode ^
       status.hashCode ^
+      locationKind.hashCode ^
       stageId.hashCode ^
       customLocation.hashCode ^
+      updatedAt.hashCode ^
+      expiresAt.hashCode ^
       starredSetIds.hashCode;
 
   @override
@@ -311,8 +369,11 @@ class GroupMemberDto {
           userId == other.userId &&
           displayName == other.displayName &&
           status == other.status &&
+          locationKind == other.locationKind &&
           stageId == other.stageId &&
           customLocation == other.customLocation &&
+          updatedAt == other.updatedAt &&
+          expiresAt == other.expiresAt &&
           starredSetIds == other.starredSetIds;
 }
 

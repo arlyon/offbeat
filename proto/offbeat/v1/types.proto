@@ -17,4 +17,6 @@ message ChatMessage {
   string timestamp = 7;   // ISO 8601 display metadata only
   uint64 writer_seq = 8;
   uint64 logical_time = 9; // per-topic Lamport clock; authoritative order
+  bytes writer_key = 10;   // raw 32-byte Ed25519 public key
+  bytes signature = 11;    // Ed25519 signature over canonical public-chat bytes
 }

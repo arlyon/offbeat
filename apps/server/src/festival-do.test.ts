@@ -1,11 +1,15 @@
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
 import { ed25519 } from "@noble/curves/ed25519.js";
 import {
+	ChatMessageSchema,
 	ErrorCode,
 	FestivalUpdateKind,
 	GossipEnvelopeSchema,
+	publicChatSigningPayload,
+	relayAuthSigningPayload,
 	RelayClientMessageSchema,
 	RelayServerMessageSchema,
+	type GossipEnvelope,
 } from "@offbeat/protocol";
 import { type Unstable_DevWorker, unstable_dev } from "wrangler";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -37,6 +41,41 @@ function generateKeypair() {
 	return { secretKey, publicKey, publicKeyHex: bytesToHex(publicKey) };
 }
 
+type TestKeypair = ReturnType<typeof generateKeypair>;
+
+function chatProofEnvelope(
+	attestation: { message: string; signature: string; issuer: string },
+	kp: TestKeypair,
+): GossipEnvelope {
+	return create(GossipEnvelopeSchema, {
+		payload: {
+			case: "chatAuthorProof",
+			value: {
+				writerKey: kp.publicKey,
+				attestationMessage: attestation.message,
+				attestationSignature: hexToBytes(attestation.signature),
+				issuer: hexToBytes(attestation.issuer),
+			},
+		},
+	});
+}
+
+function signChatEnvelope(envelope: GossipEnvelope, kp: TestKeypair): GossipEnvelope {
+	if (envelope.payload.case !== "chat") throw new Error("expected chat envelope");
+	const source = envelope.payload.value;
+	const topicParts = source.topic.split("/");
+	const channel = topicParts[topicParts.length - 1];
+	const chat = create(ChatMessageSchema, {
+		...source,
+		userId: kp.publicKeyHex.slice(0, 16),
+		writerKey: kp.publicKey,
+		logicalTime: source.logicalTime === 0n ? source.writerSeq : source.logicalTime,
+		stageId: channel === "campsite" ? undefined : source.stageId ?? channel,
+	});
+	chat.signature = ed25519.sign(publicChatSigningPayload(chat), kp.secretKey);
+	return create(GossipEnvelopeSchema, { payload: { case: "chat", value: chat } });
+}
+
 /** Register a user via WebAuthn dev bypass and return the attestation. */
 async function registerUser(pubKeyHex: string) {
 	const beginResp = await worker.fetch("/auth/register/begin", {
@@ -55,14 +94,20 @@ async function registerUser(pubKeyHex: string) {
 	};
 }
 
+const relayHelloBySocket = new WeakMap<WebSocket, { challenge: Uint8Array; festivalId: string }>();
+
 /** Build protobuf auth message for WS authentication. */
 function buildAuthMsg(
 	attestation: { message: string; signature: string; issuer: string },
 	kp: { secretKey: Uint8Array; publicKey: Uint8Array },
+	ws: WebSocket,
 ) {
-	const timestamp = Math.floor(Date.now() / 1000).toString();
-	const sessionMsg = new TextEncoder().encode(`session:${timestamp}`);
-	const sessionSig = ed25519.sign(sessionMsg, kp.secretKey);
+	const hello = relayHelloBySocket.get(ws);
+	if (!hello) throw new Error("relay hello challenge not received");
+	const sessionSig = ed25519.sign(
+		relayAuthSigningPayload(hello.festivalId, hello.challenge, kp.publicKey),
+		kp.secretKey,
+	);
 	return create(RelayClientMessageSchema, {
 		msg: {
 			case: "auth",
@@ -74,7 +119,8 @@ function buildAuthMsg(
 					issuer: hexToBytes(attestation.issuer),
 				},
 				signature: sessionSig,
-				timestamp,
+				timestamp: "",
+				challenge: hello.challenge,
 			},
 		},
 	});
@@ -84,13 +130,24 @@ function buildAuthMsg(
 async function connectWS(festivalId: string) {
 	const url = `${workerUrl}/festivals/${festivalId}/ws`;
 	const ws = new WebSocket(url);
+	ws.binaryType = "arraybuffer";
+	ws.addEventListener("message", (event) => {
+		const message = fromBinary(
+			RelayServerMessageSchema,
+			new Uint8Array(event.data as ArrayBuffer),
+		);
+		if (message.msg.case === "hello") {
+			relayHelloBySocket.set(ws, {
+				challenge: message.msg.value.authChallenge,
+				festivalId: message.msg.value.festivalId,
+			});
+		}
+	});
 	await new Promise<void>((resolve, reject) => {
 		ws.onopen = () => resolve();
 		ws.onerror = (e) => reject(new Error(`WS failed: ${e}`));
 		setTimeout(() => reject(new Error("WS timeout")), 5000);
 	});
-	// Drain hello message
-	ws.binaryType = "arraybuffer";
 	return ws;
 }
 
@@ -270,6 +327,52 @@ describe("FestivalDO lane split", () => {
 			ws.close();
 		});
 
+		it("pins the MainDO issuer and consumes each socket challenge once", async () => {
+			const user = generateKeypair();
+			const forgedIssuer = generateKeypair();
+			const now = Math.floor(Date.now() / 1000);
+			const forgedMessage = `attestation:v1:${user.publicKeyHex}:${now}:${now + 3600}`;
+			const forgedAttestation = {
+				message: forgedMessage,
+				signature: bytesToHex(
+					ed25519.sign(new TextEncoder().encode(forgedMessage), forgedIssuer.secretKey),
+				),
+				issuer: forgedIssuer.publicKeyHex,
+			};
+			const forgedWs = await connectWS(FESTIVAL_ID);
+			await drainMessages(forgedWs);
+			const forgedError = waitForMsg(forgedWs, "error");
+			forgedWs.send(
+				toBinary(
+					RelayClientMessageSchema,
+					buildAuthMsg(forgedAttestation, user, forgedWs),
+				),
+			);
+			const rejectedIssuer = await forgedError;
+			expect(rejectedIssuer.msg.case).toBe("error");
+			if (rejectedIssuer.msg.case === "error") {
+				expect(rejectedIssuer.msg.value.code).toBe(ErrorCode.UNAUTHORIZED);
+			}
+			forgedWs.close();
+
+			const { attestation } = await registerUser(user.publicKeyHex);
+			const ws = await connectWS(FESTIVAL_ID);
+			await drainMessages(ws);
+			const auth = buildAuthMsg(attestation, user, ws);
+			const authenticated = waitForMsg(ws, "authOk");
+			ws.send(toBinary(RelayClientMessageSchema, auth));
+			await authenticated;
+
+			const replayError = waitForMsg(ws, "error");
+			ws.send(toBinary(RelayClientMessageSchema, auth));
+			const rejectedReplay = await replayError;
+			expect(rejectedReplay.msg.case).toBe("error");
+			if (rejectedReplay.msg.case === "error") {
+				expect(rejectedReplay.msg.value.code).toBe(ErrorCode.UNAUTHORIZED);
+			}
+			ws.close();
+		});
+
 		it("rejects festivalUpdate from authenticated client", async () => {
 			const kp = generateKeypair();
 			const { attestation } = await registerUser(kp.publicKeyHex);
@@ -279,7 +382,7 @@ describe("FestivalDO lane split", () => {
 
 			// Authenticate
 			const authOkPromise = waitForMsg(ws, "authOk");
-			const authMsg = buildAuthMsg(attestation, kp);
+			const authMsg = buildAuthMsg(attestation, kp, ws);
 			ws.send(toBinary(RelayClientMessageSchema, authMsg));
 			await authOkPromise;
 
@@ -336,7 +439,7 @@ describe("FestivalDO lane split", () => {
 			const wsA = await connectWS(FESTIVAL_ID);
 			await drainMessages(wsA);
 			const authOkA = waitForMsg(wsA, "authOk");
-			wsA.send(toBinary(RelayClientMessageSchema, buildAuthMsg(att1, kp1)));
+			wsA.send(toBinary(RelayClientMessageSchema, buildAuthMsg(att1, kp1, wsA)));
 			await authOkA;
 			const subA = waitForMsg(wsA, "subscribed");
 			sendClientMsg(wsA, {
@@ -351,7 +454,7 @@ describe("FestivalDO lane split", () => {
 			const wsB = await connectWS(FESTIVAL_ID);
 			await drainMessages(wsB);
 			const authOkB = waitForMsg(wsB, "authOk");
-			wsB.send(toBinary(RelayClientMessageSchema, buildAuthMsg(att2, kp2)));
+			wsB.send(toBinary(RelayClientMessageSchema, buildAuthMsg(att2, kp2, wsB)));
 			await authOkB;
 			const subB = waitForMsg(wsB, "subscribed");
 			sendClientMsg(wsB, { msg: { case: "subscribe", value: { topics: [topic] } } });
@@ -363,20 +466,23 @@ describe("FestivalDO lane split", () => {
 			const broadcastPromise = waitForMsg(wsB, "gossip");
 
 			// A sends a chat message
-			const chatEnvelope = create(GossipEnvelopeSchema, {
-				payload: {
-					case: "chat",
-					value: {
-						id: "chat-route-test",
-						userId: kp1.publicKeyHex,
-						displayName: "UserA",
-						text: "routed chat",
-						topic,
-						timestamp: new Date().toISOString(),
-						writerSeq: 1n,
+			const chatEnvelope = signChatEnvelope(
+				create(GossipEnvelopeSchema, {
+					payload: {
+						case: "chat",
+						value: {
+							id: "chat-route-test",
+							userId: kp1.publicKeyHex,
+							displayName: "UserA",
+							text: "routed chat",
+							topic,
+							timestamp: new Date().toISOString(),
+							writerSeq: 1n,
+						},
 					},
-				},
-			});
+				}),
+				kp1,
+			);
 			sendClientMsg(wsA, {
 				msg: { case: "gossip", value: { topic, message: chatEnvelope } },
 			});
@@ -412,21 +518,24 @@ describe("FestivalDO lane split", () => {
 			}
 
 			const oversizedError = waitForMsg(wsA, "error");
-			const oversized = create(GossipEnvelopeSchema, {
-				payload: {
-					case: "chat",
-					value: {
-						id: "oversized-chat",
-						userId: kp1.publicKeyHex,
-						displayName: "UserA",
-						text: "x".repeat(70 * 1024),
-						topic,
-						timestamp: new Date().toISOString(),
-						writerSeq: 2n,
-						logicalTime: 2n,
+			const oversized = signChatEnvelope(
+				create(GossipEnvelopeSchema, {
+					payload: {
+						case: "chat",
+						value: {
+							id: "oversized-chat",
+							userId: kp1.publicKeyHex,
+							displayName: "UserA",
+							text: "x".repeat(70 * 1024),
+							topic,
+							timestamp: new Date().toISOString(),
+							writerSeq: 2n,
+							logicalTime: 2n,
+						},
 					},
-				},
-			});
+				}),
+				kp1,
+			);
 			sendClientMsg(wsA, {
 				msg: { case: "gossip", value: { topic, message: oversized } },
 			});
@@ -448,7 +557,7 @@ describe("FestivalDO lane split", () => {
 			const ws = await connectWS(FESTIVAL_ID);
 			await drainMessages(ws);
 			const authOk = waitForMsg(ws, "authOk");
-			ws.send(toBinary(RelayClientMessageSchema, buildAuthMsg(attestation, kp)));
+			ws.send(toBinary(RelayClientMessageSchema, buildAuthMsg(attestation, kp, ws)));
 			await authOk;
 			// Advertise acknowledgement support without subscribing to the group.
 			const ackSubscription = waitForMsg(ws, "subscribed");
@@ -544,27 +653,30 @@ describe("FestivalDO lane split", () => {
 			const ws = await connectWS(FESTIVAL_ID);
 			await drainMessages(ws);
 			const authOk = waitForMsg(ws, "authOk");
-			ws.send(toBinary(RelayClientMessageSchema, buildAuthMsg(attestation, kp)));
+			ws.send(toBinary(RelayClientMessageSchema, buildAuthMsg(attestation, kp, ws)));
 			await authOk;
 			const sub = waitForMsg(ws, "subscribed");
 			sendClientMsg(ws, { msg: { case: "subscribe", value: { topics: [topic] } } });
 			await sub;
 
 			// Send a chat message
-			const envelope = create(GossipEnvelopeSchema, {
-				payload: {
-					case: "chat",
-					value: {
-						id: "catchup-test-1",
-						userId: kp.publicKeyHex,
-						displayName: "Tester",
-						text: "catchup me",
-						topic,
-						timestamp: new Date().toISOString(),
-						writerSeq: 1n,
+			const envelope = signChatEnvelope(
+				create(GossipEnvelopeSchema, {
+					payload: {
+						case: "chat",
+						value: {
+							id: "catchup-test-1",
+							userId: kp.publicKeyHex,
+							displayName: "Tester",
+							text: "catchup me",
+							topic,
+							timestamp: new Date().toISOString(),
+							writerSeq: 1n,
+						},
 					},
-				},
-			});
+				}),
+				kp,
+			);
 			sendClientMsg(ws, {
 				msg: { case: "gossip", value: { topic, message: envelope } },
 			});
@@ -591,7 +703,7 @@ describe("FestivalDO lane split", () => {
 			const ws = await connectWS(FESTIVAL_ID);
 			await drainMessages(ws);
 			const authOk = waitForMsg(ws, "authOk");
-			ws.send(toBinary(RelayClientMessageSchema, buildAuthMsg(attestation, kp)));
+			ws.send(toBinary(RelayClientMessageSchema, buildAuthMsg(attestation, kp, ws)));
 			await authOk;
 			const sub = waitForMsg(ws, "subscribed");
 			sendClientMsg(ws, { msg: { case: "subscribe", value: { topics: [groupTopic] } } });
@@ -633,29 +745,41 @@ describe("FestivalDO lane split", () => {
 			const ws = await connectWS(FESTIVAL_ID);
 			await drainMessages(ws);
 			const authOk = waitForMsg(ws, "authOk");
-			ws.send(toBinary(RelayClientMessageSchema, buildAuthMsg(attestation, kp)));
+			ws.send(toBinary(RelayClientMessageSchema, buildAuthMsg(attestation, kp, ws)));
 			await authOk;
 			const sub = waitForMsg(ws, "subscribed");
 			sendClientMsg(ws, { msg: { case: "subscribe", value: { topics: [topic] } } });
 			await sub;
 
+			// Proofs are separate from messages and are replayed before bounded history.
+			sendClientMsg(ws, {
+				msg: {
+					case: "gossip",
+					value: { topic, message: chatProofEnvelope(attestation, kp) },
+				},
+			});
+			await new Promise((resolve) => setTimeout(resolve, 100));
+
 			// Send two chat messages with different writerSeqs
 			const firstMessageTimestamp = new Date().toISOString();
 			for (const seq of [1n, 2n]) {
-				const envelope = create(GossipEnvelopeSchema, {
-					payload: {
-						case: "chat",
-						value: {
-							id: `sv-test-${seq}`,
-							userId: kp.publicKeyHex,
-							displayName: "Tester",
-							text: `msg seq ${seq}`,
-							topic,
-							timestamp: seq === 1n ? firstMessageTimestamp : new Date().toISOString(),
-							writerSeq: seq,
+				const envelope = signChatEnvelope(
+					create(GossipEnvelopeSchema, {
+						payload: {
+							case: "chat",
+							value: {
+								id: `sv-test-${seq}`,
+								userId: kp.publicKeyHex,
+								displayName: "Tester",
+								text: `msg seq ${seq}`,
+								topic,
+								timestamp: seq === 1n ? firstMessageTimestamp : new Date().toISOString(),
+								writerSeq: seq,
+							},
 						},
-					},
-				});
+					}),
+					kp,
+				);
 				sendClientMsg(ws, {
 					msg: { case: "gossip", value: { topic, message: envelope } },
 				});
@@ -663,7 +787,8 @@ describe("FestivalDO lane split", () => {
 			await new Promise((r) => setTimeout(r, 100));
 
 			const forgedError = waitForMsg(ws, "error");
-			const forged = create(GossipEnvelopeSchema, {
+			const forgedKp = generateKeypair();
+			const forged = signChatEnvelope(create(GossipEnvelopeSchema, {
 				payload: {
 					case: "chat",
 					value: {
@@ -676,7 +801,7 @@ describe("FestivalDO lane split", () => {
 						writerSeq: 3n,
 					},
 				},
-			});
+			}), forgedKp);
 			sendClientMsg(ws, { msg: { case: "gossip", value: { topic, message: forged } } });
 			const rejectedForgery = await forgedError;
 			expect(rejectedForgery.msg.case).toBe("error");
@@ -685,21 +810,24 @@ describe("FestivalDO lane split", () => {
 			}
 
 			const poisonError = waitForMsg(ws, "error");
-			const poison = create(GossipEnvelopeSchema, {
-				payload: {
-					case: "chat",
-					value: {
-						id: "clock-poison",
-						userId: kp.publicKeyHex,
-						displayName: "Tester",
-						text: "poison",
-						topic,
-						timestamp: new Date().toISOString(),
-						writerSeq: 3n,
-						logicalTime: 2_000_000n,
+			const poison = signChatEnvelope(
+				create(GossipEnvelopeSchema, {
+					payload: {
+						case: "chat",
+						value: {
+							id: "clock-poison",
+							userId: kp.publicKeyHex,
+							displayName: "Tester",
+							text: "poison",
+							topic,
+							timestamp: new Date().toISOString(),
+							writerSeq: 3n,
+							logicalTime: 2_000_000n,
+						},
 					},
-				},
-			});
+				}),
+				kp,
+			);
 			sendClientMsg(ws, { msg: { case: "gossip", value: { topic, message: poison } } });
 			const rejectedPoison = await poisonError;
 			expect(rejectedPoison.msg.case).toBe("error");
@@ -719,8 +847,10 @@ describe("FestivalDO lane split", () => {
 			const firstPage = await firstPagePromise;
 			expect(firstPage.msg.case).toBe("chatDiff");
 			if (firstPage.msg.case === "chatDiff") {
-				expect(firstPage.msg.value.messages).toHaveLength(1);
-				const firstMessage = firstPage.msg.value.messages[0];
+				expect(firstPage.msg.value.messages[0]?.payload.case).toBe("chatAuthorProof");
+				const firstMessage = firstPage.msg.value.messages.find(
+					(message) => message.payload.case === "chat",
+				);
 				expect(firstMessage?.payload.case).toBe("chat");
 				if (firstMessage?.payload.case === "chat") {
 					expect(firstMessage.payload.value.id).toBe("sv-test-1");
@@ -775,45 +905,32 @@ describe("FestivalDO lane split", () => {
 				).toBe(true);
 			}
 
-			// A same-ID authoritative Lamport value repairs the fallback row in
-			// place, so the stale commitment is not served forever.
-			const repaired = create(GossipEnvelopeSchema, {
-				payload: {
-					case: "chat",
-					value: {
-						id: "sv-test-1",
-						userId: kp.publicKeyHex,
-						displayName: "Tester",
-						text: "msg seq 1",
-						topic,
-						timestamp: firstMessageTimestamp,
-						writerSeq: 1n,
-						logicalTime: 50n,
+			// The signature binds Lamport order, so a same-ID rewrite cannot
+			// repair or replace the committed append-log position.
+			const reordered = signChatEnvelope(
+				create(GossipEnvelopeSchema, {
+					payload: {
+						case: "chat",
+						value: {
+							id: "sv-test-1",
+							userId: kp.publicKeyHex,
+							displayName: "Tester",
+							text: "msg seq 1",
+							topic,
+							timestamp: firstMessageTimestamp,
+							writerSeq: 1n,
+							logicalTime: 50n,
+						},
 					},
-				},
-			});
-			sendClientMsg(ws, { msg: { case: "gossip", value: { topic, message: repaired } } });
-			await new Promise((resolve) => setTimeout(resolve, 100));
-			const repairedDiffPromise = waitForMsg(ws, "chatDiff");
-			sendClientMsg(ws, {
-				msg: {
-					case: "chatCatchup",
-					value: {
-						topic,
-						sv: { [kp.publicKeyHex]: 1n },
-						headIds: { [kp.publicKeyHex]: "sv-test-1@50" },
-						limit: 50,
-					},
-				},
-			});
-			const repairedDiff = await repairedDiffPromise;
-			if (repairedDiff.msg.case === "chatDiff") {
-				expect(
-					repairedDiff.msg.value.messages.some(
-						(message) =>
-							message.payload.case === "chat" && message.payload.value.id === "sv-test-1",
-					),
-				).toBe(false);
+				}),
+				kp,
+			);
+			const reorderedError = waitForMsg(ws, "error");
+			sendClientMsg(ws, { msg: { case: "gossip", value: { topic, message: reordered } } });
+			const rejectedReorder = await reorderedError;
+			expect(rejectedReorder.msg.case).toBe("error");
+			if (rejectedReorder.msg.case === "error") {
+				expect(rejectedReorder.msg.value.code).toBe(ErrorCode.MALFORMED);
 			}
 
 			const authoritativePagePromise = waitForMsg(ws, "chatDiff");
@@ -825,33 +942,36 @@ describe("FestivalDO lane split", () => {
 			});
 			const authoritativePage = await authoritativePagePromise;
 			if (authoritativePage.msg.case === "chatDiff") {
-				const repairedMessage = authoritativePage.msg.value.messages.find(
+				const originalMessage = authoritativePage.msg.value.messages.find(
 					(message) =>
 						message.payload.case === "chat" && message.payload.value.id === "sv-test-1",
 				);
-				expect(repairedMessage?.payload.case).toBe("chat");
-				if (repairedMessage?.payload.case === "chat") {
-					expect(repairedMessage.payload.value.logicalTime).toBe(50n);
-					expect(repairedMessage.payload.value.timestamp).toBe(firstMessageTimestamp);
+				expect(originalMessage?.payload.case).toBe("chat");
+				if (originalMessage?.payload.case === "chat") {
+					expect(originalMessage.payload.value.logicalTime).toBe(1n);
+					expect(originalMessage.payload.value.timestamp).toBe(firstMessageTimestamp);
 				}
 			}
 
 			const collisionError = waitForMsg(ws, "error");
-			const changedPayload = create(GossipEnvelopeSchema, {
-				payload: {
-					case: "chat",
-					value: {
-						id: "sv-test-1",
-						userId: kp.publicKeyHex,
-						displayName: "Tester",
-						text: "changed immutable text",
-						topic,
-						timestamp: firstMessageTimestamp,
-						writerSeq: 1n,
-						logicalTime: 51n,
+			const changedPayload = signChatEnvelope(
+				create(GossipEnvelopeSchema, {
+					payload: {
+						case: "chat",
+						value: {
+							id: "sv-test-1",
+							userId: kp.publicKeyHex,
+							displayName: "Tester",
+							text: "changed immutable text",
+							topic,
+							timestamp: firstMessageTimestamp,
+							writerSeq: 1n,
+							logicalTime: 51n,
+						},
 					},
-				},
-			});
+				}),
+				kp,
+			);
 			sendClientMsg(ws, {
 				msg: { case: "gossip", value: { topic, message: changedPayload } },
 			});
@@ -882,11 +1002,11 @@ describe("FestivalDO lane split", () => {
 		it("caps the fully encoded chatDiff response", async () => {
 			const kp = generateKeypair();
 			const { attestation } = await registerUser(kp.publicKeyHex);
-			const topic = `festival/${FESTIVAL_ID}/chat/byte-budget-${crypto.randomUUID()}-${"t".repeat(20_000)}`;
+			const topic = `festival/${FESTIVAL_ID}/chat/byte-budget-${crypto.randomUUID()}-${"t".repeat(8_000)}`;
 			const ws = await connectWS(FESTIVAL_ID);
 			await drainMessages(ws);
 			const authOk = waitForMsg(ws, "authOk");
-			ws.send(toBinary(RelayClientMessageSchema, buildAuthMsg(attestation, kp)));
+			ws.send(toBinary(RelayClientMessageSchema, buildAuthMsg(attestation, kp, ws)));
 			await authOk;
 
 			// The old implementation reserved only 8 KiB for response framing.
@@ -894,21 +1014,24 @@ describe("FestivalDO lane split", () => {
 			// actual wire limit even though its envelope-only accounting passed.
 			const text = "x".repeat(43_000);
 			for (let sequence = 1n; sequence <= 10n; sequence += 1n) {
-				const envelope = create(GossipEnvelopeSchema, {
-					payload: {
-						case: "chat",
-						value: {
-							id: `byte-budget-${sequence}`,
-							userId: kp.publicKeyHex,
-							displayName: "Tester",
-							text,
-							topic,
-							timestamp: new Date().toISOString(),
-							writerSeq: sequence,
-							logicalTime: sequence,
+				const envelope = signChatEnvelope(
+					create(GossipEnvelopeSchema, {
+						payload: {
+							case: "chat",
+							value: {
+								id: `byte-budget-${sequence}`,
+								userId: kp.publicKeyHex,
+								displayName: "Tester",
+								text,
+								topic,
+								timestamp: new Date().toISOString(),
+								writerSeq: sequence,
+								logicalTime: sequence,
+							},
 						},
-					},
-				});
+					}),
+					kp,
+				);
 				sendClientMsg(ws, {
 					msg: { case: "gossip", value: { topic, message: envelope } },
 				});
@@ -971,7 +1094,7 @@ describe("FestivalDO lane split", () => {
 			const ws = await connectWS(FESTIVAL_ID);
 			await drainMessages(ws);
 			const authOk = waitForMsg(ws, "authOk");
-			ws.send(toBinary(RelayClientMessageSchema, buildAuthMsg(attestation, kp)));
+			ws.send(toBinary(RelayClientMessageSchema, buildAuthMsg(attestation, kp, ws)));
 			await authOk;
 			const sub = waitForMsg(ws, "subscribed");
 			sendClientMsg(ws, { msg: { case: "subscribe", value: { topics: [groupTopic] } } });
@@ -1014,7 +1137,7 @@ describe("FestivalDO lane split", () => {
 			const ws = await connectWS(FESTIVAL_ID);
 			await drainMessages(ws);
 			const authOk = waitForMsg(ws, "authOk");
-			ws.send(toBinary(RelayClientMessageSchema, buildAuthMsg(attestation, kp)));
+			ws.send(toBinary(RelayClientMessageSchema, buildAuthMsg(attestation, kp, ws)));
 			await authOk;
 			const sub = waitForMsg(ws, "subscribed");
 			sendClientMsg(ws, {
@@ -1023,20 +1146,23 @@ describe("FestivalDO lane split", () => {
 			await sub;
 
 			// Send public chat
-			const publicEnv = create(GossipEnvelopeSchema, {
-				payload: {
-					case: "chat",
-					value: {
-						id: "iso-pub",
-						userId: kp.publicKeyHex,
-						displayName: "Tester",
-						text: "public only",
-						topic: publicTopic,
-						timestamp: new Date().toISOString(),
-						writerSeq: 1n,
+			const publicEnv = signChatEnvelope(
+				create(GossipEnvelopeSchema, {
+					payload: {
+						case: "chat",
+						value: {
+							id: "iso-pub",
+							userId: kp.publicKeyHex,
+							displayName: "Tester",
+							text: "public only",
+							topic: publicTopic,
+							timestamp: new Date().toISOString(),
+							writerSeq: 1n,
+						},
 					},
-				},
-			});
+				}),
+				kp,
+			);
 			sendClientMsg(ws, {
 				msg: { case: "gossip", value: { topic: publicTopic, message: publicEnv } },
 			});

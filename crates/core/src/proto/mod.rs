@@ -27,6 +27,8 @@ impl From<crate::types::ChatMessage> for ChatMessage {
             timestamp: m.timestamp,
             writer_seq: m.writer_seq,
             logical_time: m.logical_time,
+            writer_key: m.writer_key,
+            signature: m.signature,
         }
     }
 }
@@ -43,6 +45,9 @@ impl From<ChatMessage> for crate::types::ChatMessage {
             timestamp: m.timestamp,
             writer_seq: m.writer_seq,
             logical_time: m.logical_time,
+            writer_key: m.writer_key,
+            signature: m.signature,
+            trust: crate::types::ChatTrust::Unverified,
         }
     }
 }
@@ -83,6 +88,17 @@ impl GossipEnvelope {
                 group_key_id: crate::crypto::group_id_from_key(group_key),
             }),
             GossipMessage::Chat(chat) => Payload::Chat(chat.clone().into()),
+            GossipMessage::ChatAuthorProof {
+                writer_key,
+                attestation_message,
+                attestation_signature,
+                issuer,
+            } => Payload::ChatAuthorProof(ChatAuthorProof {
+                writer_key: writer_key.clone(),
+                attestation_message: attestation_message.clone(),
+                attestation_signature: attestation_signature.clone(),
+                issuer: issuer.clone(),
+            }),
             GossipMessage::EncryptedChat {
                 group_key,
                 encrypted,
@@ -183,6 +199,9 @@ mod tests {
             timestamp: "2026-01-01T00:00:00Z".to_string(),
             writer_seq: 42,
             logical_time: 42,
+            writer_key: Vec::new(),
+            signature: Vec::new(),
+            trust: crate::types::ChatTrust::Unverified,
         };
 
         let proto: ChatMessage = domain.clone().into();
@@ -223,6 +242,9 @@ mod tests {
             timestamp: "now".to_string(),
             writer_seq: 1,
             logical_time: 1,
+            writer_key: Vec::new(),
+            signature: Vec::new(),
+            trust: crate::types::ChatTrust::Unverified,
         };
         let msg = GossipMessage::Chat(chat);
         let envelope = GossipEnvelope::from_gossip_message(&msg);

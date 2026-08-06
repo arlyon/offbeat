@@ -22,6 +22,7 @@ class GanttView extends StatefulWidget {
   final List<Day> days;
   final DateTime now;
   final void Function(String setId)? onStar;
+  final ValueChanged<FestSet>? onSetTap;
 
   const GanttView({
     super.key,
@@ -30,6 +31,7 @@ class GanttView extends StatefulWidget {
     required this.days,
     required this.now,
     this.onStar,
+    this.onSetTap,
   });
 
   @override
@@ -341,6 +343,27 @@ class _GanttViewState extends State<GanttView> {
     _hScrollController.jumpTo(target);
   }
 
+  void _openSetAt(Offset position, double rowHeight) {
+    if (widget.onSetTap == null || position.dx < ganttStageLabelW) return;
+    final verticalOffset = _vScrollController.hasClients
+        ? _vScrollController.offset
+        : 0.0;
+    final stageY = position.dy - _timeAxisH + verticalOffset;
+    if (stageY < 0) return;
+    final stageIndex = stageY ~/ rowHeight;
+    if (stageIndex < 0 || stageIndex >= widget.stages.length) return;
+    final withinRow = stageY % rowHeight;
+    if (withinRow < 6 || withinRow > rowHeight - 6) return;
+
+    final minute =
+        _startMin + (_tx + position.dx - ganttStageLabelW) / ganttPxPerMin;
+    final stageId = widget.stages[stageIndex].id;
+    final set = _absoluteSets.where((set) {
+      return set.stage == stageId && minute >= set.t && minute <= set.t + set.dur;
+    }).firstOrNull;
+    if (set != null) widget.onSetTap?.call(set);
+  }
+
   // ── Build ──────────────────────────────────────────────────
 
   @override
@@ -357,11 +380,6 @@ class _GanttViewState extends State<GanttView> {
             days: widget.days,
             showDayPicker: widget.days.length > 1,
             onDayTap: _jumpToDay,
-            nowInRange: _nowInRange,
-            absoluteNowMin: _absoluteNowMin,
-            nowMinOfDay: widget.now.hour * 60 + widget.now.minute,
-            startMin: _startMin,
-            endMin: _endMin,
           ),
         ),
         // Gantt viewport
@@ -412,6 +430,7 @@ class _GanttViewState extends State<GanttView> {
                                 : 0.0,
                             rowHeight: rh,
                             onStar: widget.onStar,
+                            onSetTap: widget.onSetTap,
                           ),
                         ),
                       ),
@@ -419,11 +438,16 @@ class _GanttViewState extends State<GanttView> {
                   ),
                   // Horizontal scroll sentinel (always present so controller attaches)
                   Positioned.fill(
-                    child: SingleChildScrollView(
-                      controller: _hScrollController,
-                      child: SizedBox(
-                        width: 1,
-                        height: _maxTx + constraints.maxHeight,
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.translucent,
+                      onTapUp: (details) =>
+                          _openSetAt(details.localPosition, rh),
+                      child: SingleChildScrollView(
+                        controller: _hScrollController,
+                        child: SizedBox(
+                          width: 1,
+                          height: _maxTx + constraints.maxHeight,
+                        ),
                       ),
                     ),
                   ),
@@ -486,130 +510,57 @@ class _MetaStrip extends StatelessWidget {
   final List<Day> days;
   final bool showDayPicker;
   final ValueChanged<String> onDayTap;
-  final bool nowInRange;
-  final int absoluteNowMin;
-  final int nowMinOfDay;
-  final int startMin;
-  final int endMin;
 
   const _MetaStrip({
     required this.activeDay,
     required this.days,
     required this.onDayTap,
-    required this.nowInRange,
-    required this.absoluteNowMin,
-    required this.nowMinOfDay,
-    required this.startMin,
-    required this.endMin,
     this.showDayPicker = true,
   });
-
-  String get _nowLabel {
-    if (nowInRange) return '// NOW';
-    if (absoluteNowMin < startMin) {
-      final diff = startMin - absoluteNowMin;
-      final h = diff ~/ 60;
-      final m = diff % 60;
-      return h > 0
-          ? '// STARTS IN ${h}H${m > 0 ? ' ${m}M' : ''}'
-          : '// STARTS IN ${m}M';
-    }
-    return '// ENDED';
-  }
 
   @override
   Widget build(BuildContext context) {
     return DottedBorder.bottom(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        child: Row(
-          children: [
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Row(
-                  children: [
-                    Text(
-                      _nowLabel,
-                      style: TextStyle(
-                        fontFamily: 'JetBrainsMono',
-                        fontSize: 9,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 0.1 * 9,
-                        color: nowInRange ? colorFg3 : colorFg4,
-                        height: 1,
-                      ),
-                    ),
-                    if (nowInRange) ...[
-                      const SizedBox(width: 6),
-                      const LiveDot(size: 6),
-                    ],
-                  ],
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  fmtTime(nowMinOfDay),
-                  style: TextStyle(
-                    fontFamily: 'JetBrainsMono',
-                    fontSize: 12,
-                    color: nowInRange ? colorFg : colorFg4,
-                    height: 1,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(width: 14),
-            // Scrollable day jump chips
-            if (showDayPicker)
-              Expanded(
-                child: SizedBox(
-                  height: 28,
-                  child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: days.map((d) {
-                        final isActive = d.id == activeDay;
-                        return Padding(
-                          padding: const EdgeInsets.only(right: 4),
-                          child: GestureDetector(
-                            onTap: () => onDayTap(d.id),
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 10,
-                                vertical: 6,
-                              ),
-                              decoration: BoxDecoration(
-                                color: isActive ? colorFg : Colors.transparent,
-                                border: Border.all(
-                                  color: isActive ? colorFg : colorDotted,
-                                  width: 1.5,
-                                ),
-                              ),
-                              child: Text(
-                                '${d.label} ${d.dayNum}',
-                                style: TextStyle(
-                                  fontFamily: 'JetBrainsMono',
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w700,
-                                  letterSpacing: 0.08 * 10,
-                                  color: isActive ? colorBg : colorFg2,
-                                  height: 1,
-                                ),
-                              ),
+      child: SizedBox(
+        height: 44,
+        child: showDayPicker
+            ? SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                child: Row(
+                  children: days.map((day) {
+                    final isActive = day.id == activeDay;
+                    return Padding(
+                      padding: const EdgeInsets.only(right: 4),
+                      child: GestureDetector(
+                        onTap: () => onDayTap(day.id),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: isActive ? colorFg : Colors.transparent,
+                            border: Border.all(
+                              color: isActive ? colorFg : colorDotted,
+                              width: 1.5,
                             ),
                           ),
-                        );
-                      }).toList(),
-                    ),
-                  ),
+                          child: Text(
+                            '${day.label} ${day.dayNum}',
+                            style: TextStyle(
+                              fontFamily: 'JetBrainsMono',
+                              fontSize: 10,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 0.08 * 10,
+                              color: isActive ? colorBg : colorFg2,
+                              height: 1,
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  }).toList(),
                 ),
               )
-            else
-              const Spacer(),
-          ],
-        ),
+            : const SizedBox.shrink(),
       ),
     );
   }
@@ -632,6 +583,7 @@ class _GanttContent extends StatelessWidget {
   final double vertOffset;
   final double rowHeight;
   final void Function(String setId)? onStar;
+  final ValueChanged<FestSet>? onSetTap;
 
   const _GanttContent({
     required this.tx,
@@ -648,6 +600,7 @@ class _GanttContent extends StatelessWidget {
     required this.vertOffset,
     required this.rowHeight,
     this.onStar,
+    this.onSetTap,
   });
 
   @override
@@ -691,6 +644,7 @@ class _GanttContent extends StatelessWidget {
             vertOffset: vertOffset,
             rowHeight: rowHeight,
             onStar: onStar,
+            onSetTap: onSetTap,
           ),
         ),
       ],
@@ -805,6 +759,7 @@ class _StageRows extends StatelessWidget {
   final double vertOffset;
   final double rowHeight;
   final void Function(String setId)? onStar;
+  final ValueChanged<FestSet>? onSetTap;
 
   const _StageRows({
     required this.tx,
@@ -816,6 +771,7 @@ class _StageRows extends StatelessWidget {
     required this.vertOffset,
     required this.rowHeight,
     this.onStar,
+    this.onSetTap,
   });
 
   @override
@@ -846,6 +802,7 @@ class _StageRows extends StatelessWidget {
                           isLast: i == stages.length - 1,
                           startMin: startMin,
                           onStar: onStar,
+                          onSetTap: onSetTap,
                         ),
                       );
                     }),
@@ -895,6 +852,7 @@ class _SingleStageRow extends StatelessWidget {
   final bool isLast;
   final int startMin;
   final void Function(String setId)? onStar;
+  final ValueChanged<FestSet>? onSetTap;
 
   const _SingleStageRow({
     required this.stage,
@@ -903,6 +861,7 @@ class _SingleStageRow extends StatelessWidget {
     required this.isLast,
     required this.startMin,
     this.onStar,
+    this.onSetTap,
   });
 
   @override
@@ -913,52 +872,59 @@ class _SingleStageRow extends StatelessWidget {
       children: [
         if (!isLast)
           Positioned(bottom: 0, left: 0, right: 0, child: const DottedRule()),
-        // Stage label (sticky left)
+        // Set blocks (already filtered to visible viewport)
+        for (final set in sets)
+          Positioned(
+            left: (set.t - startMin) * ganttPxPerMin + ganttStageLabelW - tx,
+            top: 6,
+            bottom: 6,
+            width: set.dur * ganttPxPerMin,
+            child: _SetBlock(
+              set: set,
+              stageColor: stageColor,
+              onStar: onStar,
+              onSetTap: onSetTap,
+            ),
+          ),
+        // Paint the sticky stage label after moving blocks so its fade remains visible.
         Positioned(
           left: 0,
           top: 0,
           bottom: 0,
           width: ganttStageLabelW,
-          child: Container(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.centerLeft,
-                end: Alignment.centerRight,
-                colors: [colorBg, colorBg.withValues(alpha: 0)],
-                stops: const [0.6, 1.0],
-              ),
-            ),
-            padding: const EdgeInsets.only(left: 10),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  stage.short,
-                  style: const TextStyle(
-                    fontFamily: 'JetBrainsMono',
-                    fontSize: 9,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 0.1 * 9,
-                    color: colorFg3,
-                    height: 1,
-                  ),
+          child: IgnorePointer(
+            child: Container(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.centerLeft,
+                  end: Alignment.centerRight,
+                  colors: [colorBg, colorBg.withValues(alpha: 0)],
+                  stops: const [0.6, 1.0],
                 ),
-                const SizedBox(height: 4),
-                Container(width: 14, height: 3, color: stageColor),
-              ],
+              ),
+              padding: const EdgeInsets.only(left: 10),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    stage.timelineShort,
+                    style: const TextStyle(
+                      fontFamily: 'JetBrainsMono',
+                      fontSize: 9,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.1 * 9,
+                      color: colorFg3,
+                      height: 1,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Container(width: 14, height: 3, color: stageColor),
+                ],
+              ),
             ),
           ),
         ),
-        // Set blocks (already filtered to visible viewport)
-        for (final s in sets)
-          Positioned(
-            left: (s.t - startMin) * ganttPxPerMin + ganttStageLabelW - tx,
-            top: 6,
-            bottom: 6,
-            width: s.dur * ganttPxPerMin,
-            child: _SetBlock(set: s, stageColor: stageColor, onStar: onStar),
-          ),
       ],
     );
   }
@@ -970,8 +936,14 @@ class _SetBlock extends StatelessWidget {
   final FestSet set;
   final Color stageColor;
   final void Function(String setId)? onStar;
+  final ValueChanged<FestSet>? onSetTap;
 
-  const _SetBlock({required this.set, required this.stageColor, this.onStar});
+  const _SetBlock({
+    required this.set,
+    required this.stageColor,
+    this.onStar,
+    this.onSetTap,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1000,13 +972,7 @@ class _SetBlock extends StatelessWidget {
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        onTap: set.supporters.isEmpty
-            ? null
-            : () => showCoLikersSheet(
-                context,
-                artist: set.artist,
-                supporters: set.supporters,
-              ),
+        onTap: () => onSetTap?.call(set),
         splashColor: Colors.transparent,
         highlightColor: colorSurface2,
         child: Container(

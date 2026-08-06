@@ -1,9 +1,12 @@
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
 import { ed25519 } from "@noble/curves/ed25519.js";
 import {
+	ChatMessageSchema,
 	GossipEnvelopeSchema,
 	RelayClientMessageSchema,
 	RelayServerMessageSchema,
+	publicChatSigningPayload,
+	relayAuthSigningPayload,
 } from "@offbeat/protocol";
 import { type Unstable_DevWorker, unstable_dev } from "wrangler";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -52,10 +55,13 @@ async function registerUser(pubKeyHex: string) {
 function buildAuthMsg(
 	attestation: { message: string; signature: string; issuer: string },
 	kp: { secretKey: Uint8Array; publicKey: Uint8Array },
+	festivalId: string,
+	challenge: Uint8Array,
 ) {
-	const timestamp = Math.floor(Date.now() / 1000).toString();
-	const sessionMsg = new TextEncoder().encode(`session:${timestamp}`);
-	const sessionSig = ed25519.sign(sessionMsg, kp.secretKey);
+	const sessionSig = ed25519.sign(
+		relayAuthSigningPayload(festivalId, challenge, kp.publicKey),
+		kp.secretKey,
+	);
 	return create(RelayClientMessageSchema, {
 		msg: {
 			case: "auth",
@@ -67,13 +73,36 @@ function buildAuthMsg(
 					issuer: hexToBytes(attestation.issuer),
 				},
 				signature: sessionSig,
-				timestamp,
+				challenge,
 			},
 		},
 	});
 }
 
 type ServerMsg = ReturnType<typeof fromBinary<typeof RelayServerMessageSchema>>;
+
+const relayHellos = new WeakMap<WebSocket, Promise<ServerMsg>>();
+
+function signedChatMessage(
+	kp: { secretKey: Uint8Array; publicKey: Uint8Array; publicKeyHex: string },
+	value: {
+		id: string;
+		displayName: string;
+		text: string;
+		topic: string;
+		writerSeq: bigint;
+	},
+) {
+	const message = create(ChatMessageSchema, {
+		...value,
+		userId: kp.publicKeyHex.slice(0, 16),
+		timestamp: new Date().toISOString(),
+		logicalTime: value.writerSeq,
+		writerKey: kp.publicKey,
+	});
+	message.signature = ed25519.sign(publicChatSigningPayload(message), kp.secretKey);
+	return message;
+}
 
 /** Connect to a configured Festival DO WS and return the socket. */
 async function connectToFestival(festivalId: string): Promise<WebSocket> {
@@ -90,6 +119,7 @@ async function connectToFestival(festivalId: string): Promise<WebSocket> {
 	const url = `${workerUrl}/festivals/${festivalId}/ws`;
 	const ws = new WebSocket(url);
 	ws.binaryType = "arraybuffer";
+	relayHellos.set(ws, waitForMessage(ws, "hello"));
 	await new Promise<void>((resolve, reject) => {
 		ws.onopen = () => resolve();
 		ws.onerror = (e) => reject(new Error(`WS failed: ${e}`));
@@ -104,8 +134,15 @@ async function authenticateWS(
 	kp: { secretKey: Uint8Array; publicKey: Uint8Array; publicKeyHex: string },
 ) {
 	const { attestation } = await registerUser(kp.publicKeyHex);
+	const hello = await relayHellos.get(ws);
+	if (hello?.msg.case !== "hello") throw new Error("Missing relay hello");
 	const authOkPromise = waitForMessage(ws, "authOk");
-	const authMsg = buildAuthMsg(attestation, kp);
+	const authMsg = buildAuthMsg(
+		attestation,
+		kp,
+		hello.msg.value.festivalId,
+		hello.msg.value.authChallenge,
+	);
 	ws.send(toBinary(RelayClientMessageSchema, authMsg));
 	await authOkPromise;
 }
@@ -214,7 +251,7 @@ describe("FestivalDO e2e", () => {
 
 		it("sends a chat message and retrieves it via catchup", async () => {
 			const kp = generateKeypair();
-			const topic = "festival/test-festival-2/chat/general";
+			const topic = "festival/test-festival-2/chat/campsite";
 			const ws = await connectToFestival("test-festival-2");
 			await drainMessages(ws);
 
@@ -235,15 +272,13 @@ describe("FestivalDO e2e", () => {
 			const chatEnvelope = create(GossipEnvelopeSchema, {
 				payload: {
 					case: "chat",
-					value: {
+					value: signedChatMessage(kp, {
 						id: "msg-1",
-						userId: kp.publicKeyHex,
 						displayName: "Test User",
 						text: "Hello, world!",
 						topic,
-						timestamp: new Date().toISOString(),
 						writerSeq: 1n,
-					},
+					}),
 				},
 			});
 			sendClientMsg(ws, {
@@ -273,7 +308,7 @@ describe("FestivalDO e2e", () => {
 				expect(envelope.payload.case).toBe("chat");
 				if (envelope.payload.case === "chat") {
 					expect(envelope.payload.value.text).toBe("Hello, world!");
-					expect(envelope.payload.value.userId).toBe(kp.publicKeyHex);
+					expect(envelope.payload.value.userId).toBe(kp.publicKeyHex.slice(0, 16));
 				}
 			}
 
@@ -334,7 +369,7 @@ describe("FestivalDO e2e", () => {
 
 	describe("two clients - direct and relay", () => {
 		it("client A sends chat, client B receives via DO relay", async () => {
-			const topic = "festival/test-festival-4/chat/general";
+			const topic = "festival/test-festival-4/chat/campsite";
 			const kpA = generateKeypair();
 
 			// Client A connects
@@ -360,15 +395,13 @@ describe("FestivalDO e2e", () => {
 			const chatEnvelope = create(GossipEnvelopeSchema, {
 				payload: {
 					case: "chat",
-					value: {
+					value: signedChatMessage(kpA, {
 						id: "msg-relay-1",
-						userId: kpA.publicKeyHex,
 						displayName: "User A",
 						text: "Message from A to B",
 						topic,
-						timestamp: new Date().toISOString(),
 						writerSeq: 1n,
-					},
+					}),
 				},
 			});
 			sendClientMsg(clientA, {
@@ -384,7 +417,7 @@ describe("FestivalDO e2e", () => {
 				expect(payload?.case).toBe("chat");
 				if (payload?.case === "chat") {
 					expect(payload.value.text).toBe("Message from A to B");
-					expect(payload.value.userId).toBe(kpA.publicKeyHex);
+					expect(payload.value.userId).toBe(kpA.publicKeyHex.slice(0, 16));
 				}
 			}
 
@@ -441,7 +474,7 @@ describe("FestivalDO e2e", () => {
 		});
 
 		it("late-joining client catches up on missed messages", async () => {
-			const topic = "festival/test-festival-6/chat/general";
+			const topic = "festival/test-festival-6/chat/campsite";
 			const kpA = generateKeypair();
 
 			// Client A connects and sends a message
@@ -457,15 +490,13 @@ describe("FestivalDO e2e", () => {
 			const chatEnvelope = create(GossipEnvelopeSchema, {
 				payload: {
 					case: "chat",
-					value: {
+					value: signedChatMessage(kpA, {
 						id: "msg-before-b",
-						userId: kpA.publicKeyHex,
 						displayName: "User A",
 						text: "Sent before B joined",
 						topic,
-						timestamp: new Date().toISOString(),
 						writerSeq: 1n,
-					},
+					}),
 				},
 			});
 			sendClientMsg(clientA, {
@@ -507,7 +538,7 @@ describe("FestivalDO e2e", () => {
 		});
 
 		it("multiple topics - messages routed correctly", async () => {
-			const topicChat = "festival/test-festival-7/chat/general";
+			const topicChat = "festival/test-festival-7/chat/campsite";
 			const topicGroup = "group/test-festival-7/chat";
 			const kpC = generateKeypair();
 
@@ -559,15 +590,13 @@ describe("FestivalDO e2e", () => {
 			const chatEnvelope = create(GossipEnvelopeSchema, {
 				payload: {
 					case: "chat",
-					value: {
+					value: signedChatMessage(kpC, {
 						id: "msg-chat",
-						userId: kpC.publicKeyHex,
 						displayName: "User C",
 						text: "Chat message",
 						topic: topicChat,
-						timestamp: new Date().toISOString(),
 						writerSeq: 1n,
-					},
+					}),
 				},
 			});
 			sendClientMsg(clientC, {

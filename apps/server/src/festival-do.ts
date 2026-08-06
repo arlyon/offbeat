@@ -7,6 +7,9 @@ import {
 	type RelayClientMessage,
 	RelayClientMessageSchema,
 	RelayServerMessageSchema,
+	relayAuthSigningPayload,
+	verifyPublicChatMessage,
+	type ChatAuthorProof as WireChatAuthorProof,
 	type ChatMessage as WireChatMessage,
 } from "@offbeat/protocol";
 import * as Y from "yjs";
@@ -22,11 +25,15 @@ const MAX_SEQUENCE_CATCHUP_BYTES = 1024 * 1024;
 const MAX_CLIENT_FRAME_BYTES = 512 * 1024;
 const MAX_REMOTE_LAMPORT_ADVANCE = 1_000_000n;
 const EQUIVOCATED_HEAD_ID = "__offbeat/equivocated__";
+const AUTH_CHALLENGE_TTL_SECONDS = 60;
 
 interface Session {
 	topics: Set<string>;
 	authenticated: boolean;
 	publicKey: string | null;
+	challenge: string | null;
+	challengeExpiresAt: number;
+	challengeUsed: boolean;
 }
 
 interface ChatMetadata {
@@ -43,6 +50,13 @@ interface LegacyPublicRow {
 }
 
 type ChatValidation = { metadata: ChatMetadata } | { error: string; code: ErrorCode };
+type ProofValidation =
+	| { writerId: string; issuedAt: number; expiresAt: number }
+	| { error: string; code: ErrorCode };
+
+function bytesEqual(left: Uint8Array, right: Uint8Array) {
+	return left.byteLength === right.byteLength && left.every((byte, index) => byte === right[index]);
+}
 
 function checkStableChatRepair(stored: ArrayBuffer, incoming: WireChatMessage) {
 	const envelope = fromBinary(GossipEnvelopeSchema, new Uint8Array(stored));
@@ -56,7 +70,8 @@ function checkStableChatRepair(stored: ArrayBuffer, incoming: WireChatMessage) {
 		current.text === incoming.text &&
 		current.topic === incoming.topic &&
 		current.stageId === incoming.stageId &&
-		current.timestamp === incoming.timestamp;
+		current.timestamp === incoming.timestamp &&
+		bytesEqual(current.writerKey, incoming.writerKey);
 	const repairsFallback = current?.logicalTime === 0n && incoming.logicalTime > 0n;
 	const retriesFallback =
 		current !== undefined && current.logicalTime > 0n && incoming.logicalTime === 0n;
@@ -95,6 +110,7 @@ export class FestivalDO extends DurableObject {
 	#lat: number | null = null;
 	#lon: number | null = null;
 	#publicStateDoc: Y.Doc | null = null;
+	#env: Record<string, unknown>;
 
 	get sql() {
 		return this.ctx.storage.sql;
@@ -102,6 +118,7 @@ export class FestivalDO extends DurableObject {
 
 	constructor(ctx: DurableObjectState, env: Record<string, unknown>) {
 		super(ctx, env);
+		this.#env = env;
 
 		this.ctx.blockConcurrencyWhile(async () => {
 			this.#initSchema();
@@ -133,6 +150,17 @@ export class FestivalDO extends DurableObject {
 				writer_seq INTEGER NOT NULL,
 				head_id TEXT NOT NULL,
 				PRIMARY KEY(request_id, writer_id)
+			);
+
+			CREATE TABLE IF NOT EXISTS chat_author_proofs (
+				writer_id TEXT PRIMARY KEY,
+				writer_key BLOB NOT NULL,
+				attestation_message TEXT NOT NULL,
+				attestation_signature BLOB NOT NULL,
+				issuer BLOB NOT NULL,
+				issued_at INTEGER NOT NULL,
+				expires_at INTEGER NOT NULL,
+				updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 			);
 
 			CREATE TABLE IF NOT EXISTS group_gossip_log (
@@ -511,6 +539,20 @@ export class FestivalDO extends DurableObject {
 		this.#endpointId = bytesToHex(this.#publicKey);
 	}
 
+	async #loadMainDoPublicKey(): Promise<Uint8Array> {
+		const stored = (await this.ctx.storage.get("main_do_public_key")) as Uint8Array | undefined;
+		if (stored?.byteLength === 32) return stored;
+		const namespace = this.#env.MAIN_DO as DurableObjectNamespace | undefined;
+		if (!namespace) throw new Error("MainDO binding is unavailable");
+		const stub = namespace.get(namespace.idFromName("main"));
+		const response = await stub.fetch(new Request("http://internal/auth/public-key"));
+		if (!response.ok) throw new Error("MainDO public key is unavailable");
+		const key = hexToBytes((await response.text()).trim());
+		if (key.byteLength !== 32) throw new Error("MainDO public key is malformed");
+		await this.ctx.storage.put("main_do_public_key", key);
+		return key;
+	}
+
 	async #loadConfig() {
 		this.#opensAt = ((await this.ctx.storage.get("opens_at")) as string) ?? null;
 		this.#closesAt = ((await this.ctx.storage.get("closes_at")) as string) ?? null;
@@ -528,11 +570,11 @@ export class FestivalDO extends DurableObject {
 	}
 
 	#validatePublicChat(topic: string, chat: WireChatMessage, session: Session): ChatValidation {
-		const expectedPrefix = session.publicKey?.slice(0, 16);
 		if (chat.topic !== topic || !topic.startsWith(`festival/${this.#festivalId}/chat/`)) {
 			return { error: "Chat topic mismatch", code: ErrorCode.MALFORMED };
 		}
-		if (chat.userId !== session.publicKey && chat.userId !== expectedPrefix) {
+		const writerId = bytesToHex(chat.writerKey);
+		if (writerId !== session.publicKey) {
 			return { error: "Chat writer does not match session", code: ErrorCode.UNAUTHORIZED };
 		}
 		const logicalTime = chat.logicalTime === 0n ? chat.writerSeq : chat.logicalTime;
@@ -549,7 +591,7 @@ export class FestivalDO extends DurableObject {
 					.exec(
 						"SELECT COALESCE(MAX(writer_seq), 0) AS value FROM public_gossip_log WHERE topic = ? AND writer_id = ?",
 						topic,
-						chat.userId,
+						writerId,
 					)
 					.one() as { value: number }
 			).value,
@@ -572,12 +614,56 @@ export class FestivalDO extends DurableObject {
 		}
 		return {
 			metadata: {
-				writerId: chat.userId,
+				writerId,
 				writerSeq: Number(chat.writerSeq),
 				messageId: chat.id,
 				logicalTime: Number(logicalTime),
 			},
 		};
+	}
+
+	async #validateChatAuthorProof(
+		topic: string,
+		proof: WireChatAuthorProof,
+		session: Session,
+	): Promise<ProofValidation> {
+		if (!isPublicChatTopic(topic, this.#festivalId) || proof.writerKey.byteLength !== 32) {
+			return { error: "Invalid chat proof", code: ErrorCode.MALFORMED };
+		}
+		const writerId = bytesToHex(proof.writerKey);
+		if (writerId !== session.publicKey) {
+			return { error: "Chat proof writer does not match session", code: ErrorCode.UNAUTHORIZED };
+		}
+		const root = await this.#loadMainDoPublicKey();
+		if (!bytesEqual(proof.issuer, root)) {
+			return { error: "Unknown chat proof issuer", code: ErrorCode.UNAUTHORIZED };
+		}
+		const parts = proof.attestationMessage.split(":");
+		const issuedAt = Number.parseInt(parts[3] ?? "", 10);
+		const expiresAt = Number.parseInt(parts[4] ?? "", 10);
+		if (
+			parts.length !== 5 ||
+			parts[0] !== "attestation" ||
+			parts[1] !== "v1" ||
+			parts[2] !== writerId ||
+			!Number.isSafeInteger(issuedAt) ||
+			!Number.isSafeInteger(expiresAt) ||
+			expiresAt <= issuedAt ||
+			issuedAt > Date.now() / 1000 + 300 ||
+			Date.now() / 1000 > expiresAt + 7 * 24 * 60 * 60
+		) {
+			return { error: "Invalid chat proof lifetime or binding", code: ErrorCode.UNAUTHORIZED };
+		}
+		if (
+			!(await verify(
+				root,
+				new TextEncoder().encode(proof.attestationMessage),
+				proof.attestationSignature,
+			))
+		) {
+			return { error: "Invalid chat proof signature", code: ErrorCode.INVALID_SIGNATURE };
+		}
+		return { writerId, issuedAt, expiresAt };
 	}
 
 	#sendCatchup(ws: WebSocket, topic: string, sinceSeq: bigint) {
@@ -708,10 +794,50 @@ export class FestivalDO extends DurableObject {
 	}
 
 	#sendChatRowsWithinBudget(ws: WebSocket, topic: string, rows: { message: ArrayBuffer }[]) {
-		const messages = rows.map((row) =>
-			fromBinary(GossipEnvelopeSchema, new Uint8Array(row.message)),
-		);
+		const chats = rows.map((row) => fromBinary(GossipEnvelopeSchema, new Uint8Array(row.message)));
 		while (true) {
+			const writers = new Map<string, Uint8Array>();
+			for (const envelope of chats) {
+				if (envelope.payload.case === "chat") {
+					writers.set(
+						bytesToHex(envelope.payload.value.writerKey),
+						envelope.payload.value.writerKey,
+					);
+				}
+			}
+			const proofs = [...writers].flatMap(([writerId]) => {
+				const row = (
+					this.sql
+						.exec(
+							`SELECT writer_key, attestation_message, attestation_signature, issuer
+							 FROM chat_author_proofs
+							 WHERE writer_id = ? AND expires_at + 604800 >= ? LIMIT 1`,
+							writerId,
+							Math.floor(Date.now() / 1000),
+						)
+						.toArray() as {
+						writer_key: ArrayBuffer;
+						attestation_message: string;
+						attestation_signature: ArrayBuffer;
+						issuer: ArrayBuffer;
+					}[]
+				)[0];
+				if (!row) return [];
+				return [
+					create(GossipEnvelopeSchema, {
+						payload: {
+							case: "chatAuthorProof",
+							value: {
+								writerKey: new Uint8Array(row.writer_key),
+								attestationMessage: row.attestation_message,
+								attestationSignature: new Uint8Array(row.attestation_signature),
+								issuer: new Uint8Array(row.issuer),
+							},
+						},
+					}),
+				];
+			});
+			const messages = [...proofs, ...chats];
 			const response = create(RelayServerMessageSchema, {
 				msg: { case: "chatDiff", value: { topic, messages } },
 			});
@@ -720,11 +846,11 @@ export class FestivalDO extends DurableObject {
 				ws.send(bytes);
 				return;
 			}
-			if (messages.length === 0) {
+			if (chats.length === 0) {
 				this.#sendError(ws, "Chat catch-up response metadata exceeds limit", ErrorCode.MALFORMED);
 				return;
 			}
-			messages.pop();
+			chats.pop();
 		}
 	}
 
@@ -741,6 +867,19 @@ export class FestivalDO extends DurableObject {
 	/** Send an error RelayServerMessage to a WebSocket. */
 	#sendError(ws: WebSocket, error: string, code: ErrorCode = ErrorCode.UNSPECIFIED) {
 		this.#sendServerMsg(ws, { msg: { case: "error", value: { error, code } } });
+	}
+
+	#persistSession(ws: WebSocket, session: Session) {
+		ws.serializeAttachment(
+			JSON.stringify({
+				topics: [...session.topics],
+				authenticated: session.authenticated,
+				publicKey: session.publicKey,
+				challenge: session.challenge,
+				challengeExpiresAt: session.challengeExpiresAt,
+				challengeUsed: session.challengeUsed,
+			}),
+		);
 	}
 
 	/**
@@ -1090,13 +1229,32 @@ export class FestivalDO extends DurableObject {
 		const sessionId = crypto.randomUUID();
 		this.ctx.acceptWebSocket(server, [sessionId]);
 
-		this.#sessions.set(server, { topics: new Set(), authenticated: false, publicKey: null });
+		const challengeBytes = crypto.getRandomValues(new Uint8Array(32));
+		const challengeExpiresAt = Math.floor(Date.now() / 1000) + AUTH_CHALLENGE_TTL_SECONDS;
+		const session: Session = {
+			topics: new Set(),
+			authenticated: false,
+			publicKey: null,
+			challenge: bytesToHex(challengeBytes),
+			challengeExpiresAt,
+			challengeUsed: false,
+		};
+		this.#sessions.set(server, session);
+		this.#persistSession(server, session);
 		console.log(`[ws] new connection: ${sessionId}, total sessions: ${this.#sessions.size}`);
 
-		// Send Hello message with the DO's deterministic endpoint_id
-		if (this.#endpointId) {
+		// Send Hello message with the DO identity and this socket's auth challenge.
+		if (this.#endpointId && this.#festivalId) {
 			this.#sendServerMsg(server, {
-				msg: { case: "hello", value: { endpointId: this.#endpointId } },
+				msg: {
+					case: "hello",
+					value: {
+						endpointId: this.#endpointId,
+						authChallenge: challengeBytes,
+						festivalId: this.#festivalId,
+						challengeExpiresAt: BigInt(challengeExpiresAt),
+					},
+				},
 			});
 		}
 
@@ -1133,6 +1291,9 @@ export class FestivalDO extends DurableObject {
 				topics?: string[];
 				authenticated?: boolean;
 				publicKey?: string | null;
+				challenge?: string | null;
+				challengeExpiresAt?: number;
+				challengeUsed?: boolean;
 			} = {};
 			if (rawAtt) {
 				try {
@@ -1146,6 +1307,9 @@ export class FestivalDO extends DurableObject {
 				topics: new Set<string>(attachment.topics ?? []),
 				authenticated: attachment.authenticated ?? false,
 				publicKey: attachment.publicKey ?? null,
+				challenge: attachment.challenge ?? null,
+				challengeExpiresAt: attachment.challengeExpiresAt ?? 0,
+				challengeUsed: attachment.challengeUsed ?? true,
 			};
 			this.#sessions.set(ws, sess);
 		}
@@ -1156,50 +1320,85 @@ export class FestivalDO extends DurableObject {
 		switch (msg.case) {
 			case "auth": {
 				const authData = msg.value;
+				if (sess.challengeUsed) {
+					this.#sendError(ws, "Auth challenge is stale or already used", ErrorCode.UNAUTHORIZED);
+					break;
+				}
+				const expectedChallenge = sess.challenge ? hexToBytes(sess.challenge) : null;
 				if (
-					authData.publicKey.length === 0 ||
+					authData.publicKey.length !== 32 ||
 					!authData.attestation ||
-					authData.signature.length === 0
+					authData.signature.length !== 64 ||
+					authData.challenge.length !== 32 ||
+					!expectedChallenge
 				) {
 					this.#sendError(ws, "Invalid auth message", ErrorCode.MALFORMED);
 					break;
 				}
-				// Verify attestation signature against MainDO's public key (issuer)
-				const attMsg = new TextEncoder().encode(authData.attestation.message);
+				if (
+					Math.floor(Date.now() / 1000) > sess.challengeExpiresAt ||
+					!bytesEqual(authData.challenge, expectedChallenge)
+				) {
+					this.#sendError(ws, "Auth challenge is stale or already used", ErrorCode.UNAUTHORIZED);
+					break;
+				}
+
+				let mainDoPublicKey: Uint8Array;
+				try {
+					mainDoPublicKey = await this.#loadMainDoPublicKey();
+				} catch {
+					this.#sendError(ws, "Trusted attestation issuer is unavailable", ErrorCode.UNAUTHORIZED);
+					break;
+				}
+				if (!bytesEqual(authData.attestation.issuer, mainDoPublicKey)) {
+					this.#sendError(ws, "Unknown attestation issuer", ErrorCode.UNAUTHORIZED);
+					break;
+				}
+
+				const parts = authData.attestation.message.split(":");
+				const publicKeyHex = bytesToHex(authData.publicKey);
+				const issuedAt = Number.parseInt(parts[3] ?? "", 10);
+				const expiresAt = Number.parseInt(parts[4] ?? "", 10);
+				if (
+					parts.length !== 5 ||
+					parts[0] !== "attestation" ||
+					parts[1] !== "v1" ||
+					parts[2] !== publicKeyHex ||
+					!Number.isSafeInteger(issuedAt) ||
+					!Number.isSafeInteger(expiresAt) ||
+					expiresAt <= issuedAt
+				) {
+					this.#sendError(ws, "Attestation does not match session key", ErrorCode.UNAUTHORIZED);
+					break;
+				}
 				const attValid = await verify(
-					authData.attestation.issuer,
-					attMsg,
+					mainDoPublicKey,
+					new TextEncoder().encode(authData.attestation.message),
 					authData.attestation.signature,
 				);
 				if (!attValid) {
 					this.#sendError(ws, "Invalid attestation signature", ErrorCode.INVALID_SIGNATURE);
 					break;
 				}
-				// Check attestation expiry (with 7-day grace period)
-				const parts = authData.attestation.message.split(":");
-				const expiresAt = Number.parseInt(parts[4], 10);
-				const graceExpiry = expiresAt + 7 * 24 * 60 * 60;
-				if (Date.now() / 1000 > graceExpiry) {
+				if (Date.now() / 1000 > expiresAt + 7 * 24 * 60 * 60) {
 					this.#sendError(ws, "Attestation expired", ErrorCode.UNAUTHORIZED);
 					break;
 				}
-				// Verify session signature (proves ownership of the Ed25519 key)
-				const sessionMsg = new TextEncoder().encode(`session:${authData.timestamp}`);
-				const sessionValid = await verify(authData.publicKey, sessionMsg, authData.signature);
+
+				const sessionValid = await verify(
+					authData.publicKey,
+					relayAuthSigningPayload(this.#festivalId ?? "", authData.challenge, authData.publicKey),
+					authData.signature,
+				);
 				if (!sessionValid) {
 					this.#sendError(ws, "Invalid session signature", ErrorCode.INVALID_SIGNATURE);
 					break;
 				}
-				const publicKeyHex = bytesToHex(authData.publicKey);
 				sess.authenticated = true;
 				sess.publicKey = publicKeyHex;
-				ws.serializeAttachment(
-					JSON.stringify({
-						topics: [...sess.topics],
-						authenticated: true,
-						publicKey: publicKeyHex,
-					}),
-				);
+				sess.challengeUsed = true;
+				sess.challenge = null;
+				this.#persistSession(ws, sess);
 				const adminCount = (
 					this.sql.exec("SELECT COUNT(*) as cnt FROM admins").one() as { cnt: number }
 				).cnt;
@@ -1216,13 +1415,7 @@ export class FestivalDO extends DurableObject {
 				for (const topic of msg.value.topics) {
 					sess.topics.add(topic);
 				}
-				ws.serializeAttachment(
-					JSON.stringify({
-						topics: [...sess.topics],
-						authenticated: sess.authenticated,
-						publicKey: sess.publicKey,
-					}),
-				);
+				this.#persistSession(ws, sess);
 				console.log(`[ws] subscription count: ${sess.topics.size}`);
 				this.#sendServerMsg(ws, {
 					msg: { case: "subscribed", value: { topics: [...sess.topics] } },
@@ -1234,13 +1427,7 @@ export class FestivalDO extends DurableObject {
 				for (const topic of msg.value.topics) {
 					sess.topics.delete(topic);
 				}
-				ws.serializeAttachment(
-					JSON.stringify({
-						topics: [...sess.topics],
-						authenticated: sess.authenticated,
-						publicKey: sess.publicKey,
-					}),
-				);
+				this.#persistSession(ws, sess);
 				this.#sendServerMsg(ws, {
 					msg: { case: "subscribed", value: { topics: [...sess.topics] } },
 				});
@@ -1268,7 +1455,9 @@ export class FestivalDO extends DurableObject {
 
 				const envelopeBytes = toBinary(GossipEnvelopeSchema, envelope);
 				if (
-					(envelope.payload.case === "chat" || envelope.payload.case === "encryptedChat") &&
+					(envelope.payload.case === "chat" ||
+						envelope.payload.case === "chatAuthorProof" ||
+						envelope.payload.case === "encryptedChat") &&
 					envelopeBytes.byteLength > MAX_CHAT_MESSAGE_BYTES
 				) {
 					this.#sendError(ws, "Chat message exceeds relay size limit", ErrorCode.MALFORMED);
@@ -1276,7 +1465,27 @@ export class FestivalDO extends DurableObject {
 				}
 				let chatMetadata: ChatMetadata | undefined;
 				let chatValidation: ChatValidation | undefined;
+				let validatedProof:
+					| Exclude<ProofValidation, { error: string; code: ErrorCode }>
+					| undefined;
+				let proofValidation: ProofValidation | undefined;
+				if (envelope.payload.case === "chatAuthorProof") {
+					proofValidation = await this.#validateChatAuthorProof(
+						topic,
+						envelope.payload.value,
+						sess,
+					);
+					if ("error" in proofValidation) {
+						this.#sendError(ws, proofValidation.error, proofValidation.code);
+						break;
+					}
+					validatedProof = proofValidation;
+				}
 				if (envelope.payload.case === "chat") {
+					if (!(await verifyPublicChatMessage(envelope.payload.value))) {
+						this.#sendError(ws, "Invalid public chat signature", ErrorCode.INVALID_SIGNATURE);
+						break;
+					}
 					chatValidation = this.#validatePublicChat(topic, envelope.payload.value, sess);
 					if ("error" in chatValidation) {
 						this.#sendError(ws, chatValidation.error, chatValidation.code);
@@ -1339,6 +1548,43 @@ export class FestivalDO extends DurableObject {
 						}
 					} else
 						switch (envelope.payload.case) {
+							case "chatAuthorProof": {
+								if (!validatedProof) throw new Error("validated chat proof missing");
+								const proof = envelope.payload.value;
+								this.sql.exec(
+									`INSERT INTO chat_author_proofs
+								 (writer_id, writer_key, attestation_message, attestation_signature,
+								  issuer, issued_at, expires_at)
+								 VALUES (?, ?, ?, ?, ?, ?, ?)
+								 ON CONFLICT(writer_id) DO UPDATE SET
+								  writer_key = excluded.writer_key,
+								  attestation_message = excluded.attestation_message,
+								  attestation_signature = excluded.attestation_signature,
+								  issuer = excluded.issuer,
+								  issued_at = excluded.issued_at,
+								  expires_at = excluded.expires_at,
+								  updated_at = datetime('now')
+								 WHERE excluded.issued_at >= chat_author_proofs.issued_at`,
+									validatedProof.writerId,
+									proof.writerKey,
+									proof.attestationMessage,
+									proof.attestationSignature,
+									proof.issuer,
+									validatedProof.issuedAt,
+									validatedProof.expiresAt,
+								);
+								seq = (
+									this.sql
+										.exec(
+											"INSERT INTO public_gossip_log (topic, message) VALUES (?, ?) RETURNING seq",
+											topic,
+											envelopeBytes,
+										)
+										.one() as { seq: number }
+								).seq;
+								break;
+							}
+
 							case "chat":
 								if (!chatMetadata) throw new Error("validated chat metadata missing");
 								seq = (

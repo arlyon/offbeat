@@ -20,7 +20,8 @@ message AuthRequest {
   bytes public_key = 1;
   Attestation attestation = 2;
   bytes signature = 3;
-  string timestamp = 4;
+  string timestamp = 4; // deprecated legacy field
+  bytes challenge = 5;
 }
 
 message Attestation {
@@ -75,6 +76,9 @@ message RelayServerMessage {
 // can register it as a known peer.
 message RelayHello {
   string endpoint_id = 1;   // hex-encoded 32-byte Ed25519 public key
+  bytes auth_challenge = 2; // single-use random challenge for this socket
+  string festival_id = 3;
+  uint64 challenge_expires_at = 4;
 }
 
 message AuthOk {

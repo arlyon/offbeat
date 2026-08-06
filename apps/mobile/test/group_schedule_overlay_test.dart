@@ -11,6 +11,7 @@ GroupMemberDto member(
   userId: id,
   displayName: name,
   status: status,
+  locationKind: 'none',
   starredSetIds: stars,
 );
 

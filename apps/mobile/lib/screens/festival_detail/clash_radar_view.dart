@@ -13,12 +13,14 @@ class ClashRadarView extends StatefulWidget {
   final List<FestSet> sets;
   final List<Stage> stages;
   final List<Day> days;
+  final ValueChanged<FestSet>? onSetTap;
 
   const ClashRadarView({
     super.key,
     required this.sets,
     required this.stages,
     required this.days,
+    this.onSetTap,
   });
 
   @override
@@ -350,6 +352,7 @@ class _ClashRadarViewState extends State<ClashRadarView> {
               setB: pair[1],
               stageA: stageById[pair[0].stage]!,
               stageB: stageById[pair[1].stage]!,
+              onSetTap: widget.onSetTap,
             ),
           ),
         ),
@@ -448,12 +451,14 @@ class _ClashCard extends StatelessWidget {
   final FestSet setB;
   final Stage stageA;
   final Stage stageB;
+  final ValueChanged<FestSet>? onSetTap;
 
   const _ClashCard({
     required this.setA,
     required this.setB,
     required this.stageA,
     required this.stageB,
+    this.onSetTap,
   });
 
   @override
@@ -490,7 +495,11 @@ class _ClashCard extends StatelessWidget {
           Row(
             children: [
               Expanded(
-                child: _ClashOption(set: a, stage: sA),
+                child: _ClashOption(
+                  set: a,
+                  stage: sA,
+                  onTap: () => onSetTap?.call(a),
+                ),
               ),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -506,7 +515,11 @@ class _ClashCard extends StatelessWidget {
                 ),
               ),
               Expanded(
-                child: _ClashOption(set: b, stage: sB),
+                child: _ClashOption(
+                  set: b,
+                  stage: sB,
+                  onTap: () => onSetTap?.call(b),
+                ),
               ),
             ],
           ),
@@ -519,45 +532,55 @@ class _ClashCard extends StatelessWidget {
 class _ClashOption extends StatelessWidget {
   final FestSet set;
   final Stage stage;
+  final VoidCallback onTap;
 
-  const _ClashOption({required this.set, required this.stage});
+  const _ClashOption({
+    required this.set,
+    required this.stage,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: colorSurface1,
-        border: Border(left: BorderSide(color: Color(stage.color), width: 3)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            '★ ${set.artist}',
-            style: const TextStyle(
-              fontFamily: 'Helvetica',
-              fontWeight: FontWeight.w700,
-              fontSize: 14,
-              letterSpacing: -0.02 * 14,
-              color: colorFg,
-              height: 1,
-            ),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
+    return Material(
+      color: colorSurface1,
+      child: InkWell(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            border: Border.all(color: Color(stage.color), width: 1),
           ),
-          const SizedBox(height: 2),
-          Text(
-            '${stage.name} · ${fmtTime(set.t)} → ${fmtTime(set.t + set.dur)}',
-            style: const TextStyle(
-              fontFamily: 'JetBrainsMono',
-              fontSize: 9,
-              letterSpacing: 0.08 * 9,
-              color: colorFg3,
-              height: 1,
-            ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '★ ${set.artist}',
+                style: const TextStyle(
+                  fontFamily: 'Helvetica',
+                  fontWeight: FontWeight.w700,
+                  fontSize: 14,
+                  letterSpacing: -0.02 * 14,
+                  color: colorFg,
+                  height: 1,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 2),
+              Text(
+                '${stage.name} · ${fmtTime(set.t)} → ${fmtTime(set.t + set.dur)}',
+                style: const TextStyle(
+                  fontFamily: 'JetBrainsMono',
+                  fontSize: 9,
+                  letterSpacing: 0.08 * 9,
+                  color: colorFg3,
+                  height: 1,
+                ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }

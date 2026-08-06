@@ -56,7 +56,7 @@ The system uses transport-agnostic logical resources, iroh for capable peer rout
 
 ### Festival Chat
 
-- **U21:** Chat within a stage-scoped channel (one per stage + campsite + general).
+- **U21:** Chat within a public channel (one per stage plus the festival-wide campsite channel).
 - **U22:** Auto-subscribe to chat for your current stage on check-in.
 - **U23:** Manually subscribe to other stage chats.
 - **U24:** Browse chat history for any stage (retrospective: "what did people say during Aphex Twin?").
@@ -113,7 +113,6 @@ graph LR
         C2["fest/chat/stage-2"]
         C3["fest/chat/red-room"]
         CC["fest/chat/campsite"]
-        CG["fest/chat/general"]
     end
 
     subgraph "Group Topics (encrypted)"

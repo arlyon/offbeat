@@ -83,33 +83,35 @@ sequence; ID-plus-Lamport head commitments allow a later authoritative duplicate
 to repair that fallback. Legacy zero/terminal counters migrate to bounded stable
 synthetic sequences.
 
-Remaining public/group chat delivery work is tracked by `offbeat-t6a.4` and
-`offbeat-t6a.9`; the trust-layer equivocation proof/quarantine state defined in
-`auth-protocol.md` ships with public chat.
+Remaining production group-chat delivery work is tracked by `offbeat-t6a.9`.
 
-## P1: offline public-message trust policy is accepted; implementation remains
+## P1: public-message trust baseline is implemented; advanced trust lifecycle remains
 
-**Decision:** `offbeat-t6a.10`; delivery tracking: `offbeat-t6a.4`
+**Decision:** `offbeat-t6a.10`; baseline delivery: `offbeat-t6a.4`
 
-Public attendee chat uses domain-separated Ed25519 authorship signatures plus
+Public attendee chat now uses domain-separated Ed25519 authorship signatures plus
 cached MainDO registration attestations. Current proofs and the 7-day offline
 grace produce verified trust. Missing or out-of-grace proof produces a visibly
-unverified message that is retained and forwarded only within per-writer/topic
-quotas and never included in history catch-up. Invalid signatures, forged
-proofs, revocations, replay, and writer-sequence equivocation are rejected.
+unverified, quota-bounded message and is excluded from history catch-up. Invalid
+signatures and writer-sequence equivocation are rejected or quarantined.
 Festival authority and group-key possession remain separate trust domains.
 
-Implementation still needs the compact proof sidecar, persistent trust/rejection
-state, relay ingress checks, UI badge and reconciliation flow, and the security
-matrix defined in `auth-protocol.md`.
+The FestivalDO pins MainDO's issuer, authenticates each socket through a
+festival-bound single-use challenge, verifies every public message, and sends
+proofs before bounded catch-up pages. Clients persist proofs, trust, conflicts,
+and a durable public-chat outbox. Advanced MainDO key rotation, revocation
+snapshots, and complete cross-peer equivocation-proof propagation remain the
+security-matrix follow-up defined in `auth-protocol.md`.
 
-## P2: public chat needs bounded peer catch-up
+## Completed baseline: bounded signed public chat
 
 **Tracking:** `offbeat-t6a.4`
 
-The append-log protocol exists, but public stage/general/campsite chat requires complete topic-interest wiring, signed live exchange, bounded recent catch-up, and online pagination for older history.
-
-Constrained routes must never exchange bulk chat history. Festival chat is lower priority than festival state, group state, and group chat.
+Stage and campsite channels now have topic-interest wiring, signed live exchange,
+bounded recent peer/relay catch-up, on-demand local pagination, trust badges,
+and reconnect outbox recovery. Constrained routes never exchange bulk chat
+history. Festival chat remains lower priority than festival state, group state,
+and group chat.
 
 ## P1: accepted writes and queues must survive app kill
 

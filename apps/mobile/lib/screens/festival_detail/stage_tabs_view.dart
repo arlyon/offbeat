@@ -1,24 +1,20 @@
-// OFFBEAT StageTabsView — V3 Stage tabs
-// Horizontal scrolling stage tabs with color swatch + name + count + live flag
-// Day pill row above
-// Stage hero card: 4px accent stripe left, "// STAGE PROFILE" super, big name, meta
-// Now-on-stage callout (if live): dotted accent border, accent-wash bg
-// Lineup with BigCard components
-
 import 'package:flutter/material.dart';
+
 import '../../data/models.dart';
 import '../../theme/tokens.dart';
+import '../../widgets/chip.dart';
 import '../../widgets/co_liker_pins.dart';
 import '../../widgets/dotted_border.dart';
-import '../../widgets/star_button.dart';
 import '../../widgets/live_dot.dart';
-import '../../widgets/chip.dart';
+import '../../widgets/star_button.dart';
 
 class StageTabsView extends StatefulWidget {
   final List<FestSet> sets;
   final List<Stage> stages;
   final List<Day> days;
   final void Function(String setId)? onStar;
+  final void Function(Stage stage)? onStageChat;
+  final ValueChanged<FestSet>? onSetTap;
 
   const StageTabsView({
     super.key,
@@ -26,6 +22,8 @@ class StageTabsView extends StatefulWidget {
     required this.stages,
     required this.days,
     this.onStar,
+    this.onStageChat,
+    this.onSetTap,
   });
 
   @override
@@ -33,116 +31,172 @@ class StageTabsView extends StatefulWidget {
 }
 
 class _StageTabsViewState extends State<StageTabsView> {
-  late String _stageId;
-  late String _day;
+  final _scrollController = ScrollController();
+  final _stageKeys = <String, GlobalKey>{};
+  final _sectionKeys = <String, GlobalKey>{};
+  late String _activeStageId;
+  late String _activeDayId;
+  bool _syncScheduled = false;
 
   @override
   void initState() {
     super.initState();
-    _day = widget.days.first.id;
-    _stageId = widget.stages.first.id;
+    _activeStageId = widget.stages.first.id;
+    _activeDayId = widget.days.first.id;
+    _buildKeys();
+    _scrollController.addListener(_scheduleActiveSync);
   }
 
-  Stage get _currentStage => widget.stages.firstWhere((s) => s.id == _stageId);
-
-  List<FestSet> get _dayStageSets {
-    final s = widget.sets
-        .where((s) => s.day == _day && s.stage == _stageId)
-        .toList();
-    s.sort((a, b) => a.t.compareTo(b.t));
-    return s;
-  }
-
-  Map<String, List<FestSet>> get _setsByStage {
-    final m = <String, List<FestSet>>{};
-    for (final s in widget.stages) {
-      m[s.id] = [];
+  @override
+  void didUpdateWidget(StageTabsView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _buildKeys();
+    if (!widget.stages.any((stage) => stage.id == _activeStageId)) {
+      _activeStageId = widget.stages.first.id;
     }
-    for (final s in widget.sets.where((s) => s.day == _day)) {
-      m[s.stage]?.add(s);
+    if (!widget.days.any((day) => day.id == _activeDayId)) {
+      _activeDayId = widget.days.first.id;
     }
-    return m;
   }
 
-  FestSet? get _liveSet => _dayStageSets.cast<FestSet?>().firstWhere(
-    (s) => s!.live,
-    orElse: () => null,
-  );
+  @override
+  void dispose() {
+    _scrollController
+      ..removeListener(_scheduleActiveSync)
+      ..dispose();
+    super.dispose();
+  }
+
+  void _buildKeys() {
+    for (final stage in widget.stages) {
+      _stageKeys.putIfAbsent(stage.id, GlobalKey.new);
+      for (final day in widget.days) {
+        _sectionKeys.putIfAbsent('${stage.id}:${day.id}', GlobalKey.new);
+      }
+    }
+  }
+
+  Map<String, List<FestSet>> get _setsBySection {
+    final grouped = <String, List<FestSet>>{};
+    for (final set in widget.sets) {
+      (grouped['${set.stage}:${set.day}'] ??= []).add(set);
+    }
+    for (final sets in grouped.values) {
+      sets.sort((a, b) => a.t.compareTo(b.t));
+    }
+    return grouped;
+  }
+
+  void _scheduleActiveSync() {
+    if (_syncScheduled) return;
+    _syncScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _syncScheduled = false;
+      if (!mounted) return;
+      _syncActiveControls();
+    });
+  }
+
+  void _syncActiveControls() {
+    const targetY = 92.0;
+    String? closestStage;
+    String? closestDay;
+    var closestDistance = double.infinity;
+
+    for (final entry in _sectionKeys.entries) {
+      final context = entry.value.currentContext;
+      final renderObject = context?.findRenderObject();
+      if (renderObject is! RenderBox || !renderObject.attached) continue;
+      final y = renderObject.localToGlobal(Offset.zero).dy;
+      final distance = (y - targetY).abs();
+      if (distance < closestDistance) {
+        final parts = entry.key.split(':');
+        closestDistance = distance;
+        closestStage = parts[0];
+        closestDay = parts[1];
+      }
+    }
+
+    if (closestStage != null &&
+        closestDay != null &&
+        (closestStage != _activeStageId || closestDay != _activeDayId)) {
+      setState(() {
+        _activeStageId = closestStage!;
+        _activeDayId = closestDay!;
+      });
+    }
+  }
+
+  Future<void> _scrollTo(GlobalKey? key) async {
+    final context = key?.currentContext;
+    if (context == null) return;
+    await Scrollable.ensureVisible(
+      context,
+      duration: const Duration(milliseconds: 240),
+      curve: curveBrutalist,
+      alignment: 0,
+    );
+  }
+
+  void _jumpToStage(String stageId) {
+    setState(() => _activeStageId = stageId);
+    final sectionKey = _sectionKeys['$stageId:$_activeDayId'];
+    _scrollTo(sectionKey?.currentContext == null ? _stageKeys[stageId] : sectionKey);
+  }
+
+  void _jumpToDay(String dayId) {
+    GlobalKey? target = _sectionKeys['$_activeStageId:$dayId'];
+    if (target?.currentContext == null) {
+      for (final stage in widget.stages) {
+        final candidate = _sectionKeys['${stage.id}:$dayId'];
+        if (candidate?.currentContext != null) {
+          target = candidate;
+          _activeStageId = stage.id;
+          break;
+        }
+      }
+    }
+    setState(() => _activeDayId = dayId);
+    _scrollTo(target);
+  }
 
   @override
   Widget build(BuildContext context) {
-    final stage = _currentStage;
-    final sets = _dayStageSets;
-    final live = _liveSet;
-    final setsByStage = _setsByStage;
-
+    final grouped = _setsBySection;
     return Column(
       children: [
-        // Day pill row (hidden for single-day festivals)
-        if (widget.days.length > 1)
-          _DayPillRow(
-            days: widget.days,
-            activeDay: _day,
-            onDayChanged: (d) => setState(() => _day = d),
-          ),
-        // Stage tabs
-        _StageTabs(
-          stages: widget.stages,
-          activeStageId: _stageId,
-          day: _day,
-          sets: widget.sets,
-          onStageChanged: (id) => setState(() => _stageId = id),
-          setsByStage: setsByStage,
+        _JumpRow<Day>(
+          entries: widget.days,
+          activeId: _activeDayId,
+          idOf: (day) => day.id,
+          labelOf: (day) => '${day.label} ${day.dayNum}',
+          onTap: _jumpToDay,
         ),
-        // Scrollable content
+        _JumpRow<Stage>(
+          entries: widget.stages,
+          activeId: _activeStageId,
+          idOf: (stage) => stage.id,
+          labelOf: (stage) => stage.name,
+          onTap: _jumpToStage,
+        ),
         Expanded(
-          child: ListView(
-            padding: EdgeInsets.zero,
-            children: [
-              // Stage hero card
-              _StageHero(stage: stage, sets: sets),
-              // Now-on-stage callout
-              if (live != null) _NowCallout(set: live, stage: stage),
-              // Lineup eyebrow
-              Padding(
-                padding: const EdgeInsets.fromLTRB(18, 20, 18, 8),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text(
-                      '// LINEUP',
-                      style: TextStyle(
-                        fontFamily: 'JetBrainsMono',
-                        fontSize: 11,
-                        color: colorFg3,
-                        letterSpacing: 0.08 * 11,
-                        height: 1,
-                      ),
-                    ),
-                    Text(
-                      '${widget.days.firstWhere((d) => d.id == _day).label} '
-                      '${widget.days.firstWhere((d) => d.id == _day).dayNum}',
-                      style: const TextStyle(
-                        fontFamily: 'JetBrainsMono',
-                        fontSize: 10,
-                        color: colorFg4,
-                        letterSpacing: 0.08 * 10,
-                        height: 1,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              // BigCard lineup
-              ...sets.map(
-                (s) => _BigCard(
-                  set: s,
-                  stage: stage,
-                  onStar: () => widget.onStar?.call(s.id),
-                ),
-              ),
-              const SizedBox(height: 80),
-            ],
+          child: ListView.builder(
+            controller: _scrollController,
+            padding: const EdgeInsets.only(bottom: 28),
+            itemCount: widget.stages.length,
+            itemBuilder: (context, index) {
+              final stage = widget.stages[index];
+              return _StageSection(
+                key: _stageKeys[stage.id],
+                stage: stage,
+                days: widget.days,
+                setsBySection: grouped,
+                sectionKeys: _sectionKeys,
+                onStar: widget.onStar,
+                onSetTap: widget.onSetTap,
+                onStageChat: () => widget.onStageChat?.call(stage),
+              );
+            },
           ),
         ),
       ],
@@ -150,446 +204,280 @@ class _StageTabsViewState extends State<StageTabsView> {
   }
 }
 
-class _DayPillRow extends StatelessWidget {
-  final List<Day> days;
-  final String activeDay;
-  final ValueChanged<String> onDayChanged;
+class _JumpRow<T> extends StatelessWidget {
+  final List<T> entries;
+  final String activeId;
+  final String Function(T entry) idOf;
+  final String Function(T entry) labelOf;
+  final ValueChanged<String> onTap;
 
-  const _DayPillRow({
-    required this.days,
-    required this.activeDay,
-    required this.onDayChanged,
+  const _JumpRow({
+    required this.entries,
+    required this.activeId,
+    required this.idOf,
+    required this.labelOf,
+    required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
     return DottedBorder.bottom(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        child: Row(
-          children: [
-            const Text(
-              '// DAY',
-              style: TextStyle(
-                fontFamily: 'JetBrainsMono',
-                fontSize: 9,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 0.1 * 9,
-                color: colorFg3,
-                height: 1,
-              ),
-            ),
-            const SizedBox(width: 8),
-            ...days.map(
-              (d) => Padding(
-                padding: const EdgeInsets.only(left: 8),
-                child: MonoChip(
-                  label: '${d.label} ${d.dayNum}',
-                  active: d.id == activeDay,
-                  onTap: () => onDayChanged(d.id),
-                ),
-              ),
-            ),
-          ],
+      child: SizedBox(
+        height: 44,
+        child: ListView.separated(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+          itemCount: entries.length,
+          separatorBuilder: (_, _) => const SizedBox(width: 6),
+          itemBuilder: (context, index) {
+            final entry = entries[index];
+            final id = idOf(entry);
+            return MonoChip(
+              label: labelOf(entry).toUpperCase(),
+              active: id == activeId,
+              onTap: () => onTap(id),
+            );
+          },
         ),
       ),
     );
   }
 }
 
-class _StageTabs extends StatelessWidget {
-  final List<Stage> stages;
-  final String activeStageId;
-  final String day;
-  final List<FestSet> sets;
-  final ValueChanged<String> onStageChanged;
-  final Map<String, List<FestSet>> setsByStage;
-
-  const _StageTabs({
-    required this.stages,
-    required this.activeStageId,
-    required this.day,
-    required this.sets,
-    required this.onStageChanged,
-    required this.setsByStage,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return DottedBorder.bottom(
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          children: stages.map((s) {
-            final isActive = s.id == activeStageId;
-            final stageColor = Color(s.color);
-            final ct = setsByStage[s.id]?.length ?? 0;
-            final liveOn = sets.any(
-              (x) => x.stage == s.id && x.day == day && x.live,
-            );
-
-            return GestureDetector(
-              onTap: () => onStageChanged(s.id),
-              child: Stack(
-                children: [
-                  // Active bottom accent line
-                  if (isActive)
-                    Positioned(
-                      bottom: 0,
-                      left: 0,
-                      right: 0,
-                      child: Container(height: 2, color: stageColor),
-                    ),
-                  // Right dotted border
-                  if (stages.last.id != s.id)
-                    const Positioned(
-                      right: 0,
-                      top: 0,
-                      bottom: 0,
-                      width: 1.5,
-                      child: VerticalDottedRule(),
-                    ),
-                  Container(
-                    color: isActive ? colorSurface1 : Colors.transparent,
-                    padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
-                    constraints: const BoxConstraints(minWidth: 96),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        // Color swatch
-                        Container(width: 18, height: 3, color: stageColor),
-                        const SizedBox(height: 8),
-                        Text(
-                          s.name,
-                          style: TextStyle(
-                            fontFamily: 'JetBrainsMono',
-                            fontSize: 11,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 0.08 * 11,
-                            color: isActive ? colorFg : colorFg2,
-                            height: 1,
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          '$ct sets',
-                          style: const TextStyle(
-                            fontFamily: 'JetBrainsMono',
-                            fontSize: 9,
-                            letterSpacing: 0.08 * 9,
-                            color: colorFg4,
-                            height: 1,
-                          ),
-                        ),
-                        if (liveOn) ...[
-                          const SizedBox(height: 4),
-                          const LiveDot(size: 6),
-                        ],
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            );
-          }).toList(),
-        ),
-      ),
-    );
-  }
-}
-
-class _StageHero extends StatelessWidget {
+class _StageSection extends StatelessWidget {
   final Stage stage;
-  final List<FestSet> sets;
+  final List<Day> days;
+  final Map<String, List<FestSet>> setsBySection;
+  final Map<String, GlobalKey> sectionKeys;
+  final void Function(String setId)? onStar;
+  final ValueChanged<FestSet>? onSetTap;
+  final VoidCallback onStageChat;
 
-  const _StageHero({required this.stage, required this.sets});
+  const _StageSection({
+    super.key,
+    required this.stage,
+    required this.days,
+    required this.setsBySection,
+    required this.sectionKeys,
+    required this.onStageChat,
+    this.onStar,
+    this.onSetTap,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final stageColor = Color(stage.color);
-    final totalDur = sets.isEmpty ? 0 : sets.fold(0, (acc, s) => acc + s.dur);
-    final firstT = sets.isEmpty ? 0 : sets.first.t;
-    final lastT = sets.isEmpty ? 0 : sets.last.t + sets.last.dur;
+    final populatedDays = days.where(
+      (day) => (setsBySection['${stage.id}:${day.id}'] ?? const []).isNotEmpty,
+    );
 
-    return DottedBorder.bottom(
-      child: Stack(
-        children: [
-          // Left accent stripe
-          Positioned(
-            left: 0,
-            top: 0,
-            bottom: 0,
-            child: Container(width: 4, color: stageColor),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(18, 18, 18, 18),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        DottedBorder.bottom(
+          child: Container(
+            color: colorSurface1,
+            constraints: const BoxConstraints(minHeight: 58),
+            padding: const EdgeInsets.only(left: 18, right: 8),
+            child: Row(
               children: [
-                const Text(
-                  '// STAGE PROFILE',
-                  style: TextStyle(
-                    fontFamily: 'JetBrainsMono',
-                    fontSize: 10,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 0.1 * 10,
-                    color: colorFg3,
-                    height: 1,
+                Container(width: 12, height: 12, color: Color(stage.color)),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    stage.name.toUpperCase(),
+                    style: const TextStyle(
+                      fontFamily: 'Helvetica',
+                      fontSize: 20,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: -0.02 * 20,
+                      color: colorFg,
+                    ),
                   ),
                 ),
-                const SizedBox(height: 6),
-                Text(
-                  stage.name,
-                  style: const TextStyle(
-                    fontFamily: 'Helvetica',
-                    fontWeight: FontWeight.w700,
-                    fontSize: 36,
-                    letterSpacing: -0.03 * 36,
-                    height: 1,
-                    color: colorFg,
+                Semantics(
+                  button: true,
+                  label: 'Open chat for ${stage.name}',
+                  child: InkWell(
+                    onTap: onStageChat,
+                    child: const SizedBox(
+                      width: 48,
+                      height: 48,
+                      child: Icon(
+                        Icons.chat_bubble_outline,
+                        size: 18,
+                        color: colorCoAccent,
+                      ),
+                    ),
                   ),
-                ),
-                const SizedBox(height: 6),
-                Wrap(
-                  spacing: 8,
-                  children: [
-                    _MetaItem('${sets.length} SETS'),
-                    const _MetaSep(),
-                    _MetaItem('${(totalDur / 60).round()}H PROGRAMMING'),
-                    const _MetaSep(),
-                    if (sets.isNotEmpty)
-                      _MetaItem('${fmtTime(firstT)} → ${fmtTime(lastT)}'),
-                  ],
                 ),
               ],
             ),
           ),
-        ],
-      ),
+        ),
+        for (final day in populatedDays)
+          _DaySection(
+            key: sectionKeys['${stage.id}:${day.id}'],
+            day: day,
+            stage: stage,
+            sets: setsBySection['${stage.id}:${day.id}']!,
+            onStar: onStar,
+            onSetTap: onSetTap,
+          ),
+      ],
     );
   }
 }
 
-class _MetaItem extends StatelessWidget {
-  final String text;
-  const _MetaItem(this.text);
-
-  @override
-  Widget build(BuildContext context) {
-    return Text(
-      text,
-      style: const TextStyle(
-        fontFamily: 'JetBrainsMono',
-        fontSize: 11,
-        color: colorFg3,
-        letterSpacing: 0.08 * 11,
-        height: 1,
-      ),
-    );
-  }
-}
-
-class _MetaSep extends StatelessWidget {
-  const _MetaSep();
-
-  @override
-  Widget build(BuildContext context) {
-    return const Text('|', style: TextStyle(color: colorFg4, fontSize: 11));
-  }
-}
-
-class _NowCallout extends StatelessWidget {
-  final FestSet set;
+class _DaySection extends StatelessWidget {
+  final Day day;
   final Stage stage;
+  final List<FestSet> sets;
+  final void Function(String setId)? onStar;
+  final ValueChanged<FestSet>? onSetTap;
 
-  const _NowCallout({required this.set, required this.stage});
+  const _DaySection({
+    super.key,
+    required this.day,
+    required this.stage,
+    required this.sets,
+    this.onStar,
+    this.onSetTap,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(18, 14, 18, 0),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        decoration: BoxDecoration(
-          color: colorAccentWash,
-          border: Border.all(color: colorAccent, width: 1.5),
-        ),
-        child: Row(
-          children: [
-            const LiveDot(size: 7),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    set.artist,
-                    style: const TextStyle(
-                      fontFamily: 'Helvetica',
-                      fontWeight: FontWeight.w700,
-                      fontSize: 18,
-                      letterSpacing: -0.02 * 18,
-                      color: colorFg,
-                      height: 1,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    '${fmtTime(set.t)} → ${fmtTime(set.t + set.dur)} · ${set.genre}',
-                    style: const TextStyle(
-                      fontFamily: 'JetBrainsMono',
-                      fontSize: 10,
-                      letterSpacing: 0.08 * 10,
-                      color: colorFg2,
-                      height: 1,
-                    ),
-                  ),
-                ],
-              ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Container(
+          color: colorBg,
+          padding: const EdgeInsets.fromLTRB(18, 12, 18, 8),
+          child: Text(
+            '${day.label.toUpperCase()} ${day.dayNum} ${day.month.toUpperCase()}',
+            style: const TextStyle(
+              fontFamily: 'JetBrainsMono',
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.08 * 10,
+              color: colorFg2,
             ),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              color: colorAccent,
-              child: const Text(
-                'LIVE',
-                style: TextStyle(
-                  fontFamily: 'JetBrainsMono',
-                  fontSize: 10,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 0.1 * 10,
-                  color: colorAccentInk,
-                  height: 1,
-                ),
-              ),
-            ),
-          ],
+          ),
         ),
-      ),
+        for (final set in sets)
+          _SetRow(
+            set: set,
+            stage: stage,
+            onStar: () => onStar?.call(set.id),
+            onTap: () => onSetTap?.call(set),
+          ),
+      ],
     );
   }
 }
 
-class _BigCard extends StatelessWidget {
+class _SetRow extends StatelessWidget {
   final FestSet set;
   final Stage stage;
   final VoidCallback onStar;
+  final VoidCallback onTap;
 
-  const _BigCard({
+  const _SetRow({
     required this.set,
     required this.stage,
     required this.onStar,
+    required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
     return DottedBorder.bottom(
       child: Material(
-        color: Colors.transparent,
+        color: set.live ? colorAccentWash : Colors.transparent,
         child: InkWell(
-          onTap: () {},
-          splashColor: Colors.transparent,
-          highlightColor: colorSurface1,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-            child: Row(
-              children: [
-                // Time (56px)
-                SizedBox(
-                  width: 56,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        fmtTime(set.t),
-                        style: const TextStyle(
-                          fontFamily: 'JetBrainsMono',
-                          fontSize: 14,
-                          fontWeight: FontWeight.w500,
-                          letterSpacing: -0.02 * 14,
-                          color: colorFg,
-                          height: 1,
+          onTap: onTap,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 72),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(18, 10, 12, 10),
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: 58,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          fmtTime(set.t),
+                          style: const TextStyle(
+                            fontFamily: 'JetBrainsMono',
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                            color: colorFg,
+                          ),
                         ),
-                      ),
-                      Text(
-                        '→ ${fmtTime(set.t + set.dur)}',
-                        style: const TextStyle(
-                          fontFamily: 'JetBrainsMono',
-                          fontSize: 10,
-                          color: colorFg4,
-                          height: 1,
+                        Text(
+                          '→ ${fmtTime(set.t + set.dur)}',
+                          style: const TextStyle(
+                            fontFamily: 'JetBrainsMono',
+                            fontSize: 9,
+                            color: colorFg4,
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
-                const SizedBox(width: 14),
-                // Name + meta
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        set.artist,
-                        style: const TextStyle(
-                          fontFamily: 'Helvetica',
-                          fontWeight: FontWeight.w700,
-                          fontSize: 18,
-                          letterSpacing: -0.02 * 18,
-                          height: 1.1,
-                          color: colorFg,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Wrap(
-                        spacing: 6,
-                        children: [
-                          if (set.live) const LiveDot(size: 6),
-                          Text(
-                            '${set.dur} MIN',
-                            style: const TextStyle(
-                              fontFamily: 'JetBrainsMono',
-                              fontSize: 10,
-                              color: colorFg3,
-                              letterSpacing: 0.08 * 10,
-                            ),
-                          ),
-                          const Text('|', style: TextStyle(color: colorFg4)),
-                          Text(
-                            set.genre,
-                            style: const TextStyle(
-                              fontFamily: 'JetBrainsMono',
-                              fontSize: 10,
-                              color: colorFg3,
-                              letterSpacing: 0.08 * 10,
-                            ),
-                          ),
-                          if (set.clashes.isNotEmpty) ...[
-                            const Text('|', style: TextStyle(color: colorFg4)),
-                            const Text(
-                              '! CLASH',
-                              style: TextStyle(
-                                fontFamily: 'JetBrainsMono',
-                                fontSize: 10,
-                                color: colorWarn,
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Row(
+                          children: [
+                            if (set.live) ...[
+                              const LiveDot(size: 7),
+                              const SizedBox(width: 7),
+                            ],
+                            Expanded(
+                              child: Text(
+                                set.artist,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontFamily: 'Helvetica',
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w700,
+                                  height: 1.05,
+                                  color: colorFg,
+                                ),
                               ),
                             ),
                           ],
-                        ],
-                      ),
-                      if (set.supporters.isNotEmpty)
-                        CoLikerPins(
-                          artist: set.artist,
-                          supporters: set.supporters,
                         ),
-                    ],
+                        if (set.genre.trim().isNotEmpty) ...[
+                          const SizedBox(height: 3),
+                          Text(
+                            '${set.dur} MIN · ${set.genre.toUpperCase()}',
+                            style: const TextStyle(
+                              fontFamily: 'JetBrainsMono',
+                              fontSize: 9,
+                              letterSpacing: 0.06 * 9,
+                              color: colorFg3,
+                            ),
+                          ),
+                        ],
+                        if (set.supporters.isNotEmpty)
+                          CoLikerPins(
+                            artist: set.artist,
+                            supporters: set.supporters,
+                          ),
+                      ],
+                    ),
                   ),
-                ),
-                // Star
-                StarButton(starred: set.starred, onToggle: onStar, size: 22),
-              ],
+                  StarButton(starred: set.starred, onToggle: onStar, size: 20),
+                ],
+              ),
             ),
           ),
         ),

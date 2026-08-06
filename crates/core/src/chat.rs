@@ -25,23 +25,30 @@ pub fn send_festival_chat(
     user_id: &str,
     display_name: &str,
     text: &str,
+    signing_key: &ed25519_dalek::SigningKey,
 ) -> anyhow::Result<(ChatMessage, TopicId)> {
-    let stage_or_general = stage_id.unwrap_or("general");
-    let topic = format!("festival/{festival_id}/chat/{stage_or_general}");
+    let channel = stage_id.unwrap_or("campsite");
+    let topic = format!("festival/{festival_id}/chat/{channel}");
 
-    let msg = db.save_local_chat_message(ChatMessage {
-        id: uuid::Uuid::new_v4().to_string(),
-        user_id: user_id.to_string(),
-        display_name: display_name.to_string(),
-        text: text.to_string(),
-        topic: topic.clone(),
-        stage_id: stage_id.map(ToOwned::to_owned),
-        timestamp: now_rfc3339(),
-        writer_seq: 0,
-        logical_time: 0,
-    })?;
+    let msg = db.save_local_signed_chat_message(
+        ChatMessage {
+            id: uuid::Uuid::new_v4().to_string(),
+            user_id: user_id.to_string(),
+            display_name: display_name.to_string(),
+            text: text.to_string(),
+            topic: topic.clone(),
+            stage_id: stage_id.map(ToOwned::to_owned),
+            timestamp: now_rfc3339(),
+            writer_seq: 0,
+            logical_time: 0,
+            writer_key: Vec::new(),
+            signature: Vec::new(),
+            trust: crate::types::ChatTrust::Unverified,
+        },
+        signing_key,
+    )?;
 
-    let topic_id = topics::festival_topic(festival_id, &format!("chat/{stage_or_general}"));
+    let topic_id = topics::festival_topic(festival_id, &format!("chat/{channel}"));
 
     Ok((msg, topic_id))
 }
@@ -69,6 +76,9 @@ pub fn send_group_chat(
         timestamp: now_rfc3339(),
         writer_seq: 0,
         logical_time: 0,
+        writer_key: Vec::new(),
+        signature: Vec::new(),
+        trust: crate::types::ChatTrust::Unverified,
     })?;
 
     let group_key = db
@@ -89,6 +99,9 @@ pub fn send_group_chat(
 
 /// Persist an incoming plaintext festival chat message (dedup by ID).
 pub fn receive_festival_chat(db: &Database, message: ChatMessage) -> anyhow::Result<()> {
+    if !crate::signing::verify_public_chat_message(&message) {
+        anyhow::bail!("invalid public chat signature");
+    }
     db.save_chat_message(&message)
 }
 
@@ -125,15 +138,9 @@ pub fn get_history(
     db.get_chat_messages(topic, limit, offset)
 }
 
-/// Return `(topic_string, TopicId)` pairs for general, campsite, and each
-/// stage channel of a festival.
+/// Return `(topic_string, TopicId)` pairs for campsite and each stage channel.
 pub fn get_festival_chat_topics(festival_id: &str, stage_ids: &[&str]) -> Vec<(String, TopicId)> {
     let mut result = Vec::new();
-
-    result.push((
-        format!("festival/{festival_id}/chat/general"),
-        topics::festival_topic(festival_id, "chat/general"),
-    ));
 
     result.push((
         format!("festival/{festival_id}/chat/campsite"),
@@ -173,8 +180,17 @@ impl ChatManager {
         user_id: &str,
         display_name: &str,
         text: &str,
+        signing_key: &ed25519_dalek::SigningKey,
     ) -> anyhow::Result<(ChatMessage, TopicId)> {
-        send_festival_chat(&self.db, festival_id, stage_id, user_id, display_name, text)
+        send_festival_chat(
+            &self.db,
+            festival_id,
+            stage_id,
+            user_id,
+            display_name,
+            text,
+            signing_key,
+        )
     }
 
     pub fn send_group_chat(
@@ -244,36 +260,51 @@ mod tests {
     }
 
     #[test]
-    fn test_send_festival_chat_general() {
+    fn test_send_festival_chat_campsite() {
         let db = test_db();
-        let (msg, topic_id) =
-            send_festival_chat(&db, "fieldday", None, "user1", "Alice", "hello").unwrap();
+        let signing_key = crate::signing::generate_signing_key();
+        let user_id = crate::auth::get_user_id(&signing_key);
+        let (msg, topic_id) = send_festival_chat(
+            &db,
+            "fieldday",
+            None,
+            &user_id,
+            "Alice",
+            "hello",
+            &signing_key,
+        )
+        .unwrap();
 
-        assert_eq!(msg.topic, "festival/fieldday/chat/general");
+        assert_eq!(msg.topic, "festival/fieldday/chat/campsite");
         assert_eq!(msg.stage_id, None);
-        assert_eq!(msg.user_id, "user1");
+        assert_eq!(msg.user_id, user_id);
         assert_eq!(msg.text, "hello");
         assert_eq!((msg.writer_seq, msg.logical_time), (1, 1));
+        assert!(crate::signing::verify_public_chat_message(&msg));
 
-        let expected_id = topics::festival_topic("fieldday", "chat/general");
+        let expected_id = topics::festival_topic("fieldday", "chat/campsite");
         assert_eq!(topic_id, expected_id);
 
         let stored = db
-            .get_chat_messages("festival/fieldday/chat/general", 10, 0)
+            .get_chat_messages("festival/fieldday/chat/campsite", 10, 0)
             .unwrap();
         assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].signature, msg.signature);
     }
 
     #[test]
     fn test_send_festival_chat_stage() {
         let db = test_db();
+        let signing_key = crate::signing::generate_signing_key();
+        let user_id = crate::auth::get_user_id(&signing_key);
         let (msg, topic_id) = send_festival_chat(
             &db,
             "fieldday",
             Some("main-stage"),
-            "user1",
+            &user_id,
             "Alice",
             "nice set!",
+            &signing_key,
         )
         .unwrap();
 
@@ -313,23 +344,33 @@ mod tests {
     }
 
     #[test]
-    fn test_receive_festival_chat_saves() {
+    fn test_receive_festival_chat_saves_only_valid_signatures() {
         let db = test_db();
-        let msg = ChatMessage {
+        let signing_key = crate::signing::generate_signing_key();
+        let mut msg = ChatMessage {
             id: "m1".to_string(),
-            user_id: "u2".to_string(),
+            user_id: crate::auth::get_user_id(&signing_key),
             display_name: "Bob".to_string(),
             text: "hi".to_string(),
-            topic: "festival/fieldday/chat/general".to_string(),
+            topic: "festival/fieldday/chat/campsite".to_string(),
             stage_id: None,
             timestamp: "2026-06-14T20:00:00Z".to_string(),
-            writer_seq: 0,
-            logical_time: 0,
+            writer_seq: 1,
+            logical_time: 1,
+            writer_key: Vec::new(),
+            signature: Vec::new(),
+            trust: crate::types::ChatTrust::Unverified,
         };
-        receive_festival_chat(&db, msg).unwrap();
+        crate::signing::sign_public_chat_message(&signing_key, &mut msg).unwrap();
+        receive_festival_chat(&db, msg.clone()).unwrap();
+
+        let mut tampered = msg;
+        tampered.id = "m2".to_string();
+        tampered.text = "altered".to_string();
+        assert!(receive_festival_chat(&db, tampered).is_err());
 
         let stored = db
-            .get_chat_messages("festival/fieldday/chat/general", 10, 0)
+            .get_chat_messages("festival/fieldday/chat/campsite", 10, 0)
             .unwrap();
         assert_eq!(stored.len(), 1);
         assert_eq!(stored[0].text, "hi");
@@ -338,10 +379,9 @@ mod tests {
     #[test]
     fn test_festival_chat_topics() {
         let topics = get_festival_chat_topics("fieldday", &["main-stage", "second-stage"]);
-        assert_eq!(topics.len(), 4);
+        assert_eq!(topics.len(), 3);
 
         let topic_strings: Vec<&str> = topics.iter().map(|(s, _)| s.as_str()).collect();
-        assert!(topic_strings.contains(&"festival/fieldday/chat/general"));
         assert!(topic_strings.contains(&"festival/fieldday/chat/campsite"));
         assert!(topic_strings.contains(&"festival/fieldday/chat/main-stage"));
         assert!(topic_strings.contains(&"festival/fieldday/chat/second-stage"));
@@ -350,24 +390,26 @@ mod tests {
     #[test]
     fn test_get_history_pagination() {
         let db = test_db();
-        let topic = "festival/fieldday/chat/general";
+        let topic = "festival/fieldday/chat/campsite";
+        let signing_key = crate::signing::generate_signing_key();
 
-        for i in 0..5u32 {
-            receive_festival_chat(
-                &db,
-                ChatMessage {
-                    id: format!("h{i}"),
-                    user_id: "u1".to_string(),
-                    display_name: "Alice".to_string(),
-                    text: format!("message {i}"),
-                    topic: topic.to_string(),
-                    stage_id: None,
-                    timestamp: format!("2026-06-14T20:0{i}:00Z"),
-                    writer_seq: i as u64,
-                    logical_time: i as u64,
-                },
-            )
-            .unwrap();
+        for i in 1..=5u32 {
+            let mut message = ChatMessage {
+                id: format!("h{i}"),
+                user_id: crate::auth::get_user_id(&signing_key),
+                display_name: "Alice".to_string(),
+                text: format!("message {i}"),
+                topic: topic.to_string(),
+                stage_id: None,
+                timestamp: format!("2026-06-14T20:0{i}:00Z"),
+                writer_seq: i as u64,
+                logical_time: i as u64,
+                writer_key: Vec::new(),
+                signature: Vec::new(),
+                trust: crate::types::ChatTrust::Unverified,
+            };
+            crate::signing::sign_public_chat_message(&signing_key, &mut message).unwrap();
+            receive_festival_chat(&db, message).unwrap();
         }
 
         let page1 = get_history(&db, topic, 3, 0).unwrap();
@@ -376,7 +418,7 @@ mod tests {
                 .iter()
                 .map(|message| message.id.as_str())
                 .collect::<Vec<_>>(),
-            vec!["h0", "h1", "h2"]
+            vec!["h1", "h2", "h3"]
         );
 
         let page2 = get_history(&db, topic, 3, 3).unwrap();
@@ -385,7 +427,7 @@ mod tests {
                 .iter()
                 .map(|message| message.id.as_str())
                 .collect::<Vec<_>>(),
-            vec!["h3", "h4"]
+            vec!["h4", "h5"]
         );
     }
 }

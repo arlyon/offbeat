@@ -15,18 +15,20 @@ import '../../widgets/dotted_border.dart';
 import '../../widgets/chip.dart';
 import 'day_tabs_view.dart';
 
+enum LineupScope { all, mine, ours }
+
 class FilterState {
   final Set<String> genres;
   final Set<String> stages;
   final List<int> timeRange; // [startMin, endMin]
-  final bool starredOnly;
+  final LineupScope scope;
   final bool hideClashes;
 
   const FilterState({
     this.genres = const {},
     this.stages = const {},
     this.timeRange = const [18 * 60, 26 * 60],
-    this.starredOnly = false,
+    this.scope = LineupScope.all,
     this.hideClashes = false,
   });
 
@@ -34,13 +36,13 @@ class FilterState {
     Set<String>? genres,
     Set<String>? stages,
     List<int>? timeRange,
-    bool? starredOnly,
+    LineupScope? scope,
     bool? hideClashes,
   }) => FilterState(
     genres: genres ?? this.genres,
     stages: stages ?? this.stages,
     timeRange: timeRange ?? this.timeRange,
-    starredOnly: starredOnly ?? this.starredOnly,
+    scope: scope ?? this.scope,
     hideClashes: hideClashes ?? this.hideClashes,
   );
 
@@ -48,7 +50,7 @@ class FilterState {
       genres.length +
       stages.length +
       (timeRange[0] != 18 * 60 || timeRange[1] != 26 * 60 ? 1 : 0) +
-      (starredOnly ? 1 : 0) +
+      (scope == LineupScope.all ? 0 : 1) +
       (hideClashes ? 1 : 0);
 
   FilterState get cleared => const FilterState();
@@ -91,7 +93,10 @@ class _FilterViewState extends State<FilterView> {
       if (f.stages.isNotEmpty && !f.stages.contains(s.stage)) return false;
       if (s.t < f.timeRange[0]) return false;
       if (s.t + s.dur > f.timeRange[1] + 30) return false;
-      if (f.starredOnly && !s.starred) return false;
+      if (f.scope == LineupScope.mine && !s.starred) return false;
+      if (f.scope == LineupScope.ours && !s.starred && !s.likedByGroup) {
+        return false;
+      }
       if (f.hideClashes && s.clashes.isNotEmpty) return false;
       return true;
     }).toList()..sort((a, b) => a.t.compareTo(b.t));
@@ -181,7 +186,7 @@ class _FilterViewState extends State<FilterView> {
         ),
         // Filter sheet
         if (_panelOpen)
-          _FilterSheet(
+          LineupFilterPanel(
             filter: f,
             stages: widget.stages,
             genres: widget.sets.map((s) => s.genre).toSet().toList()..sort(),
@@ -314,7 +319,7 @@ class _FilterSummaryBar extends StatelessWidget {
   }
 }
 
-class _FilterSheet extends StatelessWidget {
+class LineupFilterPanel extends StatelessWidget {
   final FilterState filter;
   final List<Stage> stages;
   final List<String> genres;
@@ -322,7 +327,8 @@ class _FilterSheet extends StatelessWidget {
   final ValueChanged<FilterState> onFilterChanged;
   final VoidCallback onClose;
 
-  const _FilterSheet({
+  const LineupFilterPanel({
+    super.key,
     required this.filter,
     required this.stages,
     required this.genres,
@@ -444,29 +450,36 @@ class _FilterSheet extends StatelessWidget {
                             .toList(),
                       ),
                     ),
-                    // Smart filters section
+                    _FpSection(
+                      label: '// PICKS',
+                      value: filter.scope.name.toUpperCase(),
+                      child: Row(
+                        children: [
+                          for (final scope in LineupScope.values) ...[
+                            Expanded(
+                              child: MonoChip(
+                                label: scope.name.toUpperCase(),
+                                active: filter.scope == scope,
+                                onTap: () => onFilterChanged(
+                                  filter.copyWith(scope: scope),
+                                ),
+                              ),
+                            ),
+                            if (scope != LineupScope.values.last)
+                              const SizedBox(width: 6),
+                          ],
+                        ],
+                      ),
+                    ),
                     _FpSection(
                       label: '// SMART FILTERS',
-                      child: Column(
-                        children: [
-                          _ToggleRow(
-                            label: '★ Starred only',
-                            sublabel: "Show artists you've added",
-                            value: filter.starredOnly,
-                            onToggle: () => onFilterChanged(
-                              filter.copyWith(starredOnly: !filter.starredOnly),
-                            ),
-                          ),
-                          const DottedRule(),
-                          _ToggleRow(
-                            label: '× Hide clashing sets',
-                            sublabel: 'Skip overlaps with your stars',
-                            value: filter.hideClashes,
-                            onToggle: () => onFilterChanged(
-                              filter.copyWith(hideClashes: !filter.hideClashes),
-                            ),
-                          ),
-                        ],
+                      child: _ToggleRow(
+                        label: '× Hide clashing sets',
+                        sublabel: 'Skip overlaps with your stars',
+                        value: filter.hideClashes,
+                        onToggle: () => onFilterChanged(
+                          filter.copyWith(hideClashes: !filter.hideClashes),
+                        ),
                       ),
                     ),
                   ],
@@ -745,7 +758,6 @@ class _TimeRangeSlider extends StatelessWidget {
                       child: Container(
                         width: 14,
                         height: 14,
-                        color: colorAccent,
                         decoration: BoxDecoration(
                           color: colorAccent,
                           border: Border.all(color: colorBg, width: 2),
@@ -769,7 +781,6 @@ class _TimeRangeSlider extends StatelessWidget {
                       child: Container(
                         width: 14,
                         height: 14,
-                        color: colorAccent,
                         decoration: BoxDecoration(
                           color: colorAccent,
                           border: Border.all(color: colorBg, width: 2),

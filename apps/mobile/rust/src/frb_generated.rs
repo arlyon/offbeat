@@ -29,7 +29,7 @@
 use crate::api::dto::*;
 use crate::api::*;
 use flutter_rust_bridge::for_generated::byteorder::{NativeEndian, ReadBytesExt, WriteBytesExt};
-use flutter_rust_bridge::for_generated::{transform_result_dco, Lifetimeable, Lockable};
+use flutter_rust_bridge::for_generated::{Lifetimeable, Lockable, transform_result_dco};
 use flutter_rust_bridge::{Handler, IntoIntoDart};
 
 // Section: boilerplate
@@ -40,7 +40,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1530918143;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1563350632;
 
 // Section: executor
 
@@ -801,6 +801,61 @@ fn wire__crate__api__AppNode_get_chat_messages_impl(
                             api_topic,
                             api_limit,
                             api_offset,
+                        )?;
+                        Ok(output_ok)
+                    })(),
+                )
+            }
+        },
+    )
+}
+fn wire__crate__api__AppNode_get_festival_check_in_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "AppNode_get_festival_check_in",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<AppNode>,
+            >>::sse_decode(&mut deserializer);
+            let api_festival_id = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
+                    (move || {
+                        let mut api_that_guard = None;
+                        let decode_indices_ =
+                            flutter_rust_bridge::for_generated::lockable_compute_decode_order(
+                                vec![flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                    &api_that, 0, false,
+                                )],
+                            );
+                        for i in decode_indices_ {
+                            match i {
+                                0 => api_that_guard = Some(api_that.lockable_decode_sync_ref()),
+                                _ => unreachable!(),
+                            }
+                        }
+                        let api_that_guard = api_that_guard.unwrap();
+                        let output_ok = crate::api::AppNode::get_festival_check_in(
+                            &*api_that_guard,
+                            api_festival_id,
                         )?;
                         Ok(output_ok)
                     })(),
@@ -1760,6 +1815,61 @@ fn wire__crate__api__AppNode_nudge_gossip_impl(
         },
     )
 }
+fn wire__crate__api__AppNode_pin_main_do_public_key_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "AppNode_pin_main_do_public_key",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<AppNode>,
+            >>::sse_decode(&mut deserializer);
+            let api_public_key_hex = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
+                    (move || {
+                        let mut api_that_guard = None;
+                        let decode_indices_ =
+                            flutter_rust_bridge::for_generated::lockable_compute_decode_order(
+                                vec![flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                    &api_that, 0, false,
+                                )],
+                            );
+                        for i in decode_indices_ {
+                            match i {
+                                0 => api_that_guard = Some(api_that.lockable_decode_sync_ref()),
+                                _ => unreachable!(),
+                            }
+                        }
+                        let api_that_guard = api_that_guard.unwrap();
+                        let output_ok = crate::api::AppNode::pin_main_do_public_key(
+                            &*api_that_guard,
+                            api_public_key_hex,
+                        )?;
+                        Ok(output_ok)
+                    })(),
+                )
+            }
+        },
+    )
+}
 fn wire__crate__api__AppNode_publish_chat_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -2172,6 +2282,70 @@ fn wire__crate__api__AppNode_set_display_name_impl(
                             crate::api::AppNode::set_display_name(&*api_that_guard, api_name)?;
                         Ok(output_ok)
                     })(),
+                )
+            }
+        },
+    )
+}
+fn wire__crate__api__AppNode_set_festival_check_in_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "AppNode_set_festival_check_in",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<AppNode>,
+            >>::sse_decode(&mut deserializer);
+            let api_festival_id = <String>::sse_decode(&mut deserializer);
+            let api_kind = <String>::sse_decode(&mut deserializer);
+            let api_value = <Option<String>>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
+                    (move || async move {
+                        let mut api_that_guard = None;
+                        let decode_indices_ =
+                            flutter_rust_bridge::for_generated::lockable_compute_decode_order(
+                                vec![flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                    &api_that, 0, false,
+                                )],
+                            );
+                        for i in decode_indices_ {
+                            match i {
+                                0 => {
+                                    api_that_guard =
+                                        Some(api_that.lockable_decode_async_ref().await)
+                                }
+                                _ => unreachable!(),
+                            }
+                        }
+                        let api_that_guard = api_that_guard.unwrap();
+                        let output_ok = crate::api::AppNode::set_festival_check_in(
+                            &*api_that_guard,
+                            api_festival_id,
+                            api_kind,
+                            api_value,
+                        )
+                        .await?;
+                        Ok(output_ok)
+                    })()
+                    .await,
                 )
             }
         },
@@ -4014,6 +4188,7 @@ impl SseDecode for crate::api::dto::ChatMessageDto {
         let mut var_topic = <String>::sse_decode(deserializer);
         let mut var_stageId = <Option<String>>::sse_decode(deserializer);
         let mut var_timestamp = <String>::sse_decode(deserializer);
+        let mut var_trust = <String>::sse_decode(deserializer);
         return crate::api::dto::ChatMessageDto {
             id: var_id,
             user_id: var_userId,
@@ -4022,6 +4197,7 @@ impl SseDecode for crate::api::dto::ChatMessageDto {
             topic: var_topic,
             stage_id: var_stageId,
             timestamp: var_timestamp,
+            trust: var_trust,
         };
     }
 }
@@ -4030,6 +4206,28 @@ impl SseDecode for f64 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         deserializer.cursor.read_f64::<NativeEndian>().unwrap()
+    }
+}
+
+impl SseDecode for crate::api::dto::FestivalCheckInDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_festivalId = <String>::sse_decode(deserializer);
+        let mut var_kind = <String>::sse_decode(deserializer);
+        let mut var_value = <Option<String>>::sse_decode(deserializer);
+        let mut var_checkedAt = <i64>::sse_decode(deserializer);
+        let mut var_expiresAt = <i64>::sse_decode(deserializer);
+        let mut var_revision = <i64>::sse_decode(deserializer);
+        let mut var_pendingGroupCount = <u32>::sse_decode(deserializer);
+        return crate::api::dto::FestivalCheckInDto {
+            festival_id: var_festivalId,
+            kind: var_kind,
+            value: var_value,
+            checked_at: var_checkedAt,
+            expires_at: var_expiresAt,
+            revision: var_revision,
+            pending_group_count: var_pendingGroupCount,
+        };
     }
 }
 
@@ -4091,15 +4289,21 @@ impl SseDecode for crate::api::dto::GroupMemberDto {
         let mut var_userId = <String>::sse_decode(deserializer);
         let mut var_displayName = <String>::sse_decode(deserializer);
         let mut var_status = <String>::sse_decode(deserializer);
+        let mut var_locationKind = <String>::sse_decode(deserializer);
         let mut var_stageId = <Option<String>>::sse_decode(deserializer);
         let mut var_customLocation = <Option<String>>::sse_decode(deserializer);
+        let mut var_updatedAt = <Option<String>>::sse_decode(deserializer);
+        let mut var_expiresAt = <Option<String>>::sse_decode(deserializer);
         let mut var_starredSetIds = <Vec<String>>::sse_decode(deserializer);
         return crate::api::dto::GroupMemberDto {
             user_id: var_userId,
             display_name: var_displayName,
             status: var_status,
+            location_kind: var_locationKind,
             stage_id: var_stageId,
             custom_location: var_customLocation,
+            updated_at: var_updatedAt,
+            expires_at: var_expiresAt,
             starred_set_ids: var_starredSetIds,
         };
     }
@@ -4164,6 +4368,13 @@ impl SseDecode for i32 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         deserializer.cursor.read_i32::<NativeEndian>().unwrap()
+    }
+}
+
+impl SseDecode for i64 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        deserializer.cursor.read_i64::<NativeEndian>().unwrap()
     }
 }
 
@@ -4538,6 +4749,19 @@ impl SseDecode for Option<crate::api::dto::AttestationDto> {
     }
 }
 
+impl SseDecode for Option<crate::api::dto::FestivalCheckInDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<crate::api::dto::FestivalCheckInDto>::sse_decode(
+                deserializer,
+            ));
+        } else {
+            return None;
+        }
+    }
+}
+
 impl SseDecode for Option<crate::api::dto::FestivalRegistryCacheDto> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -4775,106 +4999,115 @@ fn pde_ffi_dispatcher_primary_impl(
         12 => wire__crate__api__AppNode_get_auth_state_impl(port, ptr, rust_vec_len, data_len),
         13 => wire__crate__api__AppNode_get_chat_history_impl(port, ptr, rust_vec_len, data_len),
         14 => wire__crate__api__AppNode_get_chat_messages_impl(port, ptr, rust_vec_len, data_len),
-        15 => wire__crate__api__AppNode_get_festival_registry_cache_impl(
+        15 => {
+            wire__crate__api__AppNode_get_festival_check_in_impl(port, ptr, rust_vec_len, data_len)
+        }
+        16 => wire__crate__api__AppNode_get_festival_registry_cache_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        16 => wire__crate__api__AppNode_get_group_state_impl(port, ptr, rust_vec_len, data_len),
-        17 => wire__crate__api__AppNode_get_groups_impl(port, ptr, rust_vec_len, data_len),
-        18 => wire__crate__api__AppNode_get_identity_impl(port, ptr, rust_vec_len, data_len),
-        19 => wire__crate__api__AppNode_get_invite_payload_impl(port, ptr, rust_vec_len, data_len),
-        20 => wire__crate__api__AppNode_get_lineup_impl(port, ptr, rust_vec_len, data_len),
-        21 => wire__crate__api__AppNode_get_peer_count_impl(port, ptr, rust_vec_len, data_len),
-        22 => wire__crate__api__AppNode_get_peer_list_impl(port, ptr, rust_vec_len, data_len),
-        23 => wire__crate__api__AppNode_get_public_key_hex_impl(port, ptr, rust_vec_len, data_len),
-        24 => wire__crate__api__AppNode_get_stars_impl(port, ptr, rust_vec_len, data_len),
-        25 => {
+        17 => wire__crate__api__AppNode_get_group_state_impl(port, ptr, rust_vec_len, data_len),
+        18 => wire__crate__api__AppNode_get_groups_impl(port, ptr, rust_vec_len, data_len),
+        19 => wire__crate__api__AppNode_get_identity_impl(port, ptr, rust_vec_len, data_len),
+        20 => wire__crate__api__AppNode_get_invite_payload_impl(port, ptr, rust_vec_len, data_len),
+        21 => wire__crate__api__AppNode_get_lineup_impl(port, ptr, rust_vec_len, data_len),
+        22 => wire__crate__api__AppNode_get_peer_count_impl(port, ptr, rust_vec_len, data_len),
+        23 => wire__crate__api__AppNode_get_peer_list_impl(port, ptr, rust_vec_len, data_len),
+        24 => wire__crate__api__AppNode_get_public_key_hex_impl(port, ptr, rust_vec_len, data_len),
+        25 => wire__crate__api__AppNode_get_stars_impl(port, ptr, rust_vec_len, data_len),
+        26 => {
             wire__crate__api__AppNode_get_transport_status_impl(port, ptr, rust_vec_len, data_len)
         }
-        26 => wire__crate__api__AppNode_get_weather_impl(port, ptr, rust_vec_len, data_len),
-        27 => wire__crate__api__AppNode_join_group_impl(port, ptr, rust_vec_len, data_len),
-        28 => wire__crate__api__AppNode_leave_group_impl(port, ptr, rust_vec_len, data_len),
-        29 => wire__crate__api__AppNode_meshtastic_listen_apply_group_chats_impl(
+        27 => wire__crate__api__AppNode_get_weather_impl(port, ptr, rust_vec_len, data_len),
+        28 => wire__crate__api__AppNode_join_group_impl(port, ptr, rust_vec_len, data_len),
+        29 => wire__crate__api__AppNode_leave_group_impl(port, ptr, rust_vec_len, data_len),
+        30 => wire__crate__api__AppNode_meshtastic_listen_apply_group_chats_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        30 => wire__crate__api__AppNode_meshtastic_send_group_chat_impl(
+        31 => wire__crate__api__AppNode_meshtastic_send_group_chat_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        31 => wire__crate__api__AppNode_nudge_gossip_impl(port, ptr, rust_vec_len, data_len),
-        32 => wire__crate__api__AppNode_publish_chat_impl(port, ptr, rust_vec_len, data_len),
-        33 => wire__crate__api__AppNode_replace_festival_registry_cache_impl(
+        32 => wire__crate__api__AppNode_nudge_gossip_impl(port, ptr, rust_vec_len, data_len),
+        33 => {
+            wire__crate__api__AppNode_pin_main_do_public_key_impl(port, ptr, rust_vec_len, data_len)
+        }
+        34 => wire__crate__api__AppNode_publish_chat_impl(port, ptr, rust_vec_len, data_len),
+        35 => wire__crate__api__AppNode_replace_festival_registry_cache_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        34 => wire__crate__api__AppNode_restart_ble_impl(port, ptr, rust_vec_len, data_len),
-        35 => wire__crate__api__AppNode_save_group_impl(port, ptr, rust_vec_len, data_len),
-        36 => wire__crate__api__AppNode_send_festival_chat_impl(port, ptr, rust_vec_len, data_len),
-        37 => wire__crate__api__AppNode_send_group_chat_impl(port, ptr, rust_vec_len, data_len),
-        38 => wire__crate__api__AppNode_set_display_name_impl(port, ptr, rust_vec_len, data_len),
-        39 => wire__crate__api__AppNode_set_festival_public_key_impl(
+        36 => wire__crate__api__AppNode_restart_ble_impl(port, ptr, rust_vec_len, data_len),
+        37 => wire__crate__api__AppNode_save_group_impl(port, ptr, rust_vec_len, data_len),
+        38 => wire__crate__api__AppNode_send_festival_chat_impl(port, ptr, rust_vec_len, data_len),
+        39 => wire__crate__api__AppNode_send_group_chat_impl(port, ptr, rust_vec_len, data_len),
+        40 => wire__crate__api__AppNode_set_display_name_impl(port, ptr, rust_vec_len, data_len),
+        41 => {
+            wire__crate__api__AppNode_set_festival_check_in_impl(port, ptr, rust_vec_len, data_len)
+        }
+        42 => wire__crate__api__AppNode_set_festival_public_key_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        40 => wire__crate__api__AppNode_sign_message_impl(port, ptr, rust_vec_len, data_len),
-        41 => wire__crate__api__AppNode_start_ble_sync_impl(port, ptr, rust_vec_len, data_len),
-        42 => wire__crate__api__AppNode_stop_ble_sync_impl(port, ptr, rust_vec_len, data_len),
-        43 => wire__crate__api__AppNode_store_attestation_impl(port, ptr, rust_vec_len, data_len),
-        44 => {
+        43 => wire__crate__api__AppNode_sign_message_impl(port, ptr, rust_vec_len, data_len),
+        44 => wire__crate__api__AppNode_start_ble_sync_impl(port, ptr, rust_vec_len, data_len),
+        45 => wire__crate__api__AppNode_stop_ble_sync_impl(port, ptr, rust_vec_len, data_len),
+        46 => wire__crate__api__AppNode_store_attestation_impl(port, ptr, rust_vec_len, data_len),
+        47 => {
             wire__crate__api__AppNode_subscribe_chat_topics_impl(port, ptr, rust_vec_len, data_len)
         }
-        45 => wire__crate__api__AppNode_subscribe_festival_impl(port, ptr, rust_vec_len, data_len),
-        46 => wire__crate__api__AppNode_subscribe_groups_impl(port, ptr, rust_vec_len, data_len),
-        47 => wire__crate__api__AppNode_toggle_star_impl(port, ptr, rust_vec_len, data_len),
-        48 => wire__crate__api__AppNode_update_shared_stars_impl(port, ptr, rust_vec_len, data_len),
-        49 => wire__crate__api__AppNode_watch_chat_impl(port, ptr, rust_vec_len, data_len),
-        50 => wire__crate__api__AppNode_watch_group_state_impl(port, ptr, rust_vec_len, data_len),
-        51 => wire__crate__api__AppNode_watch_lineup_impl(port, ptr, rust_vec_len, data_len),
-        52 => wire__crate__api__AppNode_watch_peer_list_impl(port, ptr, rust_vec_len, data_len),
-        53 => wire__crate__api__AppNode_watch_sync_status_impl(port, ptr, rust_vec_len, data_len),
-        54 => {
+        48 => wire__crate__api__AppNode_subscribe_festival_impl(port, ptr, rust_vec_len, data_len),
+        49 => wire__crate__api__AppNode_subscribe_groups_impl(port, ptr, rust_vec_len, data_len),
+        50 => wire__crate__api__AppNode_toggle_star_impl(port, ptr, rust_vec_len, data_len),
+        51 => wire__crate__api__AppNode_update_shared_stars_impl(port, ptr, rust_vec_len, data_len),
+        52 => wire__crate__api__AppNode_watch_chat_impl(port, ptr, rust_vec_len, data_len),
+        53 => wire__crate__api__AppNode_watch_group_state_impl(port, ptr, rust_vec_len, data_len),
+        54 => wire__crate__api__AppNode_watch_lineup_impl(port, ptr, rust_vec_len, data_len),
+        55 => wire__crate__api__AppNode_watch_peer_list_impl(port, ptr, rust_vec_len, data_len),
+        56 => wire__crate__api__AppNode_watch_sync_status_impl(port, ptr, rust_vec_len, data_len),
+        57 => {
             wire__crate__api__AppNode_watch_transport_status_impl(port, ptr, rust_vec_len, data_len)
         }
-        55 => wire__crate__api__AppNode_watch_weather_impl(port, ptr, rust_vec_len, data_len),
-        56 => wire__crate__api__FestivalRegistryCacheStore_load_impl(
+        58 => wire__crate__api__AppNode_watch_weather_impl(port, ptr, rust_vec_len, data_len),
+        59 => wire__crate__api__FestivalRegistryCacheStore_load_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        57 => wire__crate__api__FestivalRegistryCacheStore_open_impl(
+        60 => wire__crate__api__FestivalRegistryCacheStore_open_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        58 => wire__crate__api__FestivalRegistryCacheStore_replace_impl(
+        61 => wire__crate__api__FestivalRegistryCacheStore_replace_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        59 => wire__crate__api__dto__convert_sync_status_impl(port, ptr, rust_vec_len, data_len),
-        60 => wire__crate__api__dto__generate_group_key_impl(port, ptr, rust_vec_len, data_len),
-        61 => wire__crate__api__dto__group_id_from_key_impl(port, ptr, rust_vec_len, data_len),
-        62 => wire__crate__api__init_app_impl(port, ptr, rust_vec_len, data_len),
-        63 => wire__crate__api__meshtastic_debug_probe_impl(port, ptr, rust_vec_len, data_len),
-        64 => wire__crate__api__meshtastic_debug_scan_impl(port, ptr, rust_vec_len, data_len),
-        65 => wire__crate__api__dto__peer_entry_to_dto_impl(port, ptr, rust_vec_len, data_len),
-        66 => wire__crate__api__dto__read_lineup_from_doc_impl(port, ptr, rust_vec_len, data_len),
-        67 => wire__crate__api__dto__read_weather_from_doc_impl(port, ptr, rust_vec_len, data_len),
-        68 => wire__crate__api__dto__snapshot_transport_impl(port, ptr, rust_vec_len, data_len),
+        62 => wire__crate__api__dto__convert_sync_status_impl(port, ptr, rust_vec_len, data_len),
+        63 => wire__crate__api__dto__generate_group_key_impl(port, ptr, rust_vec_len, data_len),
+        64 => wire__crate__api__dto__group_id_from_key_impl(port, ptr, rust_vec_len, data_len),
+        65 => wire__crate__api__init_app_impl(port, ptr, rust_vec_len, data_len),
+        66 => wire__crate__api__meshtastic_debug_probe_impl(port, ptr, rust_vec_len, data_len),
+        67 => wire__crate__api__meshtastic_debug_scan_impl(port, ptr, rust_vec_len, data_len),
+        68 => wire__crate__api__dto__peer_entry_to_dto_impl(port, ptr, rust_vec_len, data_len),
+        69 => wire__crate__api__dto__read_lineup_from_doc_impl(port, ptr, rust_vec_len, data_len),
+        70 => wire__crate__api__dto__read_weather_from_doc_impl(port, ptr, rust_vec_len, data_len),
+        71 => wire__crate__api__dto__snapshot_transport_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -5017,6 +5250,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::dto::ChatMessageDto {
             self.topic.into_into_dart().into_dart(),
             self.stage_id.into_into_dart().into_dart(),
             self.timestamp.into_into_dart().into_dart(),
+            self.trust.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -5029,6 +5263,32 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::dto::ChatMessageDto>
     for crate::api::dto::ChatMessageDto
 {
     fn into_into_dart(self) -> crate::api::dto::ChatMessageDto {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::dto::FestivalCheckInDto {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.festival_id.into_into_dart().into_dart(),
+            self.kind.into_into_dart().into_dart(),
+            self.value.into_into_dart().into_dart(),
+            self.checked_at.into_into_dart().into_dart(),
+            self.expires_at.into_into_dart().into_dart(),
+            self.revision.into_into_dart().into_dart(),
+            self.pending_group_count.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::dto::FestivalCheckInDto
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::dto::FestivalCheckInDto>
+    for crate::api::dto::FestivalCheckInDto
+{
+    fn into_into_dart(self) -> crate::api::dto::FestivalCheckInDto {
         self
     }
 }
@@ -5120,8 +5380,11 @@ impl flutter_rust_bridge::IntoDart for crate::api::dto::GroupMemberDto {
             self.user_id.into_into_dart().into_dart(),
             self.display_name.into_into_dart().into_dart(),
             self.status.into_into_dart().into_dart(),
+            self.location_kind.into_into_dart().into_dart(),
             self.stage_id.into_into_dart().into_dart(),
             self.custom_location.into_into_dart().into_dart(),
+            self.updated_at.into_into_dart().into_dart(),
+            self.expires_at.into_into_dart().into_dart(),
             self.starred_set_ids.into_into_dart().into_dart(),
         ]
         .into_dart()
@@ -5778,6 +6041,7 @@ impl SseEncode for crate::api::dto::ChatMessageDto {
         <String>::sse_encode(self.topic, serializer);
         <Option<String>>::sse_encode(self.stage_id, serializer);
         <String>::sse_encode(self.timestamp, serializer);
+        <String>::sse_encode(self.trust, serializer);
     }
 }
 
@@ -5785,6 +6049,19 @@ impl SseEncode for f64 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         serializer.cursor.write_f64::<NativeEndian>(self).unwrap();
+    }
+}
+
+impl SseEncode for crate::api::dto::FestivalCheckInDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.festival_id, serializer);
+        <String>::sse_encode(self.kind, serializer);
+        <Option<String>>::sse_encode(self.value, serializer);
+        <i64>::sse_encode(self.checked_at, serializer);
+        <i64>::sse_encode(self.expires_at, serializer);
+        <i64>::sse_encode(self.revision, serializer);
+        <u32>::sse_encode(self.pending_group_count, serializer);
     }
 }
 
@@ -5828,8 +6105,11 @@ impl SseEncode for crate::api::dto::GroupMemberDto {
         <String>::sse_encode(self.user_id, serializer);
         <String>::sse_encode(self.display_name, serializer);
         <String>::sse_encode(self.status, serializer);
+        <String>::sse_encode(self.location_kind, serializer);
         <Option<String>>::sse_encode(self.stage_id, serializer);
         <Option<String>>::sse_encode(self.custom_location, serializer);
+        <Option<String>>::sse_encode(self.updated_at, serializer);
+        <Option<String>>::sse_encode(self.expires_at, serializer);
         <Vec<String>>::sse_encode(self.starred_set_ids, serializer);
     }
 }
@@ -5875,6 +6155,13 @@ impl SseEncode for i32 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         serializer.cursor.write_i32::<NativeEndian>(self).unwrap();
+    }
+}
+
+impl SseEncode for i64 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        serializer.cursor.write_i64::<NativeEndian>(self).unwrap();
     }
 }
 
@@ -6151,6 +6438,16 @@ impl SseEncode for Option<crate::api::dto::AttestationDto> {
     }
 }
 
+impl SseEncode for Option<crate::api::dto::FestivalCheckInDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <crate::api::dto::FestivalCheckInDto>::sse_encode(value, serializer);
+        }
+    }
+}
+
 impl SseEncode for Option<crate::api::dto::FestivalRegistryCacheDto> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -6321,7 +6618,7 @@ mod io {
     use flutter_rust_bridge::for_generated::byteorder::{
         NativeEndian, ReadBytesExt, WriteBytesExt,
     };
-    use flutter_rust_bridge::for_generated::{transform_result_dco, Lifetimeable, Lockable};
+    use flutter_rust_bridge::for_generated::{Lifetimeable, Lockable, transform_result_dco};
     use flutter_rust_bridge::{Handler, IntoIntoDart};
 
     // Section: boilerplate
@@ -6431,7 +6728,7 @@ mod web {
     };
     use flutter_rust_bridge::for_generated::wasm_bindgen;
     use flutter_rust_bridge::for_generated::wasm_bindgen::prelude::*;
-    use flutter_rust_bridge::for_generated::{transform_result_dco, Lifetimeable, Lockable};
+    use flutter_rust_bridge::for_generated::{Lifetimeable, Lockable, transform_result_dco};
     use flutter_rust_bridge::{Handler, IntoIntoDart};
 
     // Section: boilerplate

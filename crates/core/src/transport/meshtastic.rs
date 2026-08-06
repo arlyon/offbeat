@@ -1029,9 +1029,11 @@ mod tests {
             payload_variant: Some(from_radio::PayloadVariant::Packet(packet)),
         }
         .encode_to_vec();
-        assert!(decode_from_radio_private_app(&from_radio)
-            .unwrap()
-            .is_none());
+        assert!(
+            decode_from_radio_private_app(&from_radio)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

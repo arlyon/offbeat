@@ -4,14 +4,23 @@
 
 import 'dart:async';
 import 'package:flutter/material.dart';
+import '../../data/check_in_controller.dart';
+import '../../data/group_presence.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/dotted_border.dart';
 import '../../src/rust/api.dart';
 import '../../src/rust/api/dto.dart';
 import 'create_group_sheet.dart';
+import 'group_members_sheet.dart';
 import 'invite_sheet.dart';
 import 'member_sheet.dart';
 import 'scan_sheet.dart';
+
+class SocialActionsController {
+  VoidCallback? _openGroupActions;
+
+  void openGroupActions() => _openGroupActions?.call();
+}
 
 class SocialScreen extends StatefulWidget {
   final AppNode node;
@@ -22,6 +31,8 @@ class SocialScreen extends StatefulWidget {
   final String? displayName;
   final LineupDto? lineup;
   final VoidCallback? onGroupsChanged;
+  final SocialActionsController? actionsController;
+  final CheckInController? checkInController;
 
   const SocialScreen({
     super.key,
@@ -33,6 +44,8 @@ class SocialScreen extends StatefulWidget {
     this.displayName,
     this.lineup,
     this.onGroupsChanged,
+    this.actionsController,
+    this.checkInController,
   });
 
   @override
@@ -53,33 +66,38 @@ class _SocialScreenState extends State<SocialScreen> {
   List<ChatMessageDto> _messages = [];
   StreamSubscription<List<ChatMessageDto>>? _chatSub;
 
-  // Peer count (live)
-  int _directPeerCount = 0;
-  StreamSubscription<List<PeerStatusInfo>>? _peerListSub;
-
   final _scrollController = ScrollController();
   final _composerController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
+    widget.actionsController?._openGroupActions = _showGroupActions;
     _loadGroups();
-    _watchPeers();
+  }
+
+  @override
+  void didUpdateWidget(SocialScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.actionsController != widget.actionsController) {
+      oldWidget.actionsController?._openGroupActions = null;
+      widget.actionsController?._openGroupActions = _showGroupActions;
+    }
   }
 
   @override
   void dispose() {
+    widget.actionsController?._openGroupActions = null;
     _groupSubscriptionGeneration++;
     _groupStateSub?.cancel();
     _chatSub?.cancel();
-    _peerListSub?.cancel();
     _scrollController.dispose();
     _composerController.dispose();
     super.dispose();
   }
 
   Future<void> _loadGroups({String? preferredGroupId}) async {
-    setState(() => _loading = true);
+    if (_groups.isEmpty) setState(() => _loading = true);
     try {
       final groups = await widget.node.getGroups(festivalId: widget.festivalId);
       if (!mounted) return;
@@ -105,20 +123,6 @@ class _SocialScreenState extends State<SocialScreen> {
     } catch (_) {
       if (!mounted) return;
       setState(() => _loading = false);
-    }
-  }
-
-  Future<void> _watchPeers() async {
-    try {
-      final stream = await widget.node.watchPeerList();
-      _peerListSub = stream.listen((peers) {
-        if (mounted) {
-          final active = peers.where((p) => p.status == 'active').length;
-          setState(() => _directPeerCount = active);
-        }
-      });
-    } catch (_) {
-      // Connection manager may not be available (e.g. in-memory node)
     }
   }
 
@@ -212,37 +216,10 @@ class _SocialScreenState extends State<SocialScreen> {
     final text = _composerController.text.trim();
     if (text.isEmpty || _activeGroupId == null) return;
     _composerController.clear();
+    if (mounted) setState(() {});
     try {
       await widget.node.sendGroupChat(groupId: _activeGroupId!, text: text);
     } catch (_) {}
-  }
-
-  Future<void> _checkIn({String? stageId, String? customLocation}) async {
-    final groupId = _activeGroupId;
-    if (groupId == null) return;
-    try {
-      await widget.node.checkIn(
-        groupId: groupId,
-        stageId: stageId,
-        customLocation: customLocation,
-      );
-      if (!mounted) return;
-      Navigator.of(context).maybePop();
-    } catch (_) {}
-  }
-
-  void _showCheckInSheet() {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      builder: (_) => _CheckInSheet(
-        stages: widget.stages,
-        onStage: (stageId) => _checkIn(stageId: stageId),
-        onCustom: (location) => _checkIn(customLocation: location),
-        onClear: () => _checkIn(),
-      ),
-    );
   }
 
   Future<void> _handleCreateGroup(String name) async {
@@ -253,7 +230,18 @@ class _SocialScreenState extends State<SocialScreen> {
         displayName: widget.displayName ?? 'anon',
       );
       if (!mounted) return;
+      setState(() {
+        _groups = [
+          ..._groups.where((group) => group.id != result.groupId),
+          GroupInfo(id: result.groupId, name: name),
+        ];
+        _activeGroupId = result.groupId;
+        _groupState = null;
+        _messages = [];
+        _loading = false;
+      });
       await _loadGroups(preferredGroupId: result.groupId);
+      await widget.checkInController?.refresh();
       widget.onGroupsChanged?.call();
       // Show invite sheet after creating
       if (mounted) {
@@ -271,6 +259,7 @@ class _SocialScreenState extends State<SocialScreen> {
       );
       if (!mounted) return;
       await _loadGroups(preferredGroupId: result.groupId);
+      await widget.checkInController?.refresh();
       widget.onGroupsChanged?.call();
     } catch (_) {}
   }
@@ -322,13 +311,14 @@ class _SocialScreenState extends State<SocialScreen> {
     }
   }
 
-  void _showCreateSheet() {
+  void _showCreateSheet({String initialTab = 'new'}) {
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
       builder: (_) => CreateGroupSheet(
         festivalName: widget.festivalName,
+        initialTab: initialTab,
         onCreate: (name) {
           Navigator.pop(context);
           _handleCreateGroup(name);
@@ -338,6 +328,37 @@ class _SocialScreenState extends State<SocialScreen> {
           _handleJoinGroup(code);
         },
         onScanQr: () => _showScanSheet(),
+      ),
+    );
+  }
+
+  void _showGroupActions() {
+    if (!mounted) return;
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (sheetContext) => _GroupActionsSheet(
+        groups: _groups,
+        activeGroupId: _activeGroupId,
+        onSwitch: (groupId) {
+          Navigator.pop(sheetContext);
+          _switchGroup(groupId);
+        },
+        onCreate: () {
+          Navigator.pop(sheetContext);
+          _showCreateSheet();
+        },
+        onJoin: () {
+          Navigator.pop(sheetContext);
+          _showCreateSheet(initialTab: 'join');
+        },
+        onLeave: _activeGroupId == null
+            ? null
+            : () {
+                Navigator.pop(sheetContext);
+                _leaveActiveGroup();
+              },
       ),
     );
   }
@@ -376,6 +397,27 @@ class _SocialScreenState extends State<SocialScreen> {
     );
   }
 
+  void _showMembersSheet({String? locationKey}) {
+    final state = _groupState;
+    if (state == null) return;
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => GroupMembersSheet(
+        members: state.members,
+        stages: widget.stages,
+        userId: widget.userId,
+        initialLocationKey: locationKey,
+        onMemberTap: (member) {
+          Future<void>.delayed(Duration.zero, () {
+            if (mounted) _showMemberSheet(member);
+          });
+        },
+      ),
+    );
+  }
+
   void _showMemberSheet(GroupMemberDto member) {
     if (_groupState == null) return;
     showModalBottomSheet(
@@ -402,11 +444,7 @@ class _SocialScreenState extends State<SocialScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (_loading) {
-      return const Center(
-        child: CircularProgressIndicator(color: colorAccent, strokeWidth: 1.5),
-      );
-    }
+    if (_loading) return _buildLoadingState();
 
     if (_groups.isEmpty) {
       return _buildEmptyState();
@@ -418,11 +456,8 @@ class _SocialScreenState extends State<SocialScreen> {
           child: ListView(
             controller: _scrollController,
             children: [
-              // Group identity header
               _buildGroupHeader(),
-              // Members eyebrow + strip
               _buildMembersSection(),
-              // Group pulse
               _buildPulseCard(),
               // Feed eyebrow
               _buildFeedEyebrow(),
@@ -435,6 +470,41 @@ class _SocialScreenState extends State<SocialScreen> {
         // Composer
         _buildComposer(),
       ],
+    );
+  }
+
+  Widget _buildLoadingState() {
+    return Padding(
+      padding: const EdgeInsets.all(18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(width: 190, height: 24, color: colorSurface2),
+          const SizedBox(height: 10),
+          Container(width: 260, height: 10, color: colorSurface2),
+          const SizedBox(height: 28),
+          DottedBorder(
+            child: SizedBox(
+              height: 88,
+              child: Row(
+                children: List.generate(
+                  4,
+                  (index) => Padding(
+                    padding: const EdgeInsets.only(left: 12),
+                    child: Container(
+                      width: 44,
+                      height: 44,
+                      color: colorSurface2,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 18),
+          Container(width: double.infinity, height: 48, color: colorSurface2),
+        ],
+      ),
     );
   }
 
@@ -457,7 +527,7 @@ class _SocialScreenState extends State<SocialScreen> {
             ),
             const SizedBox(height: 24),
             const Text(
-              'NO GROUPS YET',
+              'YOUR CREW ISN’T HERE YET',
               style: TextStyle(
                 fontFamily: 'JetBrainsMono',
                 fontSize: 11,
@@ -480,30 +550,57 @@ class _SocialScreenState extends State<SocialScreen> {
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 32),
-            SizedBox(
-              width: double.infinity,
-              height: 48,
-              child: Material(
-                color: colorAccent,
-                child: InkWell(
-                  onTap: _showCreateSheet,
-                  child: const Center(
-                    child: Text(
-                      'CREATE OR JOIN GROUP',
-                      style: TextStyle(
-                        fontFamily: 'JetBrainsMono',
-                        fontSize: 10,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 0.1 * 10,
-                        color: colorAccentInk,
-                        height: 1,
-                      ),
-                    ),
+            Row(
+              children: [
+                Expanded(
+                  child: _emptyAction(
+                    label: 'CREATE',
+                    primary: true,
+                    onTap: () => _showCreateSheet(),
                   ),
                 ),
-              ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _emptyAction(
+                    label: 'JOIN',
+                    onTap: () => _showCreateSheet(initialTab: 'join'),
+                  ),
+                ),
+              ],
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _emptyAction({
+    required String label,
+    required VoidCallback onTap,
+    bool primary = false,
+  }) {
+    return Material(
+      color: primary ? colorAccent : Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        child: Container(
+          height: 48,
+          decoration: primary
+              ? null
+              : BoxDecoration(
+                  border: Border.all(color: colorDotted, width: 1.5),
+                ),
+          alignment: Alignment.center,
+          child: Text(
+            label,
+            style: TextStyle(
+              fontFamily: 'JetBrainsMono',
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.1 * 10,
+              color: primary ? colorAccentInk : colorFg,
+            ),
+          ),
         ),
       ),
     );
@@ -538,14 +635,14 @@ class _SocialScreenState extends State<SocialScreen> {
                   style: const TextStyle(
                     fontFamily: 'Helvetica',
                     fontWeight: FontWeight.w700,
-                    fontSize: 30,
-                    letterSpacing: -0.02 * 30,
+                    fontSize: 25,
+                    letterSpacing: -0.02 * 25,
                     height: 0.98,
                     color: colorFg,
                   ),
                 ),
               ),
-              if (_groups.length > 1) _buildGroupSwitcher(),
+              _buildInviteAction(),
             ],
           ),
           const SizedBox(height: 8),
@@ -555,169 +652,37 @@ class _SocialScreenState extends State<SocialScreen> {
               Text('$memberCount MEMBERS', style: _metaStyle),
               _metaSep(),
               Text('$_directPeerCount DIRECT PEERS', style: _metaStyle),
-              _metaSep(),
-              Text(widget.festivalName.toUpperCase(), style: _metaStyle),
             ],
-          ),
-          const SizedBox(height: 8),
-          const Row(
-            children: [
-              Icon(Icons.sync, size: 12, color: colorAccent),
-              SizedBox(width: 6),
-              Text(
-                'LIKES SYNC WITH THIS GROUP',
-                style: TextStyle(
-                  fontFamily: 'JetBrainsMono',
-                  fontSize: 9,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 0.06 * 9,
-                  color: colorAccent,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          // Action buttons row
-          DottedBorder(
-            child: Row(
-              children: [
-                _actionButton(
-                  label: 'INVITE',
-                  icon: Icons.person_add_alt_1,
-                  primary: true,
-                  onTap: () => _showInviteSheet(),
-                ),
-                _actionButton(
-                  label: 'CHECK IN',
-                  icon: Icons.location_on_outlined,
-                  onTap: _showCheckInSheet,
-                ),
-                _actionButton(
-                  label: 'NEW',
-                  icon: Icons.add,
-                  onTap: _showCreateSheet,
-                ),
-                _actionButton(
-                  label: 'LEAVE',
-                  icon: Icons.logout,
-                  isLast: true,
-                  onTap: _leaveActiveGroup,
-                ),
-              ],
-            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildGroupSwitcher() {
-    return PopupMenuButton<String>(
-      onSelected: _switchGroup,
-      color: colorSurface1,
-      shape: const RoundedRectangleBorder(),
-      offset: const Offset(0, 36),
-      itemBuilder: (_) => [
-        ..._groups.map(
-          (g) => PopupMenuItem<String>(
-            value: g.id,
-            child: Text(
-              g.name.toUpperCase(),
-              style: TextStyle(
-                fontFamily: 'Helvetica',
-                fontWeight: FontWeight.w700,
-                fontSize: 14,
-                letterSpacing: -0.01 * 14,
-                color: g.id == _activeGroupId ? colorAccent : colorFg,
-              ),
-            ),
-          ),
-        ),
-        PopupMenuItem<String>(
-          value: '__create__',
-          child: const Text(
-            '+ NEW GROUP',
-            style: TextStyle(
-              fontFamily: 'JetBrainsMono',
-              fontSize: 11,
-              fontWeight: FontWeight.w500,
-              letterSpacing: 0.08 * 11,
-              color: colorFg2,
-            ),
-          ),
-        ),
-      ],
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-        decoration: BoxDecoration(
-          border: Border.all(color: colorDotted, width: 1.5),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              _groups
-                  .firstWhere(
-                    (g) => g.id == _activeGroupId,
-                    orElse: () => _groups.first,
-                  )
-                  .name
-                  .toUpperCase(),
-              style: const TextStyle(
-                fontFamily: 'JetBrainsMono',
-                fontSize: 10,
-                fontWeight: FontWeight.w500,
-                letterSpacing: 0.08 * 10,
-                color: colorFg,
-              ),
-              overflow: TextOverflow.ellipsis,
-            ),
-            const SizedBox(width: 6),
-            const Text(
-              '\u25BE',
-              style: TextStyle(fontSize: 10, color: colorFg3),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _actionButton({
-    required String label,
-    required IconData icon,
-    bool primary = false,
-    bool isLast = false,
-    required VoidCallback onTap,
-  }) {
-    return Expanded(
-      child: GestureDetector(
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 11, horizontal: 12),
-          decoration: BoxDecoration(
-            color: primary ? colorAccent : Colors.transparent,
-            border: isLast
-                ? null
-                : const Border(
-                    right: BorderSide(color: colorDotted, width: 1.5),
-                  ),
-          ),
-          child: Row(
+  Widget _buildInviteAction() {
+    return Semantics(
+      button: true,
+      label: 'Invite to group',
+      child: InkWell(
+        onTap: () => _showInviteSheet(),
+        child: const SizedBox(
+          width: 52,
+          height: 44,
+          child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(icon, size: 13, color: primary ? colorAccentInk : colorFg),
-              const SizedBox(width: 6),
               Text(
-                label,
+                '+',
                 style: TextStyle(
                   fontFamily: 'JetBrainsMono',
-                  fontSize: 10,
-                  fontWeight: FontWeight.w500,
-                  letterSpacing: 0.08 * 10,
-                  color: primary ? colorAccentInk : colorFg,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                  color: colorAccent,
+                  height: 0.8,
                 ),
               ),
+              SizedBox(height: 5),
+              Text('INVITE', style: _accentMetaStyle),
             ],
           ),
         ),
@@ -725,182 +690,112 @@ class _SocialScreenState extends State<SocialScreen> {
     );
   }
 
+  Widget _buildCheckInBar() {
+    final controller = widget.checkInController;
+    if (controller == null) return const SizedBox.shrink();
+    return ListenableBuilder(
+      listenable: controller,
+      builder: (context, _) {
+        final checkIn = controller.checkIn;
+        final label = switch (checkIn?.kind) {
+          'campsite' => 'CAMPSITE',
+          'stage' => widget.stages[checkIn?.value]?.toUpperCase() ?? 'STAGE',
+          'custom' => checkIn?.value?.toUpperCase() ?? 'CUSTOM LOCATION',
+          _ => 'NOT CHECKED IN',
+        };
+        return DottedBorder(
+          sides: const {DottedBorderSide.top, DottedBorderSide.bottom},
+          child: ListTile(
+            leading: Icon(
+              checkIn == null ? Icons.location_off_outlined : Icons.location_on,
+              color: checkIn == null ? colorFg4 : colorAccent,
+            ),
+            title: const Text('YOU', style: _metaStyle),
+            subtitle: Text(label),
+            trailing: TextButton(
+              onPressed: controller.saving
+                  ? null
+                  : () => showCheckInSheet(
+                      context,
+                      controller: controller,
+                      stages: widget.scheduleStages,
+                      sets: widget.scheduleSets,
+                    ),
+              child: Text(checkIn == null ? 'CHECK IN' : 'UPDATE'),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   // ── Members ───────────────────────────────────────────────────
 
   Widget _buildMembersSection() {
-    final members = _groupState?.members ?? [];
-    final onSiteCount = members.where((m) => m.stageId != null).length;
+    final members = _groupState?.members ?? const <GroupMemberDto>[];
+    final onSiteCount = members
+        .where((member) => member.stageId != null)
+        .length;
+    final visible = members.take(5).toList();
+    final stackWidth = visible.isEmpty
+        ? 44.0
+        : 44.0 + (visible.length - 1) * 28.0;
 
-    return Column(
-      children: [
-        _buildEyebrow('MEMBERS // $onSiteCount ON SITE', '\u2192 TAP TO VIEW'),
-        DottedBorder(
-          sides: const {DottedBorderSide.top, DottedBorderSide.bottom},
-          child: SizedBox(
-            height: 120,
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              itemCount: members.length + 1, // +1 for invite tile
-              itemBuilder: (context, i) {
-                if (i == members.length) {
-                  return _buildInviteTile();
-                }
-                final m = members[i];
-                final isMe = m.userId == widget.userId;
-                return _buildMemberTile(m, isMe);
-              },
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildMemberTile(GroupMemberDto m, bool isMe) {
-    final live = m.stageId != null;
-    final color = isMe ? colorAccent : (live ? colorStage2 : colorFg4);
-
-    return GestureDetector(
-      onTap: () => _showMemberSheet(m),
-      child: Container(
-        width: 92,
-        padding: const EdgeInsets.fromLTRB(8, 12, 8, 12),
-        decoration: BoxDecoration(
-          color: isMe ? colorAccentWash : Colors.transparent,
-          border: const Border(
-            right: BorderSide(color: colorDotted, width: 1.5),
-          ),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Avatar
-            Stack(
-              clipBehavior: Clip.none,
-              children: [
-                Container(
-                  width: 44,
-                  height: 44,
-                  color: colorSurface2,
-                  child: Center(
-                    child: Text(
-                      _initials(m.displayName),
-                      style: TextStyle(
-                        fontFamily: 'JetBrainsMono',
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: -0.02 * 14,
-                        color: live ? color : colorFg4,
-                      ),
+    return DottedBorder.top(
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: _showMembersSheet,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 88),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: stackWidth,
+                    height: 44,
+                    child: Stack(
+                      children: [
+                        for (var index = 0; index < visible.length; index++)
+                          Positioned(
+                            left: index * 28,
+                            child: _StackedAvatar(
+                              member: visible[index],
+                              isMe: visible[index].userId == widget.userId,
+                              overflow: index == visible.length - 1
+                                  ? members.length - visible.length
+                                  : 0,
+                            ),
+                          ),
+                      ],
                     ),
                   ),
-                ),
-                if (live)
-                  Positioned(
-                    bottom: -3,
-                    right: -3,
-                    child: Container(
-                      width: 10,
-                      height: 10,
-                      decoration: BoxDecoration(
-                        color: colorAccent,
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: isMe ? colorAccentWash : colorBg,
-                          width: 3,
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '$onSiteCount ON SITE · ${members.length} MEMBERS',
+                          style: const TextStyle(
+                            fontFamily: 'JetBrainsMono',
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                            color: colorFg,
+                          ),
                         ),
-                      ),
+                        const SizedBox(height: 4),
+                        const Text('TAP TO VIEW THE CREW', style: _metaStyle),
+                      ],
                     ),
                   ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            // Name
-            Text(
-              isMe ? 'you' : m.displayName.toLowerCase(),
-              style: const TextStyle(
-                fontFamily: 'Helvetica',
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-                letterSpacing: -0.01 * 12,
-                height: 1.1,
-                color: colorFg,
-              ),
-              overflow: TextOverflow.ellipsis,
-            ),
-            const SizedBox(height: 2),
-            // Stage or offline
-            Text(
-              live
-                  ? '\u00B0 ${m.stageId ?? ''}'.toUpperCase()
-                  : '\u2014 OFFLINE',
-              style: TextStyle(
-                fontFamily: 'JetBrainsMono',
-                fontSize: 9,
-                letterSpacing: 0.06 * 9,
-                color: live ? colorAccent : colorFg4,
-                height: 1.2,
-              ),
-              overflow: TextOverflow.ellipsis,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildInviteTile() {
-    return GestureDetector(
-      onTap: () => _showInviteSheet(),
-      child: Container(
-        width: 92,
-        padding: const EdgeInsets.fromLTRB(8, 12, 8, 12),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.start,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                border: Border.all(color: colorAccent, width: 1.5),
-              ),
-              child: const Center(
-                child: Text(
-                  '+',
-                  style: TextStyle(
-                    fontFamily: 'JetBrainsMono',
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
-                    color: colorAccent,
-                  ),
-                ),
+                  const Icon(Icons.chevron_right, size: 18, color: colorFg3),
+                ],
               ),
             ),
-            const SizedBox(height: 8),
-            const Text(
-              'invite',
-              style: TextStyle(
-                fontFamily: 'Helvetica',
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-                letterSpacing: -0.01 * 12,
-                height: 1.1,
-                color: colorAccent,
-              ),
-            ),
-            const SizedBox(height: 2),
-            const Text(
-              'QR \u00B7 CODE',
-              style: TextStyle(
-                fontFamily: 'JetBrainsMono',
-                fontSize: 9,
-                letterSpacing: 0.06 * 9,
-                color: colorFg4,
-                height: 1.2,
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );
@@ -909,91 +804,104 @@ class _SocialScreenState extends State<SocialScreen> {
   // ── Pulse card ────────────────────────────────────────────────
 
   Widget _buildPulseCard() {
-    final members = _groupState?.members ?? [];
+    final members = _groupState?.members ?? const <GroupMemberDto>[];
     if (members.isEmpty) return const SizedBox.shrink();
 
-    // Bucket members by stage (exclude self)
-    final Map<String, List<GroupMemberDto>> buckets = {};
-    for (final m in members) {
-      if (m.userId == widget.userId) continue;
-      final key = m.stageId ?? 'offline';
-      buckets.putIfAbsent(key, () => []).add(m);
+    final buckets = <String, List<GroupMemberDto>>{};
+    for (final member in members) {
+      final key = member.stageId ?? 'offline';
+      (buckets[key] ??= []).add(member);
     }
-    final totalOthers = members.length - 1;
     final sortedBuckets = buckets.entries.toList()
-      ..sort((a, b) => b.value.length.compareTo(a.value.length));
-
-    final now = DateTime.now();
-    final timeStr =
-        '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+      ..sort((a, b) {
+        if (a.key == 'offline') return 1;
+        if (b.key == 'offline') return -1;
+        return b.value.length.compareTo(a.value.length);
+      });
+    final visibleBuckets = sortedBuckets.take(3).toList();
 
     return DottedBorder.bottom(
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(18, 14, 18, 16),
+        padding: const EdgeInsets.fromLTRB(18, 12, 18, 14),
         child: Column(
           children: [
-            _buildEyebrowInline(
-              'GROUP PULSE // $timeStr',
-              '${members.length} MEMBERS',
-            ),
-            ...sortedBuckets.map((entry) {
-              final count = entry.value.length;
-              final pct = totalOthers > 0
-                  ? (count / totalOthers * 100).round()
-                  : 0;
-              final isOffline = entry.key == 'offline';
-              return Padding(
-                padding: const EdgeInsets.symmetric(vertical: 7),
-                child: Row(
-                  children: [
-                    SizedBox(
-                      width: 28,
-                      child: Text(
-                        '$count',
-                        style: const TextStyle(
-                          fontFamily: 'JetBrainsMono',
-                          fontSize: 17,
-                          fontWeight: FontWeight.w500,
-                          letterSpacing: -0.02 * 17,
-                          color: colorFg,
+            _buildEyebrowInline('WHERE THE CREW IS', 'TAP A LOCATION'),
+            for (final entry in visibleBuckets)
+              Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: () => _showMembersSheet(stageId: entry.key),
+                  child: SizedBox(
+                    height: 44,
+                    child: Row(
+                      children: [
+                        SizedBox(
+                          width: 28,
+                          child: Text(
+                            '${entry.value.length}',
+                            style: const TextStyle(
+                              fontFamily: 'JetBrainsMono',
+                              fontSize: 16,
+                              fontWeight: FontWeight.w700,
+                              color: colorFg,
+                            ),
+                          ),
                         ),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Container(
-                      width: 4,
-                      height: 14,
-                      color: isOffline ? colorFg4 : colorStage2,
-                    ),
-                    const SizedBox(width: 5),
-                    Expanded(
-                      child: Text(
-                        isOffline ? 'OFF GRID' : entry.key.toUpperCase(),
-                        style: TextStyle(
-                          fontFamily: 'JetBrainsMono',
-                          fontSize: 10,
-                          fontWeight: isOffline
-                              ? FontWeight.w500
-                              : FontWeight.w700,
-                          letterSpacing: 0.08 * 10,
-                          color: isOffline ? colorFg3 : colorFg,
+                        Container(
+                          width: 8,
+                          height: 8,
+                          color: entry.key == 'offline'
+                              ? colorFg4
+                              : colorCoAccent,
                         ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            entry.key == 'offline'
+                                ? 'OFF GRID'
+                                : (widget.stages[entry.key] ?? entry.key)
+                                      .toUpperCase(),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontFamily: 'JetBrainsMono',
+                              fontSize: 10,
+                              fontWeight: FontWeight.w700,
+                              color: entry.key == 'offline'
+                                  ? colorFg3
+                                  : colorFg,
+                            ),
+                          ),
+                        ),
+                        Text(
+                          entry.value
+                              .take(2)
+                              .map(
+                                (member) => member.displayName.split(' ').first,
+                              )
+                              .join(' · ')
+                              .toUpperCase(),
+                          style: _metaStyle,
+                        ),
+                        const SizedBox(width: 4),
+                        const Icon(
+                          Icons.chevron_right,
+                          size: 16,
+                          color: colorFg3,
+                        ),
+                      ],
                     ),
-                    Text(
-                      '$pct%',
-                      style: const TextStyle(
-                        fontFamily: 'JetBrainsMono',
-                        fontSize: 9,
-                        letterSpacing: 0.08 * 9,
-                        color: colorFg4,
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
-              );
-            }),
+              ),
+            if (sortedBuckets.length > visibleBuckets.length)
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  '+${sortedBuckets.length - visibleBuckets.length} MORE LOCATIONS',
+                  style: _metaStyle,
+                ),
+              ),
           ],
         ),
       ),
@@ -1006,7 +914,7 @@ class _SocialScreenState extends State<SocialScreen> {
     final name = _groupState?.name ?? '';
     final msgCount = _messages.length;
     return _buildEyebrow(
-      'GROUP FEED // ${name.toUpperCase()}',
+      'GROUP CHAT // ${name.toUpperCase()}',
       '$msgCount MSGS',
     );
   }
@@ -1017,7 +925,7 @@ class _SocialScreenState extends State<SocialScreen> {
         const Padding(
           padding: EdgeInsets.symmetric(horizontal: 18, vertical: 24),
           child: Text(
-            'NO MESSAGES YET \u2014 SAY SOMETHING',
+            'NO MESSAGES YET · START THE CHAT',
             style: TextStyle(
               fontFamily: 'JetBrainsMono',
               fontSize: 10,
@@ -1154,32 +1062,20 @@ class _SocialScreenState extends State<SocialScreen> {
 
   Widget _buildComposer() {
     if (_groups.isEmpty) return const SizedBox.shrink();
+    final canSend = _composerController.text.trim().isNotEmpty;
 
     return DottedBorder.top(
       child: Container(
         color: colorBg,
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+        padding: const EdgeInsets.fromLTRB(14, 8, 14, 8),
         child: Row(
           children: [
-            // Plus button
-            GestureDetector(
-              onTap: () {},
-              child: Container(
-                width: 36,
-                height: 36,
-                decoration: BoxDecoration(
-                  border: Border.all(color: colorDotted, width: 1.5),
-                ),
-                child: const Center(
-                  child: Icon(Icons.add, size: 16, color: colorFg2),
-                ),
-              ),
-            ),
-            const SizedBox(width: 8),
-            // Text field
             Expanded(
               child: TextField(
                 controller: _composerController,
+                onChanged: (_) => setState(() {}),
+                onSubmitted: (_) => _sendMessage(),
+                textInputAction: TextInputAction.send,
                 style: const TextStyle(
                   fontFamily: 'Helvetica',
                   fontSize: 14,
@@ -1188,38 +1084,38 @@ class _SocialScreenState extends State<SocialScreen> {
                 ),
                 decoration: const InputDecoration(
                   border: InputBorder.none,
-                  hintText: 'message the group\u2026',
+                  hintText: 'MESSAGE THE GROUP…',
                   hintStyle: TextStyle(
-                    fontFamily: 'Helvetica',
-                    fontSize: 14,
+                    fontFamily: 'JetBrainsMono',
+                    fontSize: 10,
                     color: colorFg4,
                   ),
                   contentPadding: EdgeInsets.symmetric(
                     horizontal: 4,
-                    vertical: 8,
+                    vertical: 10,
                   ),
                   isDense: true,
                 ),
-                onSubmitted: (_) => _sendMessage(),
               ),
             ),
             const SizedBox(width: 8),
-            // Send button
-            GestureDetector(
-              onTap: _sendMessage,
-              child: Container(
-                width: 60,
-                height: 36,
-                color: colorSurface2,
-                child: const Center(
-                  child: Text(
-                    'SEND',
-                    style: TextStyle(
-                      fontFamily: 'JetBrainsMono',
-                      fontSize: 10,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 0.08 * 10,
-                      color: colorFg4,
+            Material(
+              color: canSend ? colorAccent : colorSurface2,
+              child: InkWell(
+                onTap: canSend ? _sendMessage : null,
+                child: SizedBox(
+                  width: 64,
+                  height: 40,
+                  child: Center(
+                    child: Text(
+                      'SEND',
+                      style: TextStyle(
+                        fontFamily: 'JetBrainsMono',
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.08 * 10,
+                        color: canSend ? colorAccentInk : colorFg4,
+                      ),
                     ),
                   ),
                 ),
@@ -1315,6 +1211,14 @@ class _SocialScreenState extends State<SocialScreen> {
     color: colorFg3,
   );
 
+  static const _accentMetaStyle = TextStyle(
+    fontFamily: 'JetBrainsMono',
+    fontSize: 9,
+    fontWeight: FontWeight.w700,
+    letterSpacing: 0.08 * 9,
+    color: colorAccent,
+  );
+
   String _initials(String name) {
     final parts = name.trim().split(RegExp(r'\s+'));
     if (parts.length >= 2) {
@@ -1331,6 +1235,224 @@ class _SocialScreenState extends State<SocialScreen> {
     }
   }
 }
+
+class _StackedAvatar extends StatelessWidget {
+  final GroupMemberDto member;
+  final bool isMe;
+  final int overflow;
+
+  const _StackedAvatar({
+    required this.member,
+    required this.isMe,
+    required this.overflow,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final live = member.stageId != null;
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        Container(
+          width: 44,
+          height: 44,
+          decoration: BoxDecoration(
+            color: isMe ? colorAccent : colorSurface2,
+            border: Border.all(color: colorSurface1, width: 2),
+          ),
+          alignment: Alignment.center,
+          child: Text(
+            overflow > 0 ? '+$overflow' : _avatarInitials(member.displayName),
+            style: TextStyle(
+              fontFamily: 'JetBrainsMono',
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              color: isMe ? colorAccentInk : colorFg,
+            ),
+          ),
+        ),
+        if (live && overflow == 0)
+          Positioned(
+            right: -2,
+            bottom: -2,
+            child: Container(
+              width: 10,
+              height: 10,
+              decoration: BoxDecoration(
+                color: colorCoAccent,
+                shape: BoxShape.circle,
+                border: Border.all(color: colorSurface1, width: 2),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _GroupActionsSheet extends StatelessWidget {
+  final List<GroupInfo> groups;
+  final String? activeGroupId;
+  final ValueChanged<String> onSwitch;
+  final VoidCallback onCreate;
+  final VoidCallback onJoin;
+  final VoidCallback? onLeave;
+
+  const _GroupActionsSheet({
+    required this.groups,
+    required this.activeGroupId,
+    required this.onSwitch,
+    required this.onCreate,
+    required this.onJoin,
+    this.onLeave,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: colorSurface1,
+      child: SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 36,
+              height: 3,
+              margin: const EdgeInsets.only(top: 8),
+              color: colorFg4,
+            ),
+            DottedBorder.bottom(
+              child: const SizedBox(
+                height: 58,
+                child: Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 18),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'GROUPS',
+                          style: TextStyle(
+                            fontFamily: 'Helvetica',
+                            fontSize: 22,
+                            fontWeight: FontWeight.w700,
+                            color: colorFg,
+                          ),
+                        ),
+                      ),
+                      Text('MANAGE //', style: _sheetMetaStyle),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            for (final group in groups)
+              _GroupActionRow(
+                icon: group.id == activeGroupId
+                    ? Icons.radio_button_checked
+                    : Icons.radio_button_off,
+                label: group.name.toUpperCase(),
+                meta: group.id == activeGroupId ? 'ACTIVE' : 'SWITCH',
+                accent: group.id == activeGroupId,
+                onTap: group.id == activeGroupId
+                    ? null
+                    : () => onSwitch(group.id),
+              ),
+            _GroupActionRow(
+              icon: Icons.qr_code_scanner,
+              label: 'JOIN GROUP',
+              meta: 'CODE OR QR',
+              onTap: onJoin,
+            ),
+            _GroupActionRow(
+              icon: Icons.add,
+              label: 'CREATE GROUP',
+              meta: 'NEW CREW',
+              onTap: onCreate,
+            ),
+            if (onLeave != null)
+              _GroupActionRow(
+                icon: Icons.logout,
+                label: 'LEAVE ACTIVE GROUP',
+                meta: 'LOCAL LIKES KEPT',
+                destructive: true,
+                onTap: onLeave,
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _GroupActionRow extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String meta;
+  final bool accent;
+  final bool destructive;
+  final VoidCallback? onTap;
+
+  const _GroupActionRow({
+    required this.icon,
+    required this.label,
+    required this.meta,
+    this.accent = false,
+    this.destructive = false,
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = destructive ? colorErr : (accent ? colorAccent : colorFg);
+    return DottedBorder.bottom(
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          child: SizedBox(
+            height: 54,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 18),
+              child: Row(
+                children: [
+                  Icon(icon, size: 17, color: color),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      label,
+                      style: TextStyle(
+                        fontFamily: 'JetBrainsMono',
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        color: color,
+                      ),
+                    ),
+                  ),
+                  Text(meta, style: _sheetMetaStyle),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+String _avatarInitials(String name) {
+  final parts = name.trim().split(RegExp(r'\s+'));
+  if (parts.length >= 2) return '${parts.first[0]}${parts[1][0]}'.toUpperCase();
+  return name.substring(0, name.length.clamp(0, 2)).toUpperCase();
+}
+
+const _sheetMetaStyle = TextStyle(
+  fontFamily: 'JetBrainsMono',
+  fontSize: 9,
+  fontWeight: FontWeight.w700,
+  letterSpacing: 0.06 * 9,
+  color: colorFg3,
+);
 
 class _CheckInSheet extends StatefulWidget {
   final Map<String, String> stages;

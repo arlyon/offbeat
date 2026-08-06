@@ -123,8 +123,45 @@ pub enum AuthState {
     Expired,
 }
 
-/// Store an attestation in the local credentials table.
+fn cache_attestation_proof(db: &Database, attestation: &Attestation) -> anyhow::Result<()> {
+    let Some(root) = db.load_main_do_public_key()? else {
+        return Ok(());
+    };
+    let issuer: [u8; 32] = hex_to_bytes(&attestation.issuer)
+        .ok_or_else(|| anyhow::anyhow!("invalid attestation issuer encoding"))?
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("attestation issuer has wrong length"))?;
+    if issuer != root || !verify_attestation(attestation, &root) {
+        anyhow::bail!("attestation does not match the pinned MainDO root");
+    }
+    let parts: Vec<&str> = attestation.message.split(':').collect();
+    if parts.len() != 5 {
+        anyhow::bail!("invalid attestation message format");
+    }
+    let writer_key = hex_to_bytes(parts[2])
+        .ok_or_else(|| anyhow::anyhow!("invalid attested writer key encoding"))?;
+    let signature = hex_to_bytes(&attestation.signature)
+        .ok_or_else(|| anyhow::anyhow!("invalid attestation signature encoding"))?;
+    db.save_chat_author_proof(&writer_key, &attestation.message, &signature, &issuer)?;
+    Ok(())
+}
+
+pub fn pin_main_do_public_key(db: &Database, public_key_hex: &str) -> anyhow::Result<()> {
+    let public_key: [u8; 32] = hex_to_bytes(public_key_hex)
+        .ok_or_else(|| anyhow::anyhow!("invalid MainDO public key encoding"))?
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("MainDO public key has wrong length"))?;
+    db.pin_main_do_public_key(&public_key)?;
+    if let Some(attestation) = load_attestation(db)? {
+        cache_attestation_proof(db, &attestation)?;
+    }
+    Ok(())
+}
+
+/// Store an attestation in the local credentials table and, when the MainDO
+/// root is pinned, promote it into the offline public-chat proof cache.
 pub fn store_attestation(db: &Database, attestation: &Attestation) -> anyhow::Result<()> {
+    cache_attestation_proof(db, attestation)?;
     db.set_credential("attestation_message", attestation.message.as_bytes())?;
     db.set_credential("attestation_signature", attestation.signature.as_bytes())?;
     db.set_credential("attestation_issuer", attestation.issuer.as_bytes())?;

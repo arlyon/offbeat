@@ -49,8 +49,11 @@ pub struct GroupMember {
     pub user_id: String,
     pub display_name: String,
     pub status: String,
+    pub location_kind: String,
     pub stage_id: Option<String>,
     pub custom_location: Option<String>,
+    pub updated_at: Option<String>,
+    pub expires_at: Option<String>,
     pub starred_set_ids: Vec<String>,
 }
 
@@ -301,7 +304,11 @@ impl GroupManager {
                 value: Some(stage_id),
             },
             (None, Some(location)) => StoredCheckIn {
-                kind: "custom",
+                kind: if location.eq_ignore_ascii_case("campsite") {
+                    "campsite"
+                } else {
+                    "custom"
+                },
                 value: Some(location),
             },
             (None, None) => StoredCheckIn {
@@ -316,7 +323,9 @@ impl GroupManager {
         let user_id_s = user_id.to_string();
         let stage_id_s = stage_id.map(String::from);
         let custom_loc_s = custom_location.map(String::from);
-        let updated_at = now_rfc3339();
+        let now = unix_timestamp();
+        let updated_at = format!("{now}Z");
+        let expires_at = format!("{}Z", now + 2 * 60 * 60);
 
         let diff = self
             .doc_manager
@@ -325,6 +334,7 @@ impl GroupManager {
                 member.insert(txn, "checkIn", check_in_json);
                 member.insert(txn, "status", if is_active { "active" } else { "offline" });
                 member.insert(txn, "updatedAt", updated_at);
+                member.insert(txn, "expiresAt", expires_at);
                 match (stage_id_s, custom_loc_s) {
                     (Some(stage_id), None) => {
                         member.insert(txn, "stageId", stage_id);
@@ -498,20 +508,54 @@ impl GroupManager {
                 let parsed_check_in = stored_check_in
                     .as_deref()
                     .and_then(|value| serde_json::from_str::<StoredCheckIn<'_>>(value).ok());
-                let (status, stage_id, custom_location) = match parsed_check_in {
+                let updated_at = doc_manager::any_str(&fields, "updatedAt");
+                let expires_at = doc_manager::any_str(&fields, "expiresAt");
+                let fresh = expires_at
+                    .as_deref()
+                    .and_then(parse_epoch_timestamp)
+                    .is_none_or(|expires| expires > unix_timestamp());
+                let (status, location_kind, stage_id, custom_location) = match parsed_check_in {
                     Some(StoredCheckIn {
                         kind: "stage",
                         value: Some(value),
-                    }) => ("active".to_string(), Some(value.to_string()), None),
+                    }) if fresh => (
+                        "active".to_string(),
+                        "stage".to_string(),
+                        Some(value.to_string()),
+                        None,
+                    ),
                     Some(StoredCheckIn {
                         kind: "custom",
                         value: Some(value),
-                    }) => ("active".to_string(), None, Some(value.to_string())),
-                    Some(_) => ("offline".to_string(), None, None),
-                    None if stored_check_in.is_some() => ("offline".to_string(), None, None),
+                    }) if fresh => (
+                        "active".to_string(),
+                        "custom".to_string(),
+                        None,
+                        Some(value.to_string()),
+                    ),
+                    Some(StoredCheckIn {
+                        kind: "campsite",
+                        value,
+                    }) if fresh => (
+                        "active".to_string(),
+                        "campsite".to_string(),
+                        None,
+                        Some(value.unwrap_or("Campsite").to_string()),
+                    ),
+                    Some(_) => ("offline".to_string(), "none".to_string(), None, None),
+                    None if stored_check_in.is_some() => {
+                        ("offline".to_string(), "none".to_string(), None, None)
+                    }
                     None => (
                         doc_manager::any_str(&fields, "status")
                             .unwrap_or_else(|| "active".to_string()),
+                        if doc_manager::any_str(&fields, "stageId").is_some() {
+                            "stage".to_string()
+                        } else if doc_manager::any_str(&fields, "customLocation").is_some() {
+                            "custom".to_string()
+                        } else {
+                            "none".to_string()
+                        },
                         doc_manager::any_str(&fields, "stageId"),
                         doc_manager::any_str(&fields, "customLocation"),
                     ),
@@ -521,8 +565,11 @@ impl GroupManager {
                     user_id: uid,
                     display_name: doc_manager::any_str(&fields, "displayName").unwrap_or_default(),
                     status,
+                    location_kind,
                     stage_id,
                     custom_location,
+                    updated_at,
+                    expires_at,
                 }
             })
             .collect();
@@ -614,14 +661,20 @@ impl GroupManager {
 // Helper
 // ---------------------------------------------------------------------------
 
-fn now_rfc3339() -> String {
+fn unix_timestamp() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
-    let secs = SystemTime::now()
+    SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
-        .as_secs();
-    // Minimal RFC-3339-ish timestamp without pulling in chrono.
-    format!("{secs}Z")
+        .as_secs()
+}
+
+fn now_rfc3339() -> String {
+    format!("{}Z", unix_timestamp())
+}
+
+fn parse_epoch_timestamp(value: &str) -> Option<u64> {
+    value.strip_suffix('Z').unwrap_or(value).parse().ok()
 }
 
 // ---------------------------------------------------------------------------
@@ -835,7 +888,19 @@ mod tests {
         assert!(!plaintext.is_empty());
         let state = gm.get_group_state(&create.group_id).await.unwrap();
         assert_eq!(state.members[0].stage_id.as_deref(), Some("main-stage"));
+        assert_eq!(state.members[0].location_kind, "stage");
         assert!(state.members[0].custom_location.is_none());
+        assert!(state.members[0].expires_at.is_some());
+
+        gm.check_in(&create.group_id, "user1", None, Some("Campsite"))
+            .await
+            .unwrap();
+        let state = gm.get_group_state(&create.group_id).await.unwrap();
+        assert_eq!(state.members[0].location_kind, "campsite");
+        assert_eq!(
+            state.members[0].custom_location.as_deref(),
+            Some("Campsite")
+        );
 
         assert!(
             gm.check_in(&create.group_id, "user1", Some("main-stage"), Some("camp"))

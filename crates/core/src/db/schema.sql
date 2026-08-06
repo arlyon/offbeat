@@ -39,6 +39,15 @@ CREATE TABLE IF NOT EXISTS starred_sets (
     PRIMARY KEY (festival_id, set_id)
 );
 
+CREATE TABLE IF NOT EXISTS festival_checkins (
+    festival_id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL CHECK(kind IN ('stage', 'campsite', 'custom')),
+    value TEXT,
+    checked_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    revision INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS cached_festivals (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,

@@ -2,29 +2,4 @@
 > @offbeat/server@ check /home/arlyon/Programming/offbeat/apps/server
 > tsc --noEmit && biome check src/
 
-src/festival-do.ts:876:9 lint/style/noNonNullAssertion ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  ! Forbidden non-null assertion.
-  
-    874 │ 		return {
-    875 │ 			updatedAt: new Date().toISOString(),
-  > 876 │ 			lat: this.#lat!,
-        │ 			     ^^^^^^^^^^
-    877 │ 			lon: this.#lon!,
-    878 │ 			timezone: data.timezone,
-  
-
-src/festival-do.ts:877:9 lint/style/noNonNullAssertion ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  ! Forbidden non-null assertion.
-  
-    875 │ 			updatedAt: new Date().toISOString(),
-    876 │ 			lat: this.#lat!,
-  > 877 │ 			lon: this.#lon!,
-        │ 			     ^^^^^^^^^^
-    878 │ 			timezone: data.timezone,
-    879 │ 			hourly: data.hourly,
-  
-
-Checked 7 files in 22ms. No fixes applied.
-Found 2 warnings.
+Checked 8 files in 53ms. No fixes applied.

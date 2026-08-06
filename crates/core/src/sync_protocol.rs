@@ -113,14 +113,33 @@ impl SyncProtocol {
             topic: req.topic.clone(),
             messages: Vec::new(),
         };
+        let mut included_proofs = std::collections::HashSet::new();
         for message in messages {
+            let page_start = response.messages.len();
+            if let Ok(writer_key) = <[u8; 32]>::try_from(message.writer_key.as_slice()) {
+                let writer_id = message.writer_id();
+                if included_proofs.insert(writer_id)
+                    && let Ok(Some(proof)) = self.db.get_chat_author_proof(&writer_key)
+                {
+                    response
+                        .messages
+                        .push(proto::GossipEnvelope::from_gossip_message(
+                            &GossipMessage::ChatAuthorProof {
+                                writer_key: proof.writer_key,
+                                attestation_message: proof.attestation_message,
+                                attestation_signature: proof.attestation_signature,
+                                issuer: proof.issuer,
+                            },
+                        ));
+                }
+            }
             response
                 .messages
                 .push(proto::GossipEnvelope::from_gossip_message(
                     &GossipMessage::Chat(message),
                 ));
             if response.encoded_len() > MAX_CHAT_RESPONSE_BYTES {
-                response.messages.pop();
+                response.messages.truncate(page_start);
                 break;
             }
         }
@@ -286,7 +305,17 @@ impl crate::sync::PeerConnection for IrohSyncPeer {
             anyhow::bail!("chat catch-up response exceeds byte budget");
         }
         let resp = proto::ChatDiffResponse::decode(resp_bytes.as_slice())?;
-        if resp.messages.len() > effective_limit as usize {
+        let chat_count = resp
+            .messages
+            .iter()
+            .filter(|envelope| {
+                matches!(
+                    envelope.payload.as_ref(),
+                    Some(proto::gossip_envelope::Payload::Chat(_))
+                )
+            })
+            .count();
+        if chat_count > effective_limit as usize {
             anyhow::bail!("chat catch-up response exceeds requested message count");
         }
         Ok(resp.messages)
@@ -355,7 +384,38 @@ mod tests {
             timestamp: "2026-06-13T00:00:00Z".to_string(),
             writer_seq: seq,
             logical_time: seq,
+            writer_key: Vec::new(),
+            signature: Vec::new(),
+            trust: crate::types::ChatTrust::Unverified,
         }
+    }
+
+    fn signed_chat_msg(
+        id: &str,
+        user: &str,
+        text: &str,
+        topic: &str,
+        seq: u64,
+    ) -> crate::types::ChatMessage {
+        let seed = *blake3::hash(user.as_bytes()).as_bytes();
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
+        let mut message = chat_msg(
+            id,
+            &crate::auth::get_user_id(&signing_key),
+            text,
+            topic,
+            seq,
+        );
+        message.display_name = user.to_string();
+        if let Some(channel) = topic
+            .rsplit('/')
+            .next()
+            .filter(|channel| *channel != "campsite")
+        {
+            message.stage_id = Some(channel.to_string());
+        }
+        crate::signing::sign_public_chat_message(&signing_key, &mut message).unwrap();
+        message
     }
 
     /// End-to-end over the real wire: two iroh endpoints on loopback, the server
@@ -528,13 +588,13 @@ mod tests {
         let server_db = Arc::new(Database::new_in_memory().unwrap());
         let server_doc = Arc::new(DocManager::new(server_db.clone()));
         server_db
-            .save_chat_message(&chat_msg("m1", "alice", "hello", topic, 1))
+            .save_chat_message(&signed_chat_msg("m1", "alice", "hello", topic, 1))
             .unwrap();
         server_db
-            .save_chat_message(&chat_msg("m2", "alice", "world", topic, 2))
+            .save_chat_message(&signed_chat_msg("m2", "alice", "world", topic, 2))
             .unwrap();
         server_db
-            .save_chat_message(&chat_msg("m3", "bob", "hi all", topic, 1))
+            .save_chat_message(&signed_chat_msg("m3", "bob", "hi all", topic, 1))
             .unwrap();
 
         let server_ep = local_endpoint(vec![SYNC_ALPN.to_vec()]).await;

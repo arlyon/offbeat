@@ -14,6 +14,8 @@
 
 mod harness;
 
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
@@ -25,6 +27,9 @@ use tokio::time::timeout;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::Encode;
+
+static TEST_CHAT_KEYS: LazyLock<Mutex<HashMap<String, [u8; 32]>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Convert bytes to hex string
 fn bytes_to_hex(bytes: &[u8]) -> String {
@@ -298,15 +303,25 @@ async fn connect_and_auth(
     let attestation_json = register_and_get_attestation(&server.http_url(), &pubkey_hex).await?;
 
     let (mut sink, mut stream) = connect_to_festival(&server.ws_url(), festival_id).await?;
-
-    // Build protobuf auth request
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)?
-        .as_secs()
-        .to_string();
-    let session_msg = format!("session:{timestamp}");
+    let hello = match wait_for_msg(
+        &mut stream,
+        |msg| matches!(msg, relay_server_message::Msg::Hello(_)),
+        "relay hello",
+        5,
+    )
+    .await?
+    {
+        relay_server_message::Msg::Hello(hello) => hello,
+        _ => unreachable!(),
+    };
+    let public_key = signing_key.verifying_key().to_bytes();
+    let auth_payload = offbeat_core::signing::relay_auth_signing_payload(
+        festival_id,
+        &hello.auth_challenge,
+        &public_key,
+    )?;
     use ed25519_dalek::Signer;
-    let sig = signing_key.sign(session_msg.as_bytes());
+    let sig = signing_key.sign(&auth_payload);
 
     let att_msg = attestation_json["message"]
         .as_str()
@@ -326,14 +341,19 @@ async fn connect_and_auth(
                     issuer: att_issuer,
                 }),
                 signature: sig.to_bytes().to_vec(),
-                timestamp,
+                timestamp: String::new(),
+                challenge: hello.auth_challenge,
             })),
         },
     )
     .await?;
     wait_for_auth_ok(&mut stream).await?;
 
-    Ok((sink, stream, pubkey_hex[..16].to_string()))
+    TEST_CHAT_KEYS
+        .lock()
+        .unwrap()
+        .insert(pubkey_hex.clone(), signing_key.to_bytes());
+    Ok((sink, stream, pubkey_hex))
 }
 
 // For timestamp generation in tests
@@ -365,17 +385,38 @@ fn chat_envelope(
     topic: &str,
 ) -> proto::GossipEnvelope {
     let writer_seq = TEST_CHAT_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let seed = TEST_CHAT_KEYS.lock().unwrap()[user_id];
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
+    let channel = topic.rsplit('/').next().unwrap_or_default();
+    let mut message = offbeat_core::types::ChatMessage {
+        id: id.to_string(),
+        user_id: user_id[..16].to_string(),
+        display_name: display_name.to_string(),
+        text: text.to_string(),
+        topic: topic.to_string(),
+        stage_id: (channel != "campsite").then(|| channel.to_string()),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        writer_seq,
+        logical_time: writer_seq,
+        writer_key: signing_key.verifying_key().to_bytes().to_vec(),
+        signature: Vec::new(),
+        trust: offbeat_core::types::ChatTrust::Unverified,
+    };
+    offbeat_core::signing::sign_public_chat_message(&signing_key, &mut message)
+        .expect("test chat message should be signable");
     proto::GossipEnvelope {
         payload: Some(proto::gossip_envelope::Payload::Chat(proto::ChatMessage {
-            id: id.to_string(),
-            user_id: user_id.to_string(),
-            display_name: display_name.to_string(),
-            text: text.to_string(),
-            topic: topic.to_string(),
-            stage_id: None,
-            timestamp: chrono::Utc::now().to_rfc3339(),
-            writer_seq,
-            logical_time: writer_seq,
+            id: message.id,
+            user_id: message.user_id,
+            display_name: message.display_name,
+            text: message.text,
+            topic: message.topic,
+            stage_id: message.stage_id,
+            timestamp: message.timestamp,
+            writer_seq: message.writer_seq,
+            logical_time: message.logical_time,
+            writer_key: message.writer_key,
+            signature: message.signature,
         })),
     }
 }
@@ -551,7 +592,7 @@ async fn test_single_client_chat_and_catchup() {
     let server = DevServer::start().await;
     let (mut sink, mut stream, writer_id) = connect_and_auth(&server, "rust-test-2").await.unwrap();
 
-    send_subscribe(&mut sink, &["festival/rust-test-2/chat/general"])
+    send_subscribe(&mut sink, &["festival/rust-test-2/chat/campsite"])
         .await
         .unwrap();
     wait_for_subscribed(&mut stream).await.unwrap();
@@ -562,20 +603,20 @@ async fn test_single_client_chat_and_catchup() {
         &writer_id,
         "Rust User",
         "Hello from Rust!",
-        "festival/rust-test-2/chat/general",
+        "festival/rust-test-2/chat/campsite",
     );
-    send_gossip(&mut sink, "festival/rust-test-2/chat/general", envelope)
+    send_gossip(&mut sink, "festival/rust-test-2/chat/campsite", envelope)
         .await
         .unwrap();
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    send_empty_chat_catchup(&mut sink, "festival/rust-test-2/chat/general")
+    send_empty_chat_catchup(&mut sink, "festival/rust-test-2/chat/campsite")
         .await
         .unwrap();
 
     let catchup = wait_for_chat_diff(&mut stream).await.unwrap();
-    assert_eq!(catchup.topic, "festival/rust-test-2/chat/general");
+    assert_eq!(catchup.topic, "festival/rust-test-2/chat/campsite");
 
     assert!(!catchup.messages.is_empty());
 
@@ -602,7 +643,7 @@ async fn test_single_client_chat_and_catchup() {
 #[tokio::test]
 async fn test_two_clients_relay() {
     let server = DevServer::start().await;
-    let topic = "festival/rust-test-3/chat/general";
+    let topic = "festival/rust-test-3/chat/campsite";
 
     let (mut sink_a, _stream_a, writer_a) = connect_and_subscribe(&server, "rust-test-3", topic)
         .await
@@ -734,7 +775,7 @@ async fn test_yrs_crdt_sync_via_relay() {
 #[tokio::test]
 async fn test_late_joiner_catchup() {
     let server = DevServer::start().await;
-    let topic = "festival/rust-test-6/chat/general";
+    let topic = "festival/rust-test-6/chat/campsite";
 
     let (mut sink_a, _stream_a, writer_a) = connect_and_subscribe(&server, "rust-test-6", topic)
         .await
@@ -783,7 +824,7 @@ async fn test_late_joiner_catchup() {
 #[tokio::test]
 async fn test_d1_d2_s1_relay_chat() {
     let server = DevServer::start().await;
-    let topic = "festival/relay-test-1/chat/general";
+    let topic = "festival/relay-test-1/chat/campsite";
 
     let (mut sink_d1, mut stream_d1, writer_d1) =
         connect_and_subscribe(&server, "relay-test-1", topic)
@@ -893,7 +934,7 @@ async fn test_d1_d2_s1_relay_crdt_update() {
 #[tokio::test]
 async fn test_d1_disconnect_d2_sends_d1_catchup() {
     let server = DevServer::start().await;
-    let topic = "festival/relay-test-3/chat/general";
+    let topic = "festival/relay-test-3/chat/campsite";
 
     let (mut sink_d1, stream_d1, writer_d1) = connect_and_subscribe(&server, "relay-test-3", topic)
         .await
@@ -1272,6 +1313,9 @@ async fn test_encrypted_group_chat_via_relay() {
         timestamp: chrono::Utc::now().to_rfc3339(),
         writer_seq: 0,
         logical_time: 0,
+        writer_key: Vec::new(),
+        signature: Vec::new(),
+        trust: offbeat_core::types::ChatTrust::Unverified,
     };
     let plaintext = serde_json::to_vec(&original).unwrap();
     let encrypted = crypto::encrypt(&group_key, &plaintext).unwrap();
@@ -1321,7 +1365,7 @@ async fn test_encrypted_group_chat_via_relay() {
 async fn test_chat_catchup_on_reconnect() {
     let server = DevServer::start().await;
     let festival_id = "chat-catchup-test-1";
-    let topic = format!("festival/{festival_id}/chat/general");
+    let topic = format!("festival/{festival_id}/chat/campsite");
 
     let (mut sink_d1, _stream_d1, writer_d1) = connect_and_subscribe(&server, festival_id, &topic)
         .await
@@ -1370,7 +1414,7 @@ async fn test_festival_stage_chat_multi_stage_routing() {
     let festival_id = "stage-routing-test-1";
     let topic_main = format!("festival/{festival_id}/chat/main-stage");
     let topic_second = format!("festival/{festival_id}/chat/second-stage");
-    let topic_general = format!("festival/{festival_id}/chat/general");
+    let topic_general = format!("festival/{festival_id}/chat/campsite");
 
     // D1 subscribes to all three topics
     let (mut sink_d1, mut stream_d1, writer_d1) =
@@ -1958,7 +2002,7 @@ async fn test_do_public_key_endpoint() {
 async fn test_partial_catchup_since_committed_head() {
     let server = DevServer::start().await;
     let festival_id = "partial-catchup-test-1";
-    let topic = format!("festival/{festival_id}/chat/general");
+    let topic = format!("festival/{festival_id}/chat/campsite");
 
     let (mut sink, _stream, writer_id) = connect_and_subscribe(&server, festival_id, &topic)
         .await
@@ -2126,6 +2170,9 @@ async fn test_encrypted_group_chat_catchup() {
             timestamp: chrono::Utc::now().to_rfc3339(),
             writer_seq: 0,
             logical_time: 0,
+            writer_key: Vec::new(),
+            signature: Vec::new(),
+            trust: offbeat_core::types::ChatTrust::Unverified,
         };
         let plaintext = serde_json::to_vec(&msg).unwrap();
         let encrypted = crypto::encrypt(&group_key, &plaintext).unwrap();

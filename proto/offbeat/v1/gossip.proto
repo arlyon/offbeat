@@ -11,7 +11,15 @@ message GossipEnvelope {
     SyncRequest sync_request = 5;
     SyncResponse sync_response = 6;
     SyncUpdate sync_update = 7;
+    ChatAuthorProof chat_author_proof = 8;
   }
+}
+
+message ChatAuthorProof {
+  bytes writer_key = 1;
+  string attestation_message = 2;
+  bytes attestation_signature = 3;
+  bytes issuer = 4;
 }
 
 message FestivalUpdate {

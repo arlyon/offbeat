@@ -22,6 +22,16 @@ pub struct ChatMessageDto {
     pub topic: String,
     pub stage_id: Option<String>,
     pub timestamp: String,
+    pub trust: String,
+}
+
+pub(super) fn chat_trust_label(trust: offbeat_core::types::ChatTrust) -> String {
+    match trust {
+        offbeat_core::types::ChatTrust::Unverified => "unverified",
+        offbeat_core::types::ChatTrust::Verified => "verified",
+        offbeat_core::types::ChatTrust::VerifiedGrace => "verifiedOffline",
+    }
+    .to_string()
 }
 
 pub struct GroupCreateResultDto {
@@ -39,9 +49,22 @@ pub struct GroupMemberDto {
     pub user_id: String,
     pub display_name: String,
     pub status: String,
+    pub location_kind: String,
     pub stage_id: Option<String>,
     pub custom_location: Option<String>,
+    pub updated_at: Option<String>,
+    pub expires_at: Option<String>,
     pub starred_set_ids: Vec<String>,
+}
+
+pub struct FestivalCheckInDto {
+    pub festival_id: String,
+    pub kind: String,
+    pub value: Option<String>,
+    pub checked_at: i64,
+    pub expires_at: i64,
+    pub revision: i64,
+    pub pending_group_count: u32,
 }
 
 pub struct GroupPinDto {
@@ -241,6 +264,35 @@ pub struct PeerStatusInfo {
 // Helpers
 // ---------------------------------------------------------------------------
 
+fn month_number(month: &str) -> u8 {
+    let abbreviation = month.get(..3).unwrap_or(month).to_ascii_lowercase();
+    match abbreviation.as_str() {
+        "jan" => 1,
+        "feb" => 2,
+        "mar" => 3,
+        "apr" => 4,
+        "may" => 5,
+        "jun" => 6,
+        "jul" => 7,
+        "aug" => 8,
+        "sep" => 9,
+        "oct" => 10,
+        "nov" => 11,
+        "dec" => 12,
+        _ => 13,
+    }
+}
+
+fn sort_lineup_days(days: &mut [LineupDayDto]) {
+    days.sort_by(|a, b| {
+        a.year
+            .cmp(&b.year)
+            .then_with(|| month_number(&a.month).cmp(&month_number(&b.month)))
+            .then_with(|| a.num.cmp(&b.num))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+}
+
 /// Read lineup from a doc manager (used by watch_lineup).
 ///
 /// Reads from top-level named maps `"stages"`, `"days"`, `"sets"` where each
@@ -248,7 +300,7 @@ pub struct PeerStatusInfo {
 pub fn read_lineup_from_doc(dm: &DocManager, doc_id: &str) -> Option<LineupDto> {
     use offbeat_core::doc_manager::{any_bool, any_i32, any_str};
 
-    let stages: Vec<LineupStageDto> = dm
+    let mut stages: Vec<LineupStageDto> = dm
         .read_nested_map_entries(doc_id, "stages")
         .into_iter()
         .filter_map(|(id, f)| {
@@ -261,8 +313,9 @@ pub fn read_lineup_from_doc(dm: &DocManager, doc_id: &str) -> Option<LineupDto> 
             })
         })
         .collect();
+    stages.sort_by(|a, b| a.order.cmp(&b.order).then_with(|| a.id.cmp(&b.id)));
 
-    let days: Vec<LineupDayDto> = dm
+    let mut days: Vec<LineupDayDto> = dm
         .read_nested_map_entries(doc_id, "days")
         .into_iter()
         .filter_map(|(id, f)| {
@@ -275,6 +328,7 @@ pub fn read_lineup_from_doc(dm: &DocManager, doc_id: &str) -> Option<LineupDto> 
             })
         })
         .collect();
+    sort_lineup_days(&mut days);
 
     let sets: Vec<LineupSetDto> = dm
         .read_nested_map_entries(doc_id, "sets")
@@ -298,6 +352,55 @@ pub fn read_lineup_from_doc(dm: &DocManager, doc_id: &str) -> Option<LineupDto> 
     }
 
     Some(LineupDto { stages, days, sets })
+}
+
+#[cfg(test)]
+mod lineup_day_order_tests {
+    use super::{sort_lineup_days, LineupDayDto};
+
+    fn day(id: &str, year: i32, month: &str, num: i32) -> LineupDayDto {
+        LineupDayDto {
+            id: id.to_string(),
+            label: id.to_string(),
+            num,
+            month: month.to_string(),
+            year,
+        }
+    }
+
+    #[test]
+    fn sorts_days_chronologically_across_crdt_iteration_order() {
+        let mut days = vec![
+            day("sun", 2026, "Aug", 9),
+            day("fri", 2026, "Aug", 7),
+            day("mon", 2026, "Aug", 10),
+            day("sat", 2026, "Aug", 8),
+            day("thu", 2026, "Aug", 6),
+        ];
+
+        sort_lineup_days(&mut days);
+
+        assert_eq!(
+            days.iter().map(|day| day.id.as_str()).collect::<Vec<_>>(),
+            ["thu", "fri", "sat", "sun", "mon"]
+        );
+    }
+
+    #[test]
+    fn sorts_days_across_month_and_year_boundaries() {
+        let mut days = vec![
+            day("jan-next", 2027, "Jan", 1),
+            day("dec-last", 2026, "Dec", 31),
+            day("nov", 2026, "November", 30),
+        ];
+
+        sort_lineup_days(&mut days);
+
+        assert_eq!(
+            days.iter().map(|day| day.id.as_str()).collect::<Vec<_>>(),
+            ["nov", "dec-last", "jan-next"]
+        );
+    }
 }
 
 /// Read weather from a doc manager (used by get_weather / watch_weather).
