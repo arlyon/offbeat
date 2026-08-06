@@ -10,12 +10,20 @@ A canonical Festival Location that is always available, independent of the festi
 
 ## Festival Check-in
 
-An attendee’s explicit, current declaration of their Festival Location. A Festival Check-in belongs to the attendee and festival, is shared with all groups they have joined for that festival, and expires unless refreshed.
+An attendee’s explicit declaration of their Festival Location. A Festival Check-in belongs to the attendee and festival and is shared with all groups they have joined for that festival. It is Fresh for four hours, then retained as a Stale last-known location until refreshed or explicitly cleared.
 
 ## Group Presence Projection
 
 The group-visible copy of a Festival Check-in. Each projection is private to one group and does not create public festival-wide presence.
 
+## Fresh Check-in
+
+A Festival Check-in made or refreshed within the previous four hours. Fresh check-ins count toward current on-site presence.
+
+## Stale Check-in
+
+A last-known Festival Location whose check-in is more than four hours old. It remains visible at that location with its original timestamp but does not count toward fresh on-site presence.
+
 ## Not Shared
 
-The absence of an active Festival Check-in. An expired or explicitly cleared check-in is Not Shared.
+The absence of any retained Festival Check-in, either because one has never been made or because it was explicitly cleared.

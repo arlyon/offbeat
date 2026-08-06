@@ -28,7 +28,16 @@ String groupMemberLocationKey(GroupMemberDto member) {
 }
 
 bool groupMemberIsOnSite(GroupMemberDto member) =>
+    member.status != 'offline' &&
+    !groupMemberIsStale(member) &&
     groupMemberLocationKey(member) != groupPresenceOfflineKey;
+
+bool groupMemberIsStale(GroupMemberDto member) {
+  if (groupMemberLocationKey(member) == groupPresenceOfflineKey) return false;
+  if (member.status == 'stale' || member.status == 'offline') return true;
+  final expiry = _parseCheckInTimestamp(member.expiresAt);
+  return expiry != null && !expiry.isAfter(DateTime.now());
+}
 
 String groupMemberLocationLabel(
   GroupMemberDto member,
@@ -36,11 +45,49 @@ String groupMemberLocationLabel(
 ) {
   final key = groupMemberLocationKey(member);
   if (key == groupPresenceCampsiteKey) return 'CAMPSITE';
-  if (key == groupPresenceOfflineKey) return 'OFF GRID';
+  if (key == groupPresenceOfflineKey) return 'NO CHECK-IN YET';
   if (key.startsWith('stage:')) {
     final stageId = key.substring('stage:'.length);
     return (stages[stageId] ?? stageId).toUpperCase();
   }
   final custom = member.customLocation?.trim();
-  return custom == null || custom.isEmpty ? 'OFF GRID' : custom.toUpperCase();
+  return custom == null || custom.isEmpty
+      ? 'NO CHECK-IN YET'
+      : custom.toUpperCase();
+}
+
+DateTime? _parseCheckInTimestamp(String? raw) {
+  if (raw == null || raw.isEmpty) return null;
+  final epochSeconds = int.tryParse(
+    raw.endsWith('Z') ? raw.substring(0, raw.length - 1) : raw,
+  );
+  if (epochSeconds != null) {
+    return DateTime.fromMillisecondsSinceEpoch(epochSeconds * 1000);
+  }
+  return DateTime.tryParse(raw)?.toLocal();
+}
+
+String groupMemberCheckInTime(GroupMemberDto member) {
+  final timestamp = _parseCheckInTimestamp(member.updatedAt);
+  if (timestamp == null) return '';
+  final hour = timestamp.hour.toString().padLeft(2, '0');
+  final minute = timestamp.minute.toString().padLeft(2, '0');
+  return '$hour:$minute';
+}
+
+String groupMemberPresenceLabel(
+  GroupMemberDto member,
+  Map<String, String> stages,
+) {
+  final location = groupMemberLocationLabel(member, stages);
+  if (groupMemberLocationKey(member) == groupPresenceOfflineKey) {
+    return location;
+  }
+  final time = groupMemberCheckInTime(member);
+  final freshness = groupMemberIsStale(member) ? 'STALE' : null;
+  return [
+    location,
+    ?freshness,
+    if (time.isNotEmpty) time,
+  ].join(' · ');
 }

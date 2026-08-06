@@ -56,9 +56,7 @@ class _GroupMembersSheetState extends State<GroupMembersSheet> {
     final filterMember = _locationKey == null
         ? null
         : widget.members
-              .where(
-                (member) => groupMemberLocationKey(member) == _locationKey,
-              )
+              .where((member) => groupMemberLocationKey(member) == _locationKey)
               .firstOrNull;
     final filterName = filterMember == null
         ? null
@@ -146,7 +144,8 @@ class _GroupMembersSheetState extends State<GroupMembersSheet> {
                     final member = members[index];
                     final isMe = member.userId == widget.userId;
                     final onSite = groupMemberIsOnSite(member);
-                    final locationLabel = groupMemberLocationLabel(
+                    final stale = groupMemberIsStale(member);
+                    final locationLabel = groupMemberPresenceLabel(
                       member,
                       widget.stages,
                     );
@@ -195,7 +194,9 @@ class _GroupMembersSheetState extends State<GroupMembersSheet> {
                                             fontSize: 9,
                                             fontWeight: FontWeight.w700,
                                             letterSpacing: 0.06 * 9,
-                                            color: onSite
+                                            color: stale
+                                                ? colorWarn
+                                                : onSite
                                                 ? colorCoAccent
                                                 : colorFg4,
                                           ),
@@ -239,7 +240,9 @@ class _MemberAvatar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final live = member.stageId != null;
+    final hasLocation =
+        groupMemberLocationKey(member) != groupPresenceOfflineKey;
+    final stale = groupMemberIsStale(member);
     return Stack(
       clipBehavior: Clip.none,
       children: [
@@ -258,7 +261,7 @@ class _MemberAvatar extends StatelessWidget {
             ),
           ),
         ),
-        if (live)
+        if (hasLocation)
           Positioned(
             right: -3,
             bottom: -3,
@@ -266,7 +269,7 @@ class _MemberAvatar extends StatelessWidget {
               width: 10,
               height: 10,
               decoration: BoxDecoration(
-                color: colorCoAccent,
+                color: stale ? colorWarn : colorCoAccent,
                 shape: BoxShape.circle,
                 border: Border.all(color: colorSurface1, width: 2),
               ),

@@ -1,8 +1,9 @@
 // OFFBEAT — Member detail bottom sheet
-// Avatar, name, stage/offline status, schedule preview, DM/LOCATE, remove
+// Avatar, name, last check-in, schedule preview, and membership controls
 // Matches groups-screens.jsx MemberSheet (lines 787–857)
 
 import 'package:flutter/material.dart';
+import '../../data/group_presence.dart';
 import '../../data/models.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/dotted_border.dart';
@@ -21,6 +22,11 @@ class MemberSheet extends StatelessWidget {
     this.lineup,
     this.isMe = false,
   });
+
+  Map<String, String> get _stageNames => {
+    for (final stage in lineup?.stages ?? const <LineupStageDto>[])
+      stage.id: stage.name,
+  };
 
   @override
   Widget build(BuildContext context) {
@@ -103,7 +109,11 @@ class MemberSheet extends StatelessWidget {
   }
 
   Widget _buildBody(BuildContext context) {
-    final live = member.stageId != null;
+    final fresh = groupMemberIsOnSite(member);
+    final stale = groupMemberIsStale(member);
+    final hasLocation =
+        groupMemberLocationKey(member) != groupPresenceOfflineKey;
+    final presenceLabel = groupMemberPresenceLabel(member, _stageNames);
     final initials = _initials(member.displayName);
     final schedule = _resolvedSchedule;
     final missingSetIds = _missingSetIds;
@@ -131,12 +141,16 @@ class MemberSheet extends StatelessWidget {
                         fontSize: 22,
                         fontWeight: FontWeight.w700,
                         letterSpacing: -0.02 * 22,
-                        color: live ? colorAccent : colorFg4,
+                        color: fresh
+                            ? colorAccent
+                            : stale
+                            ? colorWarn
+                            : colorFg4,
                       ),
                     ),
                   ),
                 ),
-                if (live)
+                if (hasLocation)
                   Positioned(
                     bottom: -4,
                     right: -4,
@@ -144,7 +158,7 @@ class MemberSheet extends StatelessWidget {
                       width: 12,
                       height: 12,
                       decoration: BoxDecoration(
-                        color: colorAccent,
+                        color: stale ? colorWarn : colorAccent,
                         shape: BoxShape.circle,
                         border: Border.all(color: colorSurface1, width: 4),
                       ),
@@ -169,39 +183,40 @@ class MemberSheet extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 4),
-                  if (live)
-                    Row(
-                      children: [
-                        Container(
-                          width: 7,
-                          height: 7,
-                          decoration: const BoxDecoration(
-                            color: colorAccent,
-                            shape: BoxShape.circle,
-                          ),
+                  Row(
+                    children: [
+                      Container(
+                        width: 7,
+                        height: 7,
+                        decoration: BoxDecoration(
+                          color: stale
+                              ? colorWarn
+                              : fresh
+                              ? colorAccent
+                              : colorFg4,
+                          shape: BoxShape.circle,
                         ),
-                        const SizedBox(width: 6),
-                        Text(
-                          '${member.stageId?.toUpperCase() ?? ''} ${member.customLocation != null ? '\u00B7 ${member.customLocation}' : ''}',
-                          style: const TextStyle(
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          presenceLabel,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
                             fontFamily: 'JetBrainsMono',
                             fontSize: 11,
                             letterSpacing: 0.08 * 11,
-                            color: colorAccent,
+                            color: stale
+                                ? colorWarn
+                                : fresh
+                                ? colorAccent
+                                : colorFg4,
                           ),
                         ),
-                      ],
-                    )
-                  else
-                    const Text(
-                      '\u2014 OFFLINE',
-                      style: TextStyle(
-                        fontFamily: 'JetBrainsMono',
-                        fontSize: 11,
-                        letterSpacing: 0.08 * 11,
-                        color: colorFg4,
                       ),
-                    ),
+                    ],
+                  ),
                   const SizedBox(height: 8),
                   Text(
                     'JOINED THIS GROUP',
@@ -257,39 +272,9 @@ class MemberSheet extends StatelessWidget {
             ),
           ),
         ),
-        const SizedBox(height: 18),
-        // DM / Locate buttons
-        DottedBorder.top(
-          child: Padding(
-            padding: const EdgeInsets.only(top: 18),
-            child: Row(
-              children: [
-                Expanded(
-                  child: _ghostButton(
-                    icon: Icons.chat_bubble_outline,
-                    label: 'DM',
-                    onTap: () {
-                      // DM — future feature
-                    },
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: _ghostButton(
-                    icon: Icons.location_on_outlined,
-                    label: 'LOCATE',
-                    onTap: () {
-                      // Locate — future feature
-                    },
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
         // Remove from group
         if (!isMe) ...[
-          const SizedBox(height: 16),
+          const SizedBox(height: 18),
           Center(
             child: GestureDetector(
               onTap: () {
@@ -418,39 +403,6 @@ class MemberSheet extends StatelessWidget {
             ),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _ghostButton({
-    required IconData icon,
-    required String label,
-    required VoidCallback onTap,
-  }) {
-    return GestureDetector(
-      onTap: onTap,
-      child: DottedBorder(
-        color: colorFg3,
-        child: SizedBox(
-          height: 44,
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(icon, size: 13, color: colorFg),
-              const SizedBox(width: 8),
-              Text(
-                label,
-                style: const TextStyle(
-                  fontFamily: 'JetBrainsMono',
-                  fontSize: 11,
-                  fontWeight: FontWeight.w500,
-                  letterSpacing: 0.08 * 11,
-                  color: colorFg,
-                ),
-              ),
-            ],
-          ),
-        ),
       ),
     );
   }

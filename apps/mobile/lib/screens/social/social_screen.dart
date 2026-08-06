@@ -455,6 +455,7 @@ class _SocialScreenState extends State<SocialScreen> {
         Expanded(
           child: ListView(
             controller: _scrollController,
+            padding: EdgeInsets.zero,
             children: [
               _buildGroupHeader(),
               _buildMembersSection(),
@@ -618,43 +619,18 @@ class _SocialScreenState extends State<SocialScreen> {
               orElse: () => _groups.first,
             )
             .name;
-    final memberCount = state?.members.length ?? 0;
-
     return Padding(
-      padding: const EdgeInsets.fromLTRB(18, 18, 18, 14),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Group name with optional switcher
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Text(
-                  name.toUpperCase(),
-                  style: const TextStyle(
-                    fontFamily: 'Helvetica',
-                    fontWeight: FontWeight.w700,
-                    fontSize: 25,
-                    letterSpacing: -0.02 * 25,
-                    height: 0.98,
-                    color: colorFg,
-                  ),
-                ),
-              ),
-              _buildInviteAction(),
-            ],
-          ),
-          const SizedBox(height: 8),
-          // Meta line
-          Row(
-            children: [
-              Text('$memberCount MEMBERS', style: _metaStyle),
-              _metaSep(),
-              Text('$_directPeerCount DIRECT PEERS', style: _metaStyle),
-            ],
-          ),
-        ],
+      padding: const EdgeInsets.fromLTRB(18, 0, 18, 14),
+      child: Text(
+        name.toUpperCase(),
+        style: const TextStyle(
+          fontFamily: 'Helvetica',
+          fontWeight: FontWeight.w700,
+          fontSize: 25,
+          letterSpacing: -0.02 * 25,
+          height: 0.98,
+          color: colorFg,
+        ),
       ),
     );
   }
@@ -666,8 +642,8 @@ class _SocialScreenState extends State<SocialScreen> {
       child: InkWell(
         onTap: () => _showInviteSheet(),
         child: const SizedBox(
-          width: 52,
-          height: 44,
+          width: 68,
+          height: 88,
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
@@ -690,113 +666,94 @@ class _SocialScreenState extends State<SocialScreen> {
     );
   }
 
-  Widget _buildCheckInBar() {
-    final controller = widget.checkInController;
-    if (controller == null) return const SizedBox.shrink();
-    return ListenableBuilder(
-      listenable: controller,
-      builder: (context, _) {
-        final checkIn = controller.checkIn;
-        final label = switch (checkIn?.kind) {
-          'campsite' => 'CAMPSITE',
-          'stage' => widget.stages[checkIn?.value]?.toUpperCase() ?? 'STAGE',
-          'custom' => checkIn?.value?.toUpperCase() ?? 'CUSTOM LOCATION',
-          _ => 'NOT CHECKED IN',
-        };
-        return DottedBorder(
-          sides: const {DottedBorderSide.top, DottedBorderSide.bottom},
-          child: ListTile(
-            leading: Icon(
-              checkIn == null ? Icons.location_off_outlined : Icons.location_on,
-              color: checkIn == null ? colorFg4 : colorAccent,
-            ),
-            title: const Text('YOU', style: _metaStyle),
-            subtitle: Text(label),
-            trailing: TextButton(
-              onPressed: controller.saving
-                  ? null
-                  : () => showCheckInSheet(
-                      context,
-                      controller: controller,
-                      stages: widget.scheduleStages,
-                      sets: widget.scheduleSets,
-                    ),
-              child: Text(checkIn == null ? 'CHECK IN' : 'UPDATE'),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
   // ── Members ───────────────────────────────────────────────────
 
   Widget _buildMembersSection() {
     final members = _groupState?.members ?? const <GroupMemberDto>[];
-    final onSiteCount = members
-        .where((member) => member.stageId != null)
-        .length;
+    final onSiteCount = members.where(groupMemberIsOnSite).length;
     final visible = members.take(5).toList();
     final stackWidth = visible.isEmpty
         ? 44.0
         : 44.0 + (visible.length - 1) * 28.0;
 
     return DottedBorder.top(
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: _showMembersSheet,
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(minHeight: 88),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-              child: Row(
-                children: [
-                  SizedBox(
-                    width: stackWidth,
-                    height: 44,
-                    child: Stack(
+      child: Row(
+        children: [
+          Expanded(
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: _showMembersSheet,
+                child: SizedBox(
+                  height: 88,
+                  child: Padding(
+                    padding: const EdgeInsets.only(left: 18, right: 10),
+                    child: Row(
                       children: [
-                        for (var index = 0; index < visible.length; index++)
-                          Positioned(
-                            left: index * 28,
-                            child: _StackedAvatar(
-                              member: visible[index],
-                              isMe: visible[index].userId == widget.userId,
-                              overflow: index == visible.length - 1
-                                  ? members.length - visible.length
-                                  : 0,
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          '$onSiteCount ON SITE · ${members.length} MEMBERS',
-                          style: const TextStyle(
-                            fontFamily: 'JetBrainsMono',
-                            fontSize: 10,
-                            fontWeight: FontWeight.w700,
-                            color: colorFg,
+                        SizedBox(
+                          width: stackWidth,
+                          height: 44,
+                          child: Stack(
+                            children: [
+                              for (
+                                var index = 0;
+                                index < visible.length;
+                                index++
+                              )
+                                Positioned(
+                                  left: index * 28,
+                                  child: _StackedAvatar(
+                                    member: visible[index],
+                                    isMe:
+                                        visible[index].userId == widget.userId,
+                                    overflow: index == visible.length - 1
+                                        ? members.length - visible.length
+                                        : 0,
+                                  ),
+                                ),
+                            ],
                           ),
                         ),
-                        const SizedBox(height: 4),
-                        const Text('TAP TO VIEW THE CREW', style: _metaStyle),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '${members.length} MEMBERS · $onSiteCount ON SITE',
+                                style: const TextStyle(
+                                  fontFamily: 'JetBrainsMono',
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w700,
+                                  color: colorFg,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              const Text(
+                                'TAP TO VIEW THE CREW',
+                                style: _metaStyle,
+                              ),
+                            ],
+                          ),
+                        ),
+                        const Icon(
+                          Icons.chevron_right,
+                          size: 18,
+                          color: colorFg3,
+                        ),
                       ],
                     ),
                   ),
-                  const Icon(Icons.chevron_right, size: 18, color: colorFg3),
-                ],
+                ),
               ),
             ),
           ),
-        ),
+          DottedBorder(
+            sides: const {DottedBorderSide.left},
+            child: _buildInviteAction(),
+          ),
+        ],
       ),
     );
   }
@@ -809,13 +766,13 @@ class _SocialScreenState extends State<SocialScreen> {
 
     final buckets = <String, List<GroupMemberDto>>{};
     for (final member in members) {
-      final key = member.stageId ?? 'offline';
+      final key = groupMemberLocationKey(member);
       (buckets[key] ??= []).add(member);
     }
     final sortedBuckets = buckets.entries.toList()
       ..sort((a, b) {
-        if (a.key == 'offline') return 1;
-        if (b.key == 'offline') return -1;
+        if (a.key == groupPresenceOfflineKey) return 1;
+        if (b.key == groupPresenceOfflineKey) return -1;
         return b.value.length.compareTo(a.value.length);
       });
     final visibleBuckets = sortedBuckets.take(3).toList();
@@ -830,7 +787,7 @@ class _SocialScreenState extends State<SocialScreen> {
               Material(
                 color: Colors.transparent,
                 child: InkWell(
-                  onTap: () => _showMembersSheet(stageId: entry.key),
+                  onTap: () => _showMembersSheet(locationKey: entry.key),
                   child: SizedBox(
                     height: 44,
                     child: Row(
@@ -850,24 +807,23 @@ class _SocialScreenState extends State<SocialScreen> {
                         Container(
                           width: 8,
                           height: 8,
-                          color: entry.key == 'offline'
+                          color: entry.key == groupPresenceOfflineKey
                               ? colorFg4
+                              : entry.value.every(groupMemberIsStale)
+                              ? colorWarn
                               : colorCoAccent,
                         ),
                         const SizedBox(width: 10),
                         Expanded(
                           child: Text(
-                            entry.key == 'offline'
-                                ? 'OFF GRID'
-                                : (widget.stages[entry.key] ?? entry.key)
-                                      .toUpperCase(),
+                            '${groupMemberLocationLabel(entry.value.first, widget.stages)}${entry.value.every(groupMemberIsStale) ? ' · STALE' : ''}',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
                               fontFamily: 'JetBrainsMono',
                               fontSize: 10,
                               fontWeight: FontWeight.w700,
-                              color: entry.key == 'offline'
+                              color: entry.key == groupPresenceOfflineKey
                                   ? colorFg3
                                   : colorFg,
                             ),
@@ -1189,20 +1145,6 @@ class _SocialScreenState extends State<SocialScreen> {
     );
   }
 
-  Widget _metaSep() {
-    return const Padding(
-      padding: EdgeInsets.symmetric(horizontal: 8),
-      child: Text(
-        '\u00B7',
-        style: TextStyle(
-          fontFamily: 'JetBrainsMono',
-          fontSize: 10,
-          color: colorFg4,
-        ),
-      ),
-    );
-  }
-
   static const _metaStyle = TextStyle(
     fontFamily: 'JetBrainsMono',
     fontSize: 10,
@@ -1249,7 +1191,9 @@ class _StackedAvatar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final live = member.stageId != null;
+    final hasLocation =
+        groupMemberLocationKey(member) != groupPresenceOfflineKey;
+    final stale = groupMemberIsStale(member);
     return Stack(
       clipBehavior: Clip.none,
       children: [
@@ -1271,7 +1215,7 @@ class _StackedAvatar extends StatelessWidget {
             ),
           ),
         ),
-        if (live && overflow == 0)
+        if (hasLocation && overflow == 0)
           Positioned(
             right: -2,
             bottom: -2,
@@ -1279,7 +1223,7 @@ class _StackedAvatar extends StatelessWidget {
               width: 10,
               height: 10,
               decoration: BoxDecoration(
-                color: colorCoAccent,
+                color: stale ? colorWarn : colorCoAccent,
                 shape: BoxShape.circle,
                 border: Border.all(color: colorSurface1, width: 2),
               ),
@@ -1453,206 +1397,3 @@ const _sheetMetaStyle = TextStyle(
   letterSpacing: 0.06 * 9,
   color: colorFg3,
 );
-
-class _CheckInSheet extends StatefulWidget {
-  final Map<String, String> stages;
-  final Future<void> Function(String stageId) onStage;
-  final Future<void> Function(String location) onCustom;
-  final Future<void> Function() onClear;
-
-  const _CheckInSheet({
-    required this.stages,
-    required this.onStage,
-    required this.onCustom,
-    required this.onClear,
-  });
-
-  @override
-  State<_CheckInSheet> createState() => _CheckInSheetState();
-}
-
-class _CheckInSheetState extends State<_CheckInSheet> {
-  final _customController = TextEditingController();
-  bool _saving = false;
-
-  @override
-  void dispose() {
-    _customController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _run(Future<void> Function() action) async {
-    if (_saving) return;
-    setState(() => _saving = true);
-    try {
-      await action();
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final stages = widget.stages.entries.toList();
-    return DraggableScrollableSheet(
-      initialChildSize: 0.72,
-      minChildSize: 0.45,
-      maxChildSize: 0.92,
-      expand: false,
-      builder: (context, scrollController) => Container(
-        color: colorSurface1,
-        child: SafeArea(
-          top: false,
-          child: Column(
-            children: [
-              DottedBorder.bottom(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(18, 16, 12, 12),
-                  child: Row(
-                    children: [
-                      const Expanded(
-                        child: Text(
-                          'CHECK IN//LOCATION',
-                          style: TextStyle(
-                            fontFamily: 'JetBrainsMono',
-                            fontSize: 11,
-                            fontWeight: FontWeight.w500,
-                            letterSpacing: 0.08 * 11,
-                            color: colorFg,
-                          ),
-                        ),
-                      ),
-                      IconButton(
-                        onPressed: () => Navigator.pop(context),
-                        icon: const Icon(
-                          Icons.close,
-                          size: 18,
-                          color: colorFg2,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              Expanded(
-                child: ListView(
-                  controller: scrollController,
-                  padding: const EdgeInsets.fromLTRB(18, 14, 18, 18),
-                  children: [
-                    const Text(
-                      'STAGE',
-                      style: TextStyle(
-                        fontFamily: 'JetBrainsMono',
-                        fontSize: 10,
-                        letterSpacing: 0.08 * 10,
-                        color: colorFg3,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    if (stages.isEmpty)
-                      const Padding(
-                        padding: EdgeInsets.symmetric(vertical: 12),
-                        child: Text(
-                          'NO STAGES CACHED',
-                          style: TextStyle(
-                            fontFamily: 'JetBrainsMono',
-                            fontSize: 11,
-                            color: colorFg4,
-                          ),
-                        ),
-                      )
-                    else
-                      ...stages.map(
-                        (stage) => GestureDetector(
-                          onTap: _saving
-                              ? null
-                              : () => _run(() => widget.onStage(stage.key)),
-                          child: DottedBorder.bottom(
-                            child: SizedBox(
-                              height: 48,
-                              child: Row(
-                                children: [
-                                  const Icon(
-                                    Icons.location_on_outlined,
-                                    size: 16,
-                                    color: colorAccent,
-                                  ),
-                                  const SizedBox(width: 10),
-                                  Expanded(
-                                    child: Text(
-                                      stage.value.toUpperCase(),
-                                      style: const TextStyle(
-                                        fontFamily: 'JetBrainsMono',
-                                        fontSize: 12,
-                                        color: colorFg,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    const SizedBox(height: 20),
-                    const Text(
-                      'CUSTOM LOCATION',
-                      style: TextStyle(
-                        fontFamily: 'JetBrainsMono',
-                        fontSize: 10,
-                        letterSpacing: 0.08 * 10,
-                        color: colorFg3,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    TextField(
-                      controller: _customController,
-                      enabled: !_saving,
-                      style: const TextStyle(color: colorFg),
-                      decoration: const InputDecoration(
-                        hintText: 'CAMP, FOOD COURT, LANDMARK…',
-                        hintStyle: TextStyle(color: colorFg4),
-                        enabledBorder: UnderlineInputBorder(
-                          borderSide: BorderSide(color: colorFg3),
-                        ),
-                        focusedBorder: UnderlineInputBorder(
-                          borderSide: BorderSide(color: colorAccent),
-                        ),
-                      ),
-                      onSubmitted: (value) {
-                        final location = value.trim();
-                        if (location.isNotEmpty) {
-                          _run(() => widget.onCustom(location));
-                        }
-                      },
-                    ),
-                    const SizedBox(height: 12),
-                    SizedBox(
-                      height: 44,
-                      child: OutlinedButton(
-                        onPressed: _saving
-                            ? null
-                            : () {
-                                final location = _customController.text.trim();
-                                if (location.isNotEmpty) {
-                                  _run(() => widget.onCustom(location));
-                                }
-                              },
-                        child: const Text('CHECK IN HERE'),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    TextButton(
-                      onPressed: _saving ? null : () => _run(widget.onClear),
-                      child: const Text('CLEAR CHECK-IN'),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}

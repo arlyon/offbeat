@@ -27,6 +27,11 @@ class CheckInController extends ChangeNotifier {
   bool isAtStage(String stageId) =>
       _checkIn?.kind == 'stage' && _checkIn?.value == stageId;
   bool get isAtCampsite => _checkIn?.kind == 'campsite';
+  bool get isStale {
+    final checkIn = _checkIn;
+    if (checkIn == null) return false;
+    return checkIn.expiresAt <= DateTime.now().millisecondsSinceEpoch ~/ 1000;
+  }
 
   Future<void> load() async {
     _loading = true;
@@ -63,11 +68,8 @@ class CheckInController extends ChangeNotifier {
       checkIn.expiresAt * 1000,
     );
     final delay = expiry.difference(DateTime.now());
-    if (delay <= Duration.zero) {
-      unawaited(clear());
-    } else {
-      _expiryTimer = Timer(delay, () => unawaited(clear()));
-    }
+    if (delay <= Duration.zero) return;
+    _expiryTimer = Timer(delay, notifyListeners);
   }
 
   @override

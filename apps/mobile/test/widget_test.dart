@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:offbeat_mobile/data/group_presence.dart';
 import 'package:offbeat_mobile/data/group_schedule_overlay.dart';
 import 'package:offbeat_mobile/data/models.dart';
 import 'package:offbeat_mobile/data/serial_keyed_queue.dart';
@@ -309,6 +310,24 @@ void main() {
         stageId: 'quarry',
         starredSetIds: ['b', 'c'],
       ),
+      GroupMemberDto(
+        userId: 'sam',
+        displayName: 'Sam Campsite',
+        status: 'active',
+        locationKind: 'campsite',
+        customLocation: 'Campsite',
+        updatedAt: '2026-08-05T14:30:00Z',
+        starredSetIds: [],
+      ),
+      GroupMemberDto(
+        userId: 'zoe',
+        displayName: 'Zoe Campsite',
+        status: 'stale',
+        locationKind: 'campsite',
+        customLocation: 'Campsite',
+        updatedAt: '2026-08-05T09:15:00Z',
+        starredSetIds: [],
+      ),
     ];
 
     await tester.pumpWidget(
@@ -318,7 +337,7 @@ void main() {
             members: members,
             stages: const {'main': 'Main Stage', 'quarry': 'The Quarry'},
             userId: 'me',
-            initialStageId: 'main',
+            initialLocationKey: 'stage:main',
             onMemberTap: (_) {},
           ),
         ),
@@ -335,6 +354,18 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Luke Smith'), findsOneWidget);
     expect(find.text('Ali Jones'), findsOneWidget);
+    expect(find.text('Sam Campsite'), findsOneWidget);
+    expect(find.text('Zoe Campsite'), findsOneWidget);
+    expect(
+      find.text('CAMPSITE · ${groupMemberCheckInTime(members[3])}'),
+      findsOneWidget,
+    );
+    expect(
+      find.text('CAMPSITE · STALE · ${groupMemberCheckInTime(members[4])}'),
+      findsOneWidget,
+    );
+    expect(find.text('NO CHECK-IN YET'), findsOneWidget);
+    expect(find.text('3 ON SITE · 5 TOTAL'), findsOneWidget);
   });
 
   testWidgets(
@@ -375,8 +406,11 @@ void main() {
       const member = GroupMemberDto(
         userId: 'luke',
         displayName: 'Luke Smith',
-        status: 'active',
-        locationKind: 'none',
+        status: 'stale',
+        locationKind: 'campsite',
+        customLocation: 'Campsite',
+        updatedAt: '2026-08-05T09:15:00Z',
+        expiresAt: '2026-08-05T13:15:00Z',
         starredSetIds: ['known', 'missing'],
       );
 
@@ -407,6 +441,12 @@ void main() {
       expect(find.text('KNOWN ARTIST'), findsOneWidget);
       expect(find.text('Friday · 01:00 · Main Stage'), findsOneWidget);
       expect(find.text('SET UNAVAILABLE · MISSING'), findsOneWidget);
+      expect(
+        find.text('CAMPSITE · STALE · ${groupMemberCheckInTime(member)}'),
+        findsOneWidget,
+      );
+      expect(find.text('DM'), findsNothing);
+      expect(find.text('LOCATE'), findsNothing);
     },
   );
 

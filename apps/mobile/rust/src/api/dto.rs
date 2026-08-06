@@ -1,9 +1,9 @@
 // These types are re-exported from the parent module (mod.rs) and used
 // in function signatures throughout this module.
+use offbeat_core::OffbeatNode;
 use offbeat_core::connection_manager::{GossipStatus, PeerEntry, PeerSource};
 use offbeat_core::doc_manager::DocManager;
 use offbeat_core::notifier::SyncStatus;
-use offbeat_core::OffbeatNode;
 
 // ---------------------------------------------------------------------------
 // DTOs
@@ -356,7 +356,7 @@ pub fn read_lineup_from_doc(dm: &DocManager, doc_id: &str) -> Option<LineupDto> 
 
 #[cfg(test)]
 mod lineup_day_order_tests {
-    use super::{sort_lineup_days, LineupDayDto};
+    use super::{LineupDayDto, sort_lineup_days};
 
     fn day(id: &str, year: i32, month: &str, num: i32) -> LineupDayDto {
         LineupDayDto {

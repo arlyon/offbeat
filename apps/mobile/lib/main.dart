@@ -1195,7 +1195,6 @@ class _OffbeatShellState extends State<_OffbeatShell>
         if (_authState == 'unregistered') {
           return RegistrationScreen(onRegister: _handleRegister);
         }
-        final schedule = _lineupModels();
         return SocialScreen(
           node: _node!,
           festivalId: _selectedFestival!.id,
@@ -1209,8 +1208,6 @@ class _OffbeatShellState extends State<_OffbeatShell>
           lineup: _lineup,
           actionsController: _socialActionsController,
           checkInController: _checkInController,
-          scheduleStages: schedule?.stages ?? const [],
-          scheduleSets: schedule?.sets ?? const [],
           onGroupsChanged: () => _groupScheduleController?.refresh(),
         );
     }

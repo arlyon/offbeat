@@ -37,6 +37,8 @@ class CheckInBand extends StatelessWidget {
             ? 'SAVING…'
             : checkIn == null
             ? 'CHECK IN →'
+            : controller.isStale
+            ? 'STALE · CHECK IN AGAIN →'
             : groupCount == 0
             ? 'SAVED LOCALLY · UPDATE →'
             : 'SHARED WITH $groupCount GROUP${groupCount == 1 ? '' : 'S'} · UPDATE →';
@@ -71,7 +73,12 @@ class CheckInBand extends StatelessWidget {
                           mainAxisSize: MainAxisSize.min,
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            const Text('YOU ARE AT', style: _metaStyle),
+                            Text(
+                              controller.isStale
+                                  ? 'YOUR LAST CHECK-IN'
+                                  : 'YOU ARE AT',
+                              style: _metaStyle,
+                            ),
                             const SizedBox(height: 3),
                             Text(
                               label,

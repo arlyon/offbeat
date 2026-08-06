@@ -15,6 +15,8 @@ use crate::types::GroupPin;
 // Result types
 // ---------------------------------------------------------------------------
 
+pub const CHECK_IN_FRESHNESS_SECS: u64 = 4 * 60 * 60;
+
 pub struct GroupCreateResult {
     pub group_id: String,
     pub festival_id: String,
@@ -325,7 +327,7 @@ impl GroupManager {
         let custom_loc_s = custom_location.map(String::from);
         let now = unix_timestamp();
         let updated_at = format!("{now}Z");
-        let expires_at = format!("{}Z", now + 2 * 60 * 60);
+        let expires_at = format!("{}Z", now + CHECK_IN_FRESHNESS_SECS);
 
         let diff = self
             .doc_manager
@@ -518,8 +520,8 @@ impl GroupManager {
                     Some(StoredCheckIn {
                         kind: "stage",
                         value: Some(value),
-                    }) if fresh => (
-                        "active".to_string(),
+                    }) => (
+                        if fresh { "active" } else { "stale" }.to_string(),
                         "stage".to_string(),
                         Some(value.to_string()),
                         None,
@@ -527,8 +529,8 @@ impl GroupManager {
                     Some(StoredCheckIn {
                         kind: "custom",
                         value: Some(value),
-                    }) if fresh => (
-                        "active".to_string(),
+                    }) => (
+                        if fresh { "active" } else { "stale" }.to_string(),
                         "custom".to_string(),
                         None,
                         Some(value.to_string()),
@@ -536,8 +538,8 @@ impl GroupManager {
                     Some(StoredCheckIn {
                         kind: "campsite",
                         value,
-                    }) if fresh => (
-                        "active".to_string(),
+                    }) => (
+                        if fresh { "active" } else { "stale" }.to_string(),
                         "campsite".to_string(),
                         None,
                         Some(value.unwrap_or("Campsite").to_string()),
@@ -891,6 +893,18 @@ mod tests {
         assert_eq!(state.members[0].location_kind, "stage");
         assert!(state.members[0].custom_location.is_none());
         assert!(state.members[0].expires_at.is_some());
+
+        let doc_id = format!("group/{}/state", create.group_id);
+        gm.doc_manager
+            .mutate(&doc_id, &["members"], |maps, txn| {
+                let member = doc_manager::get_or_init_map(&maps[0], txn, "user1");
+                member.insert(txn, "expiresAt", "0Z");
+            })
+            .unwrap();
+        let state = gm.get_group_state(&create.group_id).await.unwrap();
+        assert_eq!(state.members[0].status, "stale");
+        assert_eq!(state.members[0].location_kind, "stage");
+        assert_eq!(state.members[0].stage_id.as_deref(), Some("main-stage"));
 
         gm.check_in(&create.group_id, "user1", None, Some("Campsite"))
             .await

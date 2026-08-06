@@ -2031,15 +2031,6 @@ impl AppNode {
         let Some(checkin) = self.inner.db.load_festival_checkin(&festival_id)? else {
             return Ok(None);
         };
-        let now = i64::try_from(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)?
-                .as_secs(),
-        )?;
-        if checkin.expires_at <= now {
-            self.inner.db.clear_festival_checkin(&festival_id)?;
-            return Ok(None);
-        }
         Ok(Some(FestivalCheckInDto {
             festival_id: checkin.festival_id,
             kind: checkin.kind,
@@ -2103,7 +2094,7 @@ impl AppNode {
                     kind: kind.clone(),
                     value: normalized_value.clone(),
                     checked_at: now,
-                    expires_at: now + 2 * 60 * 60,
+                    expires_at: now + offbeat_core::groups::CHECK_IN_FRESHNESS_SECS as i64,
                     revision,
                 })?;
         }
@@ -2142,7 +2133,7 @@ impl AppNode {
             kind,
             value: normalized_value,
             checked_at: now,
-            expires_at: now + 2 * 60 * 60,
+            expires_at: now + offbeat_core::groups::CHECK_IN_FRESHNESS_SECS as i64,
             revision,
             pending_group_count,
         })

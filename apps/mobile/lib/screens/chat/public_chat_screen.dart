@@ -183,7 +183,9 @@ class _PublicChatScreenState extends State<PublicChatScreen> {
                 return _Header(
                   title: widget.title,
                   onBack: () => Navigator.pop(context),
-                  actionLabel: checkedIn
+                  actionLabel: checkedIn && (controller?.isStale ?? false)
+                      ? 'STALE · CHECK IN AGAIN'
+                      : checkedIn
                       ? '✓ CHECKED IN'
                       : _campsite
                       ? 'CHECK IN AT CAMP'
