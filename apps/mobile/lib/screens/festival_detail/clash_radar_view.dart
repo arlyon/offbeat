@@ -1,13 +1,9 @@
-// OFFBEAT ClashRadarView — V5 Clash Radar
-// Hero: "X clashes in your night."
-// Mini stage-lane strip diagram with starred set blobs + hatched clash zones
-// Legend: scheduled / starred / clash
-// Clash cards: warn-colored overlap details for liked sets
-
 import 'package:flutter/material.dart';
+
 import '../../data/models.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/dotted_border.dart';
+import 'day_jump_strip.dart';
 
 class ClashRadarView extends StatefulWidget {
   final List<FestSet> sets;
@@ -28,557 +24,338 @@ class ClashRadarView extends StatefulWidget {
 }
 
 class _ClashRadarViewState extends State<ClashRadarView> {
-  late String _day;
+  late String _dayId;
 
   @override
   void initState() {
     super.initState();
-    _day = widget.days.first.id;
+    _dayId = widget.days.first.id;
   }
 
-  Map<String, Stage> get _stageById => {for (final s in widget.stages) s.id: s};
+  @override
+  void didUpdateWidget(ClashRadarView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!widget.days.any((day) => day.id == _dayId)) {
+      _dayId = widget.days.first.id;
+    }
+  }
 
-  List<FestSet> get _starred =>
-      widget.sets.where((s) => s.day == _day && s.starred).toList();
+  Map<String, Stage> get _stageById => {
+    for (final stage in widget.stages) stage.id: stage,
+  };
 
-  List<List<FestSet>> get _clashPairs {
-    final byId = {for (final set in widget.sets) set.id: set};
-    final pairs = <List<FestSet>>[];
-    for (final set in _starred) {
-      for (final clashId in set.clashes) {
-        final other = byId[clashId];
-        if (other != null && other.starred && set.id.compareTo(other.id) < 0) {
-          pairs.add([set, other]);
+  List<FestSet> get _likedSets {
+    final liked = widget.sets
+        .where((set) => set.day == _dayId && set.starred)
+        .toList();
+    liked.sort((a, b) {
+      final byTime = a.t.compareTo(b.t);
+      return byTime != 0 ? byTime : a.artist.compareTo(b.artist);
+    });
+    return liked;
+  }
+
+  List<_AgendaGroup> _buildAgenda(List<FestSet> liked) {
+    final byId = {for (final set in liked) set.id: set};
+    final visited = <String>{};
+    final groups = <_AgendaGroup>[];
+
+    for (final set in liked) {
+      if (!visited.add(set.id)) continue;
+      final component = <FestSet>[];
+      final pending = <FestSet>[set];
+
+      while (pending.isNotEmpty) {
+        final current = pending.removeLast();
+        component.add(current);
+        for (final clashId
+            in current.cancelled ? const <String>[] : current.clashes) {
+          final neighbour = byId[clashId];
+          if (neighbour != null &&
+              !neighbour.cancelled &&
+              visited.add(neighbour.id)) {
+            pending.add(neighbour);
+          }
         }
       }
+
+      component.sort((a, b) => a.t.compareTo(b.t));
+      groups.add(_AgendaGroup(component));
     }
-    return pairs;
+
+    groups.sort((a, b) => a.sets.first.t.compareTo(b.sets.first.t));
+    return groups;
   }
 
-  Day get _currentDay => widget.days.firstWhere((d) => d.id == _day);
+  int _clashCount(List<FestSet> liked) {
+    final likedIds = liked.map((set) => set.id).toSet();
+    var count = 0;
+    for (final set in liked) {
+      count += set.clashes.where((id) {
+        return likedIds.contains(id) && set.id.compareTo(id) < 0;
+      }).length;
+    }
+    return count;
+  }
 
   @override
   Widget build(BuildContext context) {
+    final liked = _likedSets;
+    final activeLiked = liked.where((set) => !set.cancelled).toList();
+    final cancelledCount = liked.length - activeLiked.length;
+    final groups = _buildAgenda(liked);
+    final clashCount = _clashCount(activeLiked);
     final stageById = _stageById;
-    final clashPairs = _clashPairs;
-    final starred = _starred;
-    final daySets = widget.sets.where((s) => s.day == _day).toList();
-    final day = _currentDay;
 
-    // Window for strip
-    const wStart = 19 * 60;
-    const wEnd = 25 * 60;
-    const wRange = wEnd - wStart;
-    double xPct(int m) => ((m - wStart) / wRange).clamp(0.0, 1.0);
-
-    // Clash zones
-    final clashZones = clashPairs.map((pair) {
-      final a = pair[0], b = pair[1];
-      return (
-        start: [a.t, b.t].reduce((v, e) => v > e ? v : e),
-        end: [a.t + a.dur, b.t + b.dur].reduce((v, e) => v < e ? v : e),
-      );
-    }).toList();
-
-    // Stages with starred sets
-    final stagesWithStars = widget.stages
-        .where((st) => starred.any((s) => s.stage == st.id))
-        .toList();
-
-    return ListView(
-      padding: EdgeInsets.zero,
+    return Column(
       children: [
-        // Hero
+        DayJumpStrip(
+          activeDayId: _dayId,
+          days: widget.days,
+          onDayTap: (dayId) => setState(() => _dayId = dayId),
+        ),
         DottedBorder.bottom(
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(18, 18, 18, 18),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            padding: const EdgeInsets.fromLTRB(18, 13, 18, 13),
+            child: Row(
               children: [
                 Text(
-                  '// YOUR PLAN · ${day.label} ${day.dayNum} ${day.month}',
-                  style: TextStyle(
-                    fontFamily: 'JetBrainsMono',
-                    fontSize: 11,
-                    letterSpacing: 0.08 * 11,
-                    color: colorFg3,
-                    height: 1,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                RichText(
-                  text: TextSpan(
-                    style: const TextStyle(
-                      fontFamily: 'Helvetica',
-                      fontWeight: FontWeight.w700,
-                      fontSize: 32,
-                      letterSpacing: -0.02 * 32,
-                      height: 1.1,
-                      color: colorFg,
-                    ),
-                    children: [
-                      TextSpan(text: '${clashPairs.length} '),
-                      TextSpan(
-                        text: 'clash${clashPairs.length == 1 ? '' : 'es'}',
-                        style: const TextStyle(color: colorAccent),
-                      ),
-                      const TextSpan(text: '\nin your night.'),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-        // Strip diagram
-        DottedBorder.bottom(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(18, 14, 18, 18),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Axis labels
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children:
-                      [
-                            wStart,
-                            wStart + wRange ~/ 4,
-                            wStart + wRange ~/ 2,
-                            wStart + (wRange * 3) ~/ 4,
-                            wEnd,
-                          ]
-                          .map(
-                            (m) => Text(
-                              fmtTime(m),
-                              style: const TextStyle(
-                                fontFamily: 'JetBrainsMono',
-                                fontSize: 9,
-                                color: colorFg4,
-                                letterSpacing: 0.05 * 9,
-                                height: 1,
-                              ),
-                            ),
-                          )
-                          .toList(),
-                ),
-                const SizedBox(height: 6),
-                // Stage lanes
-                LayoutBuilder(
-                  builder: (context, constraints) {
-                    final w = constraints.maxWidth - 32; // minus label offset
-                    return Column(
-                      children: [
-                        Container(
-                          decoration: const BoxDecoration(
-                            border: Border(
-                              top: BorderSide(color: colorDotted, width: 1.5),
-                              bottom: BorderSide(
-                                color: colorDotted,
-                                width: 1.5,
-                              ),
-                            ),
-                          ),
-                          child: Stack(
-                            children: [
-                              // Lane rows
-                              Column(
-                                children: stagesWithStars.map((stage) {
-                                  final stageSets = daySets
-                                      .where((s) => s.stage == stage.id)
-                                      .toList();
-                                  return SizedBox(
-                                    height: 26,
-                                    child: Stack(
-                                      clipBehavior: Clip.hardEdge,
-                                      children: [
-                                        // Label
-                                        Positioned(
-                                          left: 0,
-                                          top: 6,
-                                          child: Text(
-                                            stage.short,
-                                            style: const TextStyle(
-                                              fontFamily: 'JetBrainsMono',
-                                              fontSize: 9,
-                                              color: colorFg3,
-                                              letterSpacing: 0.08 * 9,
-                                              height: 1,
-                                            ),
-                                          ),
-                                        ),
-                                        // Set blobs
-                                        ...stageSets.map((s) {
-                                          final left = xPct(s.t) * w + 32;
-                                          final right =
-                                              xPct(s.t + s.dur) * w + 32;
-                                          final width = right - left;
-                                          if (width <= 0) {
-                                            return const SizedBox.shrink();
-                                          }
-                                          return Positioned(
-                                            left: left,
-                                            top: 3,
-                                            bottom: 3,
-                                            width: width,
-                                            child: Container(
-                                              decoration: BoxDecoration(
-                                                color: s.starred
-                                                    ? colorAccentWash
-                                                    : colorSurface2,
-                                                border: Border(
-                                                  left: BorderSide(
-                                                    color: Color(stage.color),
-                                                    width: 2,
-                                                  ),
-                                                ),
-                                              ),
-                                              padding:
-                                                  const EdgeInsets.symmetric(
-                                                    horizontal: 4,
-                                                  ),
-                                              child: Text(
-                                                '${s.starred ? '★ ' : ''}${s.artist.split(' ').first}',
-                                                maxLines: 1,
-                                                overflow: TextOverflow.clip,
-                                                style: const TextStyle(
-                                                  fontFamily: 'JetBrainsMono',
-                                                  fontSize: 9,
-                                                  fontWeight: FontWeight.w700,
-                                                  color: colorFg,
-                                                  height: 1,
-                                                ),
-                                              ),
-                                            ),
-                                          );
-                                        }),
-                                        // Bottom divider
-                                        const Positioned(
-                                          bottom: 0,
-                                          left: 0,
-                                          right: 0,
-                                          child: Divider(
-                                            height: 1,
-                                            thickness: 1,
-                                            color: colorHairline,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  );
-                                }).toList(),
-                              ),
-                              // Clash zones (hatched overlay)
-                              ...clashZones.map((z) {
-                                final left = xPct(z.start) * w + 32;
-                                final width = (xPct(z.end) - xPct(z.start)) * w;
-                                return Positioned(
-                                  left: left,
-                                  top: 0,
-                                  bottom: 0,
-                                  width: width,
-                                  child: CustomPaint(painter: _HatchPainter()),
-                                );
-                              }),
-                            ],
-                          ),
-                        ),
-                        // Legend
-                        const SizedBox(height: 10),
-                        Row(
-                          children: [
-                            _LegendItem(
-                              color: colorSurface2,
-                              borderColor: colorFg3,
-                              label: 'SCHEDULED',
-                            ),
-                            const SizedBox(width: 12),
-                            _LegendItem(
-                              color: colorAccentWash,
-                              borderColor: colorAccent,
-                              label: '★ STARRED',
-                            ),
-                            const SizedBox(width: 12),
-                            _LegendItem(
-                              isHatch: true,
-                              label: 'CLASH',
-                              labelColor: colorWarn,
-                            ),
-                          ],
-                        ),
-                      ],
-                    );
-                  },
-                ),
-              ],
-            ),
-          ),
-        ),
-        // Clash list header
-        Padding(
-          padding: const EdgeInsets.fromLTRB(18, 14, 18, 8),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Text(
-                '! CLASHES',
-                style: TextStyle(
-                  fontFamily: 'JetBrainsMono',
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 0.08 * 11,
-                  color: colorWarn,
-                  height: 1,
-                ),
-              ),
-              Text(
-                '${clashPairs.length} conflict${clashPairs.length == 1 ? '' : 's'}',
-                style: const TextStyle(
-                  fontFamily: 'JetBrainsMono',
-                  fontSize: 10,
-                  color: colorFg3,
-                  height: 1,
-                ),
-              ),
-            ],
-          ),
-        ),
-        // Clash cards
-        ...clashPairs.map(
-          (pair) => Padding(
-            padding: const EdgeInsets.fromLTRB(18, 0, 18, 12),
-            child: _ClashCard(
-              setA: pair[0],
-              setB: pair[1],
-              stageA: stageById[pair[0].stage]!,
-              stageB: stageById[pair[1].stage]!,
-              onSetTap: widget.onSetTap,
-            ),
-          ),
-        ),
-        const SizedBox(height: 80),
-      ],
-    );
-  }
-}
-
-class _LegendItem extends StatelessWidget {
-  final Color? color;
-  final Color? borderColor;
-  final bool isHatch;
-  final String label;
-  final Color labelColor;
-
-  const _LegendItem({
-    this.color,
-    this.borderColor,
-    this.isHatch = false,
-    required this.label,
-    this.labelColor = colorFg3,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        if (isHatch)
-          SizedBox(
-            width: 14,
-            height: 6,
-            child: CustomPaint(painter: _HatchPainter()),
-          )
-        else
-          Container(
-            width: 14,
-            height: 6,
-            color: color,
-            foregroundDecoration: BoxDecoration(
-              border: Border(
-                left: BorderSide(color: borderColor ?? colorFg3, width: 2),
-              ),
-            ),
-          ),
-        const SizedBox(width: 6),
-        Text(
-          label,
-          style: TextStyle(
-            fontFamily: 'JetBrainsMono',
-            fontSize: 9,
-            letterSpacing: 0.08 * 9,
-            color: labelColor,
-            height: 1,
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _HatchPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = colorWarn.withValues(alpha: 0.18)
-      ..strokeWidth = 4;
-    // Left/right borders
-    final borderPaint = Paint()
-      ..color = colorWarn
-      ..strokeWidth = 1.5;
-    canvas.drawLine(Offset(0, 0), Offset(0, size.height), borderPaint);
-    canvas.drawLine(
-      Offset(size.width, 0),
-      Offset(size.width, size.height),
-      borderPaint,
-    );
-
-    // Hatching
-    for (double x = -size.height; x < size.width + size.height; x += 8) {
-      canvas.drawLine(
-        Offset(x, 0),
-        Offset(x + size.height, size.height),
-        paint,
-      );
-    }
-  }
-
-  @override
-  bool shouldRepaint(_) => false;
-}
-
-class _ClashCard extends StatelessWidget {
-  final FestSet setA;
-  final FestSet setB;
-  final Stage stageA;
-  final Stage stageB;
-  final ValueChanged<FestSet>? onSetTap;
-
-  const _ClashCard({
-    required this.setA,
-    required this.setB,
-    required this.stageA,
-    required this.stageB,
-    this.onSetTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final a = setA, b = setB;
-    final sA = stageA, sB = stageB;
-    final overlapStart = [a.t, b.t].reduce((v, e) => v > e ? v : e);
-    final overlapEnd = [
-      a.t + a.dur,
-      b.t + b.dur,
-    ].reduce((v, e) => v < e ? v : e);
-    final overlapMin = overlapEnd - overlapStart;
-
-    return Container(
-      decoration: BoxDecoration(
-        color: colorWarn.withValues(alpha: 0.04),
-        border: Border.all(color: colorWarn, width: 1.5),
-      ),
-      padding: const EdgeInsets.all(14),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'OVERLAP ${fmtTime(overlapStart)} → ${fmtTime(overlapEnd)} · $overlapMin MIN',
-            style: const TextStyle(
-              fontFamily: 'JetBrainsMono',
-              fontSize: 10,
-              letterSpacing: 0.08 * 10,
-              color: colorWarn,
-              height: 1,
-            ),
-          ),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              Expanded(
-                child: _ClashOption(
-                  set: a,
-                  stage: sA,
-                  onTap: () => onSetTap?.call(a),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: const Text(
-                  'VS',
-                  style: TextStyle(
+                  '${activeLiked.length} ACTIVE'
+                  '${cancelledCount == 0 ? '' : ' · $cancelledCount CANCELLED'}',
+                  style: const TextStyle(
                     fontFamily: 'JetBrainsMono',
                     fontSize: 11,
                     fontWeight: FontWeight.w700,
-                    color: colorWarn,
-                    height: 1,
+                    letterSpacing: 0.08 * 11,
+                    color: colorFg,
                   ),
                 ),
-              ),
-              Expanded(
-                child: _ClashOption(
-                  set: b,
-                  stage: sB,
-                  onTap: () => onSetTap?.call(b),
+                const Spacer(),
+                Text(
+                  '$clashCount CLASH${clashCount == 1 ? '' : 'ES'}',
+                  style: TextStyle(
+                    fontFamily: 'JetBrainsMono',
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.08 * 10,
+                    color: clashCount == 0 ? colorFg4 : colorWarn,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
-        ],
+        ),
+        Expanded(
+          child: liked.isEmpty
+              ? const _EmptyLikedDay()
+              : ListView.builder(
+                  padding: const EdgeInsets.only(bottom: 32),
+                  itemCount: groups.length,
+                  itemBuilder: (context, index) {
+                    final group = groups[index];
+                    if (group.sets.length == 1) {
+                      final set = group.sets.single;
+                      return _LikedSetRow(
+                        set: set,
+                        stage: stageById[set.stage],
+                        onTap: () => widget.onSetTap?.call(set),
+                      );
+                    }
+                    return _ClashGroup(
+                      sets: group.sets,
+                      stages: stageById,
+                      onSetTap: widget.onSetTap,
+                    );
+                  },
+                ),
+        ),
+      ],
+    );
+  }
+}
+
+class _AgendaGroup {
+  final List<FestSet> sets;
+
+  const _AgendaGroup(this.sets);
+}
+
+class _EmptyLikedDay extends StatelessWidget {
+  const _EmptyLikedDay();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Center(
+      child: Padding(
+        padding: EdgeInsets.symmetric(horizontal: 24),
+        child: Text(
+          'NO LIKED SETS THIS DAY\nSTAR SETS TO BUILD YOUR PLAN',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontFamily: 'JetBrainsMono',
+            fontSize: 10,
+            height: 1.5,
+            letterSpacing: 0.08 * 10,
+            color: colorFg3,
+          ),
+        ),
       ),
     );
   }
 }
 
-class _ClashOption extends StatelessWidget {
+class _ClashGroup extends StatelessWidget {
+  final List<FestSet> sets;
+  final Map<String, Stage> stages;
+  final ValueChanged<FestSet>? onSetTap;
+
+  const _ClashGroup({required this.sets, required this.stages, this.onSetTap});
+
+  String get _label {
+    if (sets.length != 2) return '! ${sets.length} SETS CLASH';
+    final first = sets[0];
+    final second = sets[1];
+    final overlapStart = first.t > second.t ? first.t : second.t;
+    final firstEnd = first.t + first.dur;
+    final secondEnd = second.t + second.dur;
+    final overlapEnd = firstEnd < secondEnd ? firstEnd : secondEnd;
+    return '! ${overlapEnd - overlapStart} MIN OVERLAP';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: colorWarn.withValues(alpha: 0.04),
+      child: DottedBorder.bottom(
+        color: colorWarn,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(18, 12, 18, 6),
+              child: Text(
+                _label,
+                style: const TextStyle(
+                  fontFamily: 'JetBrainsMono',
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.08 * 10,
+                  color: colorWarn,
+                ),
+              ),
+            ),
+            for (final set in sets)
+              _LikedSetRow(
+                set: set,
+                stage: stages[set.stage],
+                inClashGroup: true,
+                onTap: () => onSetTap?.call(set),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _LikedSetRow extends StatelessWidget {
   final FestSet set;
-  final Stage stage;
+  final Stage? stage;
+  final bool inClashGroup;
   final VoidCallback onTap;
 
-  const _ClashOption({
+  const _LikedSetRow({
     required this.set,
     required this.stage,
     required this.onTap,
+    this.inClashGroup = false,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: colorSurface1,
-      child: InkWell(
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          decoration: BoxDecoration(
-            border: Border.all(color: Color(stage.color), width: 1),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                '★ ${set.artist}',
-                style: const TextStyle(
-                  fontFamily: 'Helvetica',
-                  fontWeight: FontWeight.w700,
-                  fontSize: 14,
-                  letterSpacing: -0.02 * 14,
-                  color: colorFg,
-                  height: 1,
-                ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+    final stageName = stage?.name ?? set.stage;
+    final stageColor = stage == null ? colorFg3 : Color(stage!.color);
+    return DottedBorder.bottom(
+      color: inClashGroup ? colorWarn.withValues(alpha: 0.45) : colorDotted,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 68),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(18, 9, 12, 9),
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: 58,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          fmtTime(set.t),
+                          style: const TextStyle(
+                            fontFamily: 'JetBrainsMono',
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                            color: colorFg,
+                          ),
+                        ),
+                        Text(
+                          '→ ${fmtTime(set.t + set.dur)}',
+                          style: const TextStyle(
+                            fontFamily: 'JetBrainsMono',
+                            fontSize: 9,
+                            color: colorFg4,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Container(width: 3, height: 36, color: stageColor),
+                  const SizedBox(width: 11),
+                  Expanded(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          set.artist.toUpperCase(),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontFamily: 'Helvetica',
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: -0.02 * 16,
+                            color: set.cancelled ? colorFg3 : colorFg,
+                          ),
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          set.cancelled
+                              ? 'CANCELLED · ${stageName.toUpperCase()}'
+                              : stageName.toUpperCase(),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontFamily: 'JetBrainsMono',
+                            fontSize: 9,
+                            fontWeight: set.cancelled
+                                ? FontWeight.w700
+                                : FontWeight.normal,
+                            letterSpacing: 0.08 * 9,
+                            color: set.cancelled ? colorWarn : colorFg3,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Icon(Icons.chevron_right, size: 18, color: colorFg3),
+                ],
               ),
-              const SizedBox(height: 2),
-              Text(
-                '${stage.name} · ${fmtTime(set.t)} → ${fmtTime(set.t + set.dur)}',
-                style: const TextStyle(
-                  fontFamily: 'JetBrainsMono',
-                  fontSize: 9,
-                  letterSpacing: 0.08 * 9,
-                  color: colorFg3,
-                  height: 1,
-                ),
-              ),
-            ],
+            ),
           ),
         ),
       ),

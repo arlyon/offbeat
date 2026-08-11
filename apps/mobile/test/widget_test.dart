@@ -9,6 +9,7 @@ import 'package:offbeat_mobile/data/serial_keyed_queue.dart';
 import 'package:offbeat_mobile/screens/festival_detail/festival_detail_screen.dart';
 import 'package:offbeat_mobile/screens/festival_detail/lineup_search_screen.dart';
 import 'package:offbeat_mobile/screens/festival_detail/set_details_sheet.dart';
+import 'package:offbeat_mobile/screens/festival_detail/stage_tabs_view.dart';
 import 'package:offbeat_mobile/screens/social/group_members_sheet.dart';
 import 'package:offbeat_mobile/screens/social/member_sheet.dart';
 import 'package:offbeat_mobile/src/rust/api/dto.dart';
@@ -496,12 +497,120 @@ void main() {
     },
   );
 
-  testWidgets('Clashes view shows overlaps without fake resolution actions', (
+  testWidgets('Stages filters to one stage and day controls jump within it', (
+    tester,
+  ) async {
+    final sets = [
+      for (var index = 0; index < 7; index++)
+        set(
+          id: 'main-fri-$index',
+          artist: 'MAIN FRIDAY $index',
+          start: 60 + index * 70,
+        ),
+      set(id: 'main-sat', artist: 'MAIN SATURDAY', start: 120, day: 'sat'),
+      for (var index = 0; index < 7; index++)
+        set(
+          id: 'quarry-fri-$index',
+          artist: 'QUARRY FRIDAY $index',
+          start: 90 + index * 70,
+          stage: 'quarry',
+        ),
+      set(
+        id: 'quarry-sat',
+        artist: 'QUARRY SATURDAY',
+        start: 150,
+        day: 'sat',
+        stage: 'quarry',
+      ),
+    ];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: StageTabsView(
+            sets: sets,
+            stages: const [
+              Stage(
+                id: 'main',
+                name: 'Main Stage',
+                short: 'MAIN',
+                color: 0xFFFF2D8F,
+              ),
+              Stage(
+                id: 'quarry',
+                name: 'The Quarry',
+                short: 'QUARRY',
+                color: 0xFF00D9FF,
+              ),
+            ],
+            days: const [
+              Day(
+                id: 'fri',
+                label: 'Friday',
+                dayNum: '1',
+                month: 'JUL',
+                year: 2026,
+              ),
+              Day(
+                id: 'sat',
+                label: 'Saturday',
+                dayNum: '2',
+                month: 'JUL',
+                year: 2026,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      tester.getTopLeft(find.text('THE QUARRY')).dy,
+      lessThan(tester.getTopLeft(find.text('Friday 1')).dy),
+    );
+    expect(find.text('MAIN FRIDAY 0'), findsOneWidget);
+    expect(find.text('QUARRY FRIDAY 0'), findsNothing);
+
+    await tester.tap(find.text('THE QUARRY'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('MAIN FRIDAY 0'), findsNothing);
+    expect(find.text('MAIN SATURDAY'), findsNothing);
+    expect(find.text('QUARRY FRIDAY 0'), findsOneWidget);
+    expect(find.text('QUARRY SATURDAY'), findsOneWidget);
+    final saturdayBefore = tester.getTopLeft(find.text('SATURDAY 2 JUL')).dy;
+
+    await tester.tap(find.text('Saturday 2'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('QUARRY FRIDAY 0'), findsOneWidget);
+    expect(find.text('QUARRY SATURDAY'), findsOneWidget);
+    final saturdayAfter = tester.getTopLeft(find.text('SATURDAY 2 JUL')).dy;
+    expect(saturdayAfter, lessThan(saturdayBefore));
+    expect(saturdayAfter, lessThan(600));
+  });
+
+  testWidgets('Liked agenda shows inline clashes and switches days', (
     tester,
   ) async {
     final sets = withScheduleClashes([
       set(id: 'a', artist: 'ARTIST A', start: 60, starred: true),
       set(id: 'b', artist: 'ARTIST B', start: 90, starred: true),
+      set(
+        id: 'cancelled',
+        artist: 'CANCELLED ARTIST',
+        start: 180,
+        starred: true,
+        cancelled: true,
+      ),
+      set(
+        id: 'c',
+        artist: 'SATURDAY ARTIST',
+        start: 120,
+        starred: true,
+        day: 'sat',
+      ),
     ]);
     final festival = Festival.fromJson({
       'id': 'fest',
@@ -532,6 +641,13 @@ void main() {
                 month: 'JUL',
                 year: 2026,
               ),
+              Day(
+                id: 'sat',
+                label: 'Saturday',
+                dayNum: '2',
+                month: 'JUL',
+                year: 2026,
+              ),
             ],
             sets: sets,
           ),
@@ -542,10 +658,23 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('LIKED'), findsOneWidget);
-    expect(find.text('1 conflict'), findsOneWidget);
-    expect(find.text('★ ARTIST A'), findsOneWidget);
-    expect(find.text('★ ARTIST B'), findsOneWidget);
+    expect(find.text('2 ACTIVE · 1 CANCELLED'), findsOneWidget);
+    expect(find.text('1 CLASH'), findsOneWidget);
+    expect(find.text('! 30 MIN OVERLAP'), findsOneWidget);
+    expect(find.text('ARTIST A'), findsOneWidget);
+    expect(find.text('ARTIST B'), findsOneWidget);
+    expect(find.text('CANCELLED ARTIST'), findsOneWidget);
+    expect(find.text('CANCELLED · MAIN'), findsOneWidget);
+    expect(find.text('SATURDAY ARTIST'), findsNothing);
     expect(find.textContaining('SPLIT'), findsNothing);
     expect(find.textContaining('UNSTAR'), findsNothing);
+
+    await tester.tap(find.text('Saturday 2'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('1 ACTIVE'), findsOneWidget);
+    expect(find.text('0 CLASHES'), findsOneWidget);
+    expect(find.text('SATURDAY ARTIST'), findsOneWidget);
+    expect(find.text('ARTIST A'), findsNothing);
   });
 }

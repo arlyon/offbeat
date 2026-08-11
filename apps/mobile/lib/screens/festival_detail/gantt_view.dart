@@ -15,6 +15,7 @@ import '../../theme/tokens.dart';
 import '../../widgets/co_liker_pins.dart';
 import '../../widgets/live_dot.dart';
 import '../../widgets/dotted_border.dart';
+import 'day_jump_strip.dart';
 
 class GanttView extends StatefulWidget {
   final List<FestSet> sets;
@@ -359,7 +360,9 @@ class _GanttViewState extends State<GanttView> {
         _startMin + (_tx + position.dx - ganttStageLabelW) / ganttPxPerMin;
     final stageId = widget.stages[stageIndex].id;
     final set = _absoluteSets.where((set) {
-      return set.stage == stageId && minute >= set.t && minute <= set.t + set.dur;
+      return set.stage == stageId &&
+          minute >= set.t &&
+          minute <= set.t + set.dur;
     }).firstOrNull;
     if (set != null) widget.onSetTap?.call(set);
   }
@@ -375,8 +378,8 @@ class _GanttViewState extends State<GanttView> {
         // Meta strip: now time + scrollable day jump chips
         ListenableBuilder(
           listenable: _hScrollController,
-          builder: (context, _) => _MetaStrip(
-            activeDay: _activeDay,
+          builder: (context, _) => DayJumpStrip(
+            activeDayId: _activeDay,
             days: widget.days,
             showDayPicker: widget.days.length > 1,
             onDayTap: _jumpToDay,
@@ -499,69 +502,6 @@ class _GanttViewState extends State<GanttView> {
           ),
         ),
       ],
-    );
-  }
-}
-
-// ── Meta strip ─────────────────────────────────────────────────
-
-class _MetaStrip extends StatelessWidget {
-  final String activeDay;
-  final List<Day> days;
-  final bool showDayPicker;
-  final ValueChanged<String> onDayTap;
-
-  const _MetaStrip({
-    required this.activeDay,
-    required this.days,
-    required this.onDayTap,
-    this.showDayPicker = true,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return DottedBorder.bottom(
-      child: SizedBox(
-        height: 44,
-        child: showDayPicker
-            ? SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                child: Row(
-                  children: days.map((day) {
-                    final isActive = day.id == activeDay;
-                    return Padding(
-                      padding: const EdgeInsets.only(right: 4),
-                      child: GestureDetector(
-                        onTap: () => onDayTap(day.id),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                          decoration: BoxDecoration(
-                            color: isActive ? colorFg : Colors.transparent,
-                            border: Border.all(
-                              color: isActive ? colorFg : colorDotted,
-                              width: 1.5,
-                            ),
-                          ),
-                          child: Text(
-                            '${day.label} ${day.dayNum}',
-                            style: TextStyle(
-                              fontFamily: 'JetBrainsMono',
-                              fontSize: 10,
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: 0.08 * 10,
-                              color: isActive ? colorBg : colorFg2,
-                              height: 1,
-                            ),
-                          ),
-                        ),
-                      ),
-                    );
-                  }).toList(),
-                ),
-              )
-            : const SizedBox.shrink(),
-      ),
     );
   }
 }
