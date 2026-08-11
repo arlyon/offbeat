@@ -58,6 +58,40 @@ interface ArtistEnqueueResult {
 	complete: boolean;
 }
 
+const MAX_ARTIST_QUEUE_BATCH_MESSAGES = 100;
+const MAX_ARTIST_QUEUE_BATCH_BYTES = 240 * 1024;
+const MAX_ARTIST_QUEUE_MESSAGE_BYTES = 128 * 1024;
+const QUEUE_MESSAGE_OVERHEAD_BYTES = 64;
+
+function artistEnrichmentBatches(
+	candidates: readonly ArtistEnrichmentMessage[],
+): ArtistEnrichmentMessage[][] {
+	const encoder = new TextEncoder();
+	const batches: ArtistEnrichmentMessage[][] = [];
+	let batch: ArtistEnrichmentMessage[] = [];
+	let batchBytes = 0;
+	for (const candidate of candidates) {
+		const messageBytes =
+			encoder.encode(JSON.stringify(candidate)).byteLength + QUEUE_MESSAGE_OVERHEAD_BYTES;
+		if (messageBytes > MAX_ARTIST_QUEUE_MESSAGE_BYTES) {
+			throw new Error(`Artist enrichment message ${candidate.jobId} exceeds the queue size limit`);
+		}
+		if (
+			batch.length > 0 &&
+			(batch.length >= MAX_ARTIST_QUEUE_BATCH_MESSAGES ||
+				batchBytes + messageBytes > MAX_ARTIST_QUEUE_BATCH_BYTES)
+		) {
+			batches.push(batch);
+			batch = [];
+			batchBytes = 0;
+		}
+		batch.push(candidate);
+		batchBytes += messageBytes;
+	}
+	if (batch.length > 0) batches.push(batch);
+	return batches;
+}
+
 export async function enqueueArtistEnrichment(
 	env: Env["Bindings"],
 	festivalId: string,
@@ -66,17 +100,25 @@ export async function enqueueArtistEnrichment(
 	const main = getMainDO(env) as unknown as MainArtistEnrichmentRpc;
 	try {
 		candidates = await main.getArtistEnrichmentCandidates(festivalId);
-	} catch {
+	} catch (error) {
+		console.error("[artist-enrichment] failed to load candidates", error);
+		return { queuedJobs: 0, complete: false };
+	}
+	let batches: ArtistEnrichmentMessage[][];
+	try {
+		batches = artistEnrichmentBatches(candidates);
+	} catch (error) {
+		console.error("[artist-enrichment] failed to batch candidates", error);
 		return { queuedJobs: 0, complete: false };
 	}
 	let queuedJobs = 0;
-	for (let offset = 0; offset < candidates.length; offset += 100) {
-		const batch = candidates.slice(offset, offset + 100);
+	for (const batch of batches) {
 		try {
 			await env.ARTIST_ENRICHMENT_QUEUE.sendBatch(batch.map((body) => ({ body })));
 			queuedJobs += batch.length;
 			await main.markArtistEnrichmentQueued(batch.map((candidate) => candidate.jobId));
-		} catch {
+		} catch (error) {
+			console.error("[artist-enrichment] failed to send queue batch", error);
 			return { queuedJobs, complete: false };
 		}
 	}
