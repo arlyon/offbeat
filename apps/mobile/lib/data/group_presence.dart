@@ -84,10 +84,5 @@ String groupMemberPresenceLabel(
     return location;
   }
   final time = groupMemberCheckInTime(member);
-  final freshness = groupMemberIsStale(member) ? 'STALE' : null;
-  return [
-    location,
-    ?freshness,
-    if (time.isNotEmpty) time,
-  ].join(' · ');
+  return [location, if (time.isNotEmpty) time].join(' · ');
 }

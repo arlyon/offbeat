@@ -2,6 +2,7 @@
 // Avatar, name, last check-in, schedule preview, and membership controls
 // Matches groups-screens.jsx MemberSheet (lines 787–857)
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import '../../data/group_presence.dart';
 import '../../data/models.dart';
@@ -14,6 +15,7 @@ class MemberSheet extends StatelessWidget {
   final String groupName;
   final LineupDto? lineup;
   final bool isMe;
+  final ValueListenable<List<GroupMemberDto>>? membersListenable;
 
   const MemberSheet({
     super.key,
@@ -21,6 +23,7 @@ class MemberSheet extends StatelessWidget {
     required this.groupName,
     this.lineup,
     this.isMe = false,
+    this.membersListenable,
   });
 
   Map<String, String> get _stageNames => {
@@ -30,6 +33,24 @@ class MemberSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final listenable = membersListenable;
+    if (listenable != null) {
+      return ValueListenableBuilder<List<GroupMemberDto>>(
+        valueListenable: listenable,
+        builder: (context, members, _) {
+          final liveMember = members
+              .where((candidate) => candidate.userId == member.userId)
+              .firstOrNull;
+          return MemberSheet(
+            member: liveMember ?? member,
+            groupName: groupName,
+            lineup: lineup,
+            isMe: isMe,
+          );
+        },
+      );
+    }
+
     return DraggableScrollableSheet(
       initialChildSize: 0.7,
       minChildSize: 0.4,
@@ -113,7 +134,8 @@ class MemberSheet extends StatelessWidget {
     final stale = groupMemberIsStale(member);
     final hasLocation =
         groupMemberLocationKey(member) != groupPresenceOfflineKey;
-    final presenceLabel = groupMemberPresenceLabel(member, _stageNames);
+    final locationLabel = groupMemberLocationLabel(member, _stageNames);
+    final checkInTime = groupMemberCheckInTime(member);
     final initials = _initials(member.displayName);
     final schedule = _resolvedSchedule;
     final missingSetIds = _missingSetIds;
@@ -199,18 +221,31 @@ class MemberSheet extends StatelessWidget {
                       ),
                       const SizedBox(width: 6),
                       Expanded(
-                        child: Text(
-                          presenceLabel,
+                        child: Text.rich(
+                          TextSpan(
+                            text: locationLabel,
+                            children: [
+                              if (checkInTime.isNotEmpty)
+                                TextSpan(
+                                  text: ' · $checkInTime',
+                                  style: const TextStyle(color: colorFg4),
+                                ),
+                            ],
+                          ),
+                          semanticsLabel: groupMemberPresenceLabel(
+                            member,
+                            _stageNames,
+                          ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             fontFamily: 'JetBrainsMono',
                             fontSize: 11,
                             letterSpacing: 0.08 * 11,
-                            color: stale
-                                ? colorWarn
-                                : fresh
+                            color: fresh
                                 ? colorAccent
+                                : hasLocation
+                                ? colorFg
                                 : colorFg4,
                           ),
                         ),

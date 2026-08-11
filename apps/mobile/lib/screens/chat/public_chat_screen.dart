@@ -180,16 +180,30 @@ class _PublicChatScreenState extends State<PublicChatScreen> {
                 final checkedIn = _campsite
                     ? controller?.isAtCampsite ?? false
                     : controller?.isAtStage(widget.channelId) ?? false;
+                final stale = checkedIn && (controller?.isStale ?? false);
                 return _Header(
                   title: widget.title,
                   onBack: () => Navigator.pop(context),
-                  actionLabel: checkedIn && (controller?.isStale ?? false)
+                  actionLabel: stale
                       ? 'STALE · CHECK IN AGAIN'
                       : checkedIn
                       ? '✓ CHECKED IN'
-                      : _campsite
-                      ? 'CHECK IN AT CAMP'
-                      : 'CHECK IN HERE',
+                      : 'CHECK IN AT CAMP',
+                  actionIcon: _campsite
+                      ? null
+                      : checkedIn && !stale
+                      ? Icons.location_on
+                      : Icons.location_on_outlined,
+                  actionSemanticLabel: stale
+                      ? 'Check in here again'
+                      : checkedIn
+                      ? 'Checked in here'
+                      : 'Check in here',
+                  actionIconColor: stale
+                      ? colorWarn
+                      : checkedIn
+                      ? colorAccent
+                      : colorFg2,
                   actionBusy: controller?.saving ?? false,
                   onAction: controller == null ? null : _checkInHere,
                 );
@@ -324,6 +338,9 @@ class _Header extends StatelessWidget {
   final String title;
   final VoidCallback onBack;
   final String actionLabel;
+  final IconData? actionIcon;
+  final String? actionSemanticLabel;
+  final Color? actionIconColor;
   final bool actionBusy;
   final VoidCallback? onAction;
 
@@ -332,6 +349,9 @@ class _Header extends StatelessWidget {
     required this.onBack,
     required this.actionLabel,
     required this.actionBusy,
+    this.actionIcon,
+    this.actionSemanticLabel,
+    this.actionIconColor,
     this.onAction,
   });
 
@@ -382,10 +402,29 @@ class _Header extends StatelessWidget {
             ),
             Padding(
               padding: const EdgeInsets.only(right: sp2),
-              child: TextButton(
-                onPressed: actionBusy ? null : onAction,
-                child: Text(actionBusy ? 'SAVING…' : actionLabel),
-              ),
+              child: actionIcon == null
+                  ? TextButton(
+                      onPressed: actionBusy ? null : onAction,
+                      child: Text(actionBusy ? 'SAVING…' : actionLabel),
+                    )
+                  : SizedBox(
+                      width: tapMin,
+                      height: tapMin,
+                      child: IconButton(
+                        onPressed: actionBusy ? null : onAction,
+                        tooltip: actionSemanticLabel,
+                        icon: actionBusy
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 1.5,
+                                  color: colorFg3,
+                                ),
+                              )
+                            : Icon(actionIcon, color: actionIconColor),
+                      ),
+                    ),
             ),
           ],
         ),

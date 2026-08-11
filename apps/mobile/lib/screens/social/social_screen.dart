@@ -59,6 +59,7 @@ class _SocialScreenState extends State<SocialScreen> {
 
   // Group state (live)
   GroupStateDto? _groupState;
+  final _liveMembers = ValueNotifier<List<GroupMemberDto>>(const []);
   StreamSubscription<GroupStateDto>? _groupStateSub;
   int _groupSubscriptionGeneration = 0;
 
@@ -91,6 +92,7 @@ class _SocialScreenState extends State<SocialScreen> {
     _groupSubscriptionGeneration++;
     _groupStateSub?.cancel();
     _chatSub?.cancel();
+    _liveMembers.dispose();
     _scrollController.dispose();
     _composerController.dispose();
     super.dispose();
@@ -117,6 +119,7 @@ class _SocialScreenState extends State<SocialScreen> {
           _messages = [];
         }
       });
+      if (nextGroupId == null) _liveMembers.value = const [];
       if (nextGroupId != null) {
         await _subscribeToGroup(nextGroupId);
       }
@@ -148,6 +151,7 @@ class _SocialScreenState extends State<SocialScreen> {
             _activeGroupId != groupId) {
           return;
         }
+        _liveMembers.value = state.members;
         setState(() {
           _groupState = state;
           _groups = _groups
@@ -164,6 +168,7 @@ class _SocialScreenState extends State<SocialScreen> {
       if (mounted &&
           generation == _groupSubscriptionGeneration &&
           _activeGroupId == groupId) {
+        _liveMembers.value = state.members;
         setState(() => _groupState = state);
       }
     } catch (_) {}
@@ -240,6 +245,7 @@ class _SocialScreenState extends State<SocialScreen> {
         _messages = [];
         _loading = false;
       });
+      _liveMembers.value = const [];
       await _loadGroups(preferredGroupId: result.groupId);
       await widget.checkInController?.refresh();
       widget.onGroupsChanged?.call();
@@ -300,6 +306,7 @@ class _SocialScreenState extends State<SocialScreen> {
       if (!mounted) return;
       _activeGroupId = null;
       _groupState = null;
+      _liveMembers.value = const [];
       _messages = [];
       widget.onGroupsChanged?.call();
       await _loadGroups();
@@ -406,6 +413,7 @@ class _SocialScreenState extends State<SocialScreen> {
       isScrollControlled: true,
       builder: (_) => GroupMembersSheet(
         members: state.members,
+        membersListenable: _liveMembers,
         stages: widget.stages,
         userId: widget.userId,
         initialLocationKey: locationKey,
@@ -429,6 +437,7 @@ class _SocialScreenState extends State<SocialScreen> {
         groupName: _groupState!.name,
         lineup: widget.lineup,
         isMe: member.userId == widget.userId,
+        membersListenable: _liveMembers,
       ),
     );
   }
@@ -439,6 +448,7 @@ class _SocialScreenState extends State<SocialScreen> {
       _groupState = null;
       _messages = [];
     });
+    _liveMembers.value = const [];
     await _subscribeToGroup(groupId);
   }
 
@@ -459,7 +469,6 @@ class _SocialScreenState extends State<SocialScreen> {
             children: [
               _buildGroupHeader(),
               _buildMembersSection(),
-              _buildPulseCard(),
               // Feed eyebrow
               _buildFeedEyebrow(),
               // Feed items (chat messages)
@@ -620,7 +629,7 @@ class _SocialScreenState extends State<SocialScreen> {
             )
             .name;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(18, 0, 18, 14),
+      padding: const EdgeInsets.fromLTRB(18, 14, 18, 14),
       child: Text(
         name.toUpperCase(),
         style: const TextStyle(
@@ -754,112 +763,6 @@ class _SocialScreenState extends State<SocialScreen> {
             child: _buildInviteAction(),
           ),
         ],
-      ),
-    );
-  }
-
-  // ── Pulse card ────────────────────────────────────────────────
-
-  Widget _buildPulseCard() {
-    final members = _groupState?.members ?? const <GroupMemberDto>[];
-    if (members.isEmpty) return const SizedBox.shrink();
-
-    final buckets = <String, List<GroupMemberDto>>{};
-    for (final member in members) {
-      final key = groupMemberLocationKey(member);
-      (buckets[key] ??= []).add(member);
-    }
-    final sortedBuckets = buckets.entries.toList()
-      ..sort((a, b) {
-        if (a.key == groupPresenceOfflineKey) return 1;
-        if (b.key == groupPresenceOfflineKey) return -1;
-        return b.value.length.compareTo(a.value.length);
-      });
-    final visibleBuckets = sortedBuckets.take(3).toList();
-
-    return DottedBorder.bottom(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(18, 12, 18, 14),
-        child: Column(
-          children: [
-            _buildEyebrowInline('WHERE THE CREW IS', 'TAP A LOCATION'),
-            for (final entry in visibleBuckets)
-              Material(
-                color: Colors.transparent,
-                child: InkWell(
-                  onTap: () => _showMembersSheet(locationKey: entry.key),
-                  child: SizedBox(
-                    height: 44,
-                    child: Row(
-                      children: [
-                        SizedBox(
-                          width: 28,
-                          child: Text(
-                            '${entry.value.length}',
-                            style: const TextStyle(
-                              fontFamily: 'JetBrainsMono',
-                              fontSize: 16,
-                              fontWeight: FontWeight.w700,
-                              color: colorFg,
-                            ),
-                          ),
-                        ),
-                        Container(
-                          width: 8,
-                          height: 8,
-                          color: entry.key == groupPresenceOfflineKey
-                              ? colorFg4
-                              : entry.value.every(groupMemberIsStale)
-                              ? colorWarn
-                              : colorCoAccent,
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Text(
-                            '${groupMemberLocationLabel(entry.value.first, widget.stages)}${entry.value.every(groupMemberIsStale) ? ' · STALE' : ''}',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontFamily: 'JetBrainsMono',
-                              fontSize: 10,
-                              fontWeight: FontWeight.w700,
-                              color: entry.key == groupPresenceOfflineKey
-                                  ? colorFg3
-                                  : colorFg,
-                            ),
-                          ),
-                        ),
-                        Text(
-                          entry.value
-                              .take(2)
-                              .map(
-                                (member) => member.displayName.split(' ').first,
-                              )
-                              .join(' · ')
-                              .toUpperCase(),
-                          style: _metaStyle,
-                        ),
-                        const SizedBox(width: 4),
-                        const Icon(
-                          Icons.chevron_right,
-                          size: 16,
-                          color: colorFg3,
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            if (sortedBuckets.length > visibleBuckets.length)
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  '+${sortedBuckets.length - visibleBuckets.length} MORE LOCATIONS',
-                  style: _metaStyle,
-                ),
-              ),
-          ],
-        ),
       ),
     );
   }
@@ -1088,36 +991,6 @@ class _SocialScreenState extends State<SocialScreen> {
   Widget _buildEyebrow(String label, String meta) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(18, 14, 18, 8),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(
-            label,
-            style: const TextStyle(
-              fontFamily: 'JetBrainsMono',
-              fontSize: 11,
-              fontWeight: FontWeight.w500,
-              letterSpacing: 0.08 * 11,
-              color: colorFg3,
-            ),
-          ),
-          Text(
-            meta,
-            style: const TextStyle(
-              fontFamily: 'JetBrainsMono',
-              fontSize: 10,
-              letterSpacing: 0.08 * 10,
-              color: colorFg4,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildEyebrowInline(String label, String meta) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 4),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [

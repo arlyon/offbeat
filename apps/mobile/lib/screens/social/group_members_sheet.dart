@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../data/group_presence.dart';
@@ -7,6 +8,7 @@ import '../../widgets/dotted_border.dart';
 
 class GroupMembersSheet extends StatefulWidget {
   final List<GroupMemberDto> members;
+  final ValueListenable<List<GroupMemberDto>>? membersListenable;
   final Map<String, String> stages;
   final String userId;
   final String? initialLocationKey;
@@ -16,6 +18,7 @@ class GroupMembersSheet extends StatefulWidget {
     super.key,
     required this.members,
     required this.stages,
+    this.membersListenable,
     required this.userId,
     required this.onMemberTap,
     this.initialLocationKey,
@@ -34,8 +37,8 @@ class _GroupMembersSheetState extends State<GroupMembersSheet> {
     _locationKey = widget.initialLocationKey;
   }
 
-  List<GroupMemberDto> get _visibleMembers {
-    final members = widget.members.where((member) {
+  List<GroupMemberDto> _visibleMembers(List<GroupMemberDto> source) {
+    final members = source.where((member) {
       if (_locationKey == null) return true;
       return groupMemberLocationKey(member) == _locationKey;
     }).toList();
@@ -51,11 +54,20 @@ class _GroupMembersSheetState extends State<GroupMembersSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final members = _visibleMembers;
-    final onSiteCount = widget.members.where(groupMemberIsOnSite).length;
+    final listenable = widget.membersListenable;
+    if (listenable == null) return _buildSheet(context, widget.members);
+    return ValueListenableBuilder<List<GroupMemberDto>>(
+      valueListenable: listenable,
+      builder: (context, members, _) => _buildSheet(context, members),
+    );
+  }
+
+  Widget _buildSheet(BuildContext context, List<GroupMemberDto> allMembers) {
+    final members = _visibleMembers(allMembers);
+    final onSiteCount = allMembers.where(groupMemberIsOnSite).length;
     final filterMember = _locationKey == null
         ? null
-        : widget.members
+        : allMembers
               .where((member) => groupMemberLocationKey(member) == _locationKey)
               .firstOrNull;
     final filterName = filterMember == null
@@ -106,7 +118,7 @@ class _GroupMembersSheetState extends State<GroupMembersSheet> {
                         ),
                       ),
                       Text(
-                        '$onSiteCount ON SITE · ${widget.members.length} TOTAL',
+                        '$onSiteCount ON SITE · ${allMembers.length} TOTAL',
                         style: _metaStyle,
                       ),
                     ],
@@ -144,11 +156,14 @@ class _GroupMembersSheetState extends State<GroupMembersSheet> {
                     final member = members[index];
                     final isMe = member.userId == widget.userId;
                     final onSite = groupMemberIsOnSite(member);
-                    final stale = groupMemberIsStale(member);
-                    final locationLabel = groupMemberPresenceLabel(
+                    final hasLocation =
+                        groupMemberLocationKey(member) !=
+                        groupPresenceOfflineKey;
+                    final locationLabel = groupMemberLocationLabel(
                       member,
                       widget.stages,
                     );
+                    final checkInTime = groupMemberCheckInTime(member);
                     return DottedBorder.bottom(
                       child: Material(
                         color: isMe ? colorAccentWash : Colors.transparent,
@@ -158,7 +173,7 @@ class _GroupMembersSheetState extends State<GroupMembersSheet> {
                             widget.onMemberTap(member);
                           },
                           child: ConstrainedBox(
-                            constraints: const BoxConstraints(minHeight: 68),
+                            constraints: const BoxConstraints(minHeight: 56),
                             child: Padding(
                               padding: const EdgeInsets.symmetric(
                                 horizontal: 18,
@@ -185,8 +200,24 @@ class _GroupMembersSheetState extends State<GroupMembersSheet> {
                                           ),
                                         ),
                                         const SizedBox(height: 3),
-                                        Text(
-                                          locationLabel,
+                                        Text.rich(
+                                          TextSpan(
+                                            text: locationLabel,
+                                            children: [
+                                              if (checkInTime.isNotEmpty)
+                                                TextSpan(
+                                                  text: ' · $checkInTime',
+                                                  style: const TextStyle(
+                                                    color: colorFg4,
+                                                  ),
+                                                ),
+                                            ],
+                                          ),
+                                          semanticsLabel:
+                                              groupMemberPresenceLabel(
+                                                member,
+                                                widget.stages,
+                                              ),
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
                                           style: TextStyle(
@@ -194,10 +225,10 @@ class _GroupMembersSheetState extends State<GroupMembersSheet> {
                                             fontSize: 9,
                                             fontWeight: FontWeight.w700,
                                             letterSpacing: 0.06 * 9,
-                                            color: stale
-                                                ? colorWarn
-                                                : onSite
+                                            color: onSite
                                                 ? colorCoAccent
+                                                : hasLocation
+                                                ? colorFg
                                                 : colorFg4,
                                           ),
                                         ),

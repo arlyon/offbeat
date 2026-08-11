@@ -330,11 +330,15 @@ void main() {
       ),
     ];
 
+    final liveMembers = ValueNotifier<List<GroupMemberDto>>(members);
+    addTearDown(liveMembers.dispose);
+
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
           body: GroupMembersSheet(
             members: members,
+            membersListenable: liveMembers,
             stages: const {'main': 'Main Stage', 'quarry': 'The Quarry'},
             userId: 'me',
             initialLocationKey: 'stage:main',
@@ -361,11 +365,29 @@ void main() {
       findsOneWidget,
     );
     expect(
-      find.text('CAMPSITE · STALE · ${groupMemberCheckInTime(members[4])}'),
+      find.text('CAMPSITE · ${groupMemberCheckInTime(members[4])}'),
       findsOneWidget,
     );
     expect(find.text('NO CHECK-IN YET'), findsOneWidget);
     expect(find.text('3 ON SITE · 5 TOTAL'), findsOneWidget);
+
+    const lukeUpdate = GroupMemberDto(
+      userId: 'luke',
+      displayName: 'Luke Smith',
+      status: 'active',
+      locationKind: 'campsite',
+      customLocation: 'Campsite',
+      updatedAt: '2026-08-05T15:45:00Z',
+      starredSetIds: [],
+    );
+    liveMembers.value = [members[0], lukeUpdate, ...members.skip(2)];
+    await tester.pump();
+
+    expect(find.text('4 ON SITE · 5 TOTAL'), findsOneWidget);
+    expect(
+      find.text('CAMPSITE · ${groupMemberCheckInTime(lukeUpdate)}'),
+      findsOneWidget,
+    );
   });
 
   testWidgets(
@@ -415,6 +437,17 @@ void main() {
         expiresAt: '2026-08-05T13:15:00Z',
         starredSetIds: ['known', 'missing'],
       );
+      const memberUpdate = GroupMemberDto(
+        userId: 'luke',
+        displayName: 'Luke Smith',
+        status: 'active',
+        locationKind: 'stage',
+        stageId: 'main',
+        updatedAt: '2026-08-05T15:45:00Z',
+        starredSetIds: ['known'],
+      );
+      final liveMembers = ValueNotifier<List<GroupMemberDto>>([member]);
+      addTearDown(liveMembers.dispose);
 
       await tester.pumpWidget(
         MaterialApp(
@@ -424,10 +457,11 @@ void main() {
                 onPressed: () => showModalBottomSheet<void>(
                   context: context,
                   isScrollControlled: true,
-                  builder: (_) => const MemberSheet(
+                  builder: (_) => MemberSheet(
                     member: member,
                     groupName: 'Crew',
                     lineup: lineup,
+                    membersListenable: liveMembers,
                   ),
                 ),
                 child: const Text('OPEN'),
@@ -444,11 +478,21 @@ void main() {
       expect(find.text('Friday · 01:00 · Main Stage'), findsOneWidget);
       expect(find.text('SET UNAVAILABLE · MISSING'), findsOneWidget);
       expect(
-        find.text('CAMPSITE · STALE · ${groupMemberCheckInTime(member)}'),
+        find.text('CAMPSITE · ${groupMemberCheckInTime(member)}'),
         findsOneWidget,
       );
       expect(find.text('DM'), findsNothing);
       expect(find.text('LOCATE'), findsNothing);
+
+      liveMembers.value = const [memberUpdate];
+      await tester.pump();
+
+      expect(
+        find.text('MAIN STAGE · ${groupMemberCheckInTime(memberUpdate)}'),
+        findsOneWidget,
+      );
+      expect(find.text('★ THEIR SCHEDULE · 1'), findsOneWidget);
+      expect(find.text('SET UNAVAILABLE · MISSING'), findsNothing);
     },
   );
 
