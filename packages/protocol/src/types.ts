@@ -31,11 +31,51 @@ export interface Day {
 	year: number; // e.g. 2026
 }
 
+export type ArtistLinkKind =
+	| "website"
+	| "spotify"
+	| "soundcloud"
+	| "youtube"
+	| "instagram"
+	| "facebook"
+	| "x"
+	| "other";
+
+export interface ArtistLink {
+	kind: ArtistLinkKind;
+	url: string;
+}
+
+export interface ArtistFieldProvenance {
+	field: string;
+	provider: "musicbrainz" | "wikidata" | "festival";
+	sourceUrl: string;
+	license: string;
+	retrievedAt: string;
+}
+
+export interface ArtistProfile {
+	id: string;
+	name: string;
+	mbid: string;
+	wikidataId?: string;
+	aliases: string[];
+	artistType?: string;
+	country?: string;
+	genres: string[];
+	description?: string;
+	links: ArtistLink[];
+	provenance: ArtistFieldProvenance[];
+	updatedAt: string;
+}
+
 export interface Set {
 	id: string;
 	day: string; // Day id ref
 	stage: string; // Stage id ref
 	artist: string;
+	artistMbid?: string;
+	artistIds?: string[];
 	startMin: number; // minutes from midnight
 	durationMin: number;
 	genre: string;
@@ -47,6 +87,7 @@ export interface Lineup {
 	stages: Stage[];
 	days: Day[];
 	sets: Set[];
+	artists?: ArtistProfile[];
 }
 
 export interface MemberLocation {

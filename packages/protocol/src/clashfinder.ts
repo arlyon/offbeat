@@ -74,6 +74,7 @@ export function parseClashfinderApi(
 	// Collect all events with their stage reference
 	const allEvents: Array<{
 		artist: string;
+		artistMbid?: string;
 		stage: Stage;
 		start: string;
 		end: string;
@@ -86,6 +87,7 @@ export function parseClashfinderApi(
 		for (const event of location.events) {
 			allEvents.push({
 				artist: event.name,
+				...(event.mbId ? { artistMbid: event.mbId } : {}),
 				stage,
 				start: event.start,
 				end: event.end,
@@ -150,6 +152,7 @@ export function parseClashfinderApi(
 			day: dayId,
 			stage: event.stage.id,
 			artist: event.artist,
+			...(event.artistMbid ? { artistMbid: event.artistMbid } : {}),
 			startMin,
 			durationMin,
 			genre: "",

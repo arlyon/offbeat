@@ -35,6 +35,12 @@ function hexToBytes(hex: string) {
 	return new Uint8Array(hex.match(/.{2}/g)?.map((byte) => Number.parseInt(byte, 16)) ?? []);
 }
 
+function bytesToBase64(bytes: Uint8Array) {
+	let binary = "";
+	for (const byte of bytes) binary += String.fromCharCode(byte);
+	return btoa(binary);
+}
+
 function keypair() {
 	const secretKey = ed25519.utils.randomSecretKey();
 	return { secretKey, publicKey: bytesToHex(ed25519.getPublicKey(secretKey)) };
@@ -119,6 +125,77 @@ async function signedCheckpoint(festivalId: string) {
 	return checkpoint;
 }
 
+async function assertArtistProfileCheckpoint(festivalId: string, artistId: string) {
+	const checkpoint = await signedCheckpoint(festivalId);
+	expect(checkpoint.msg.case).toBe("gossip");
+	if (checkpoint.msg.case !== "gossip") return;
+	const update = checkpoint.msg.value.message?.payload;
+	expect(update?.case).toBe("festivalUpdate");
+	if (update?.case !== "festivalUpdate" || !update.value.signedUpdate) return;
+
+	const doc = new Y.Doc();
+	Y.applyUpdate(doc, update.value.signedUpdate.update);
+	const artist = doc.getMap<Y.Map<unknown>>("artists").get(artistId);
+	expect(artist?.get("description")).toBe("An offline artist profile.");
+	expect(artist?.get("genres")).toBe(JSON.stringify(["electronic", "breakbeat"]));
+	const set = [...doc.getMap<Y.Map<unknown>>("sets").values()][0];
+	expect(set?.get("artistIds")).toBe(JSON.stringify([artistId]));
+}
+
+async function assertArtistProfileRoundTrip(festivalId: string, seededState: Uint8Array) {
+	const localDoc = new Y.Doc();
+	Y.applyUpdate(localDoc, seededState);
+	const previousStateVector = Y.encodeStateVector(localDoc);
+	const setsMap = localDoc.getMap<Y.Map<unknown>>("sets");
+	const firstSet = [...setsMap.values()][0];
+	expect(firstSet).toBeInstanceOf(Y.Map);
+	if (!(firstSet instanceof Y.Map)) throw new Error("Expected imported set map");
+
+	const artistId = "artist-00000000-0000-4000-8000-000000000001";
+	const artistsMap = localDoc.getMap<Y.Map<unknown>>("artists");
+	const artistMap = new Y.Map<unknown>();
+	artistMap.set("name", "Artist One");
+	artistMap.set("mbid", "00000000-0000-4000-8000-000000000001");
+	artistMap.set("aliases", JSON.stringify(["Artist 1"]));
+	artistMap.set("artistType", "Group");
+	artistMap.set("country", "GB");
+	artistMap.set("genres", JSON.stringify(["electronic", "breakbeat"]));
+	artistMap.set("description", "An offline artist profile.");
+	artistMap.set(
+		"links",
+		JSON.stringify([{ kind: "spotify", url: "https://open.spotify.com/artist/example" }]),
+	);
+	artistMap.set("provenance", JSON.stringify([]));
+	artistMap.set("updatedAt", "2027-01-01T00:00:00.000Z");
+	artistsMap.set(artistId, artistMap);
+	firstSet.set("artistIds", JSON.stringify([artistId]));
+
+	const admin = keypair();
+	const addAdmin = await worker.fetch(`/festivals/${festivalId}/admins`, {
+		method: "PUT",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ publicKey: admin.publicKey }),
+	});
+	expect(addAdmin.status).toBe(200);
+
+	const docId = `festival/${festivalId}/state`;
+	const signResponse = await worker.fetch(`/festivals/${festivalId}/sign-update`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({
+			publicKey: admin.publicKey,
+			signature: bytesToHex(
+				ed25519.sign(new TextEncoder().encode(`sign-update:${docId}`), admin.secretKey),
+			),
+			docId,
+			topic: docId,
+			update: bytesToBase64(Y.encodeStateAsUpdate(localDoc, previousStateVector)),
+		}),
+	});
+	expect(signResponse.status).toBe(200);
+	await assertArtistProfileCheckpoint(festivalId, artistId);
+}
+
 let worker: Unstable_DevWorker;
 
 beforeAll(async () => {
@@ -126,6 +203,7 @@ beforeAll(async () => {
 		persist: false,
 		vars: {
 			DEV_BYPASS_WEBAUTHN: "true",
+			DISABLE_ARTIST_ENRICHMENT: "true",
 			RP_ID: "localhost",
 			MAIN_DO_ROOT_SECRET: "11".repeat(32),
 			CLASHFINDER_TEST_FIXTURE: JSON.stringify(fixture),
@@ -235,6 +313,7 @@ describe("registered-user Clashfinder imports", () => {
 
 		const checkpoint = await signedCheckpoint(published.festival.id);
 		let seededAuthoritySeq: bigint | undefined;
+		let seededState: Uint8Array | undefined;
 		expect(checkpoint.msg.case).toBe("gossip");
 		if (checkpoint.msg.case === "gossip") {
 			const update = checkpoint.msg.value.message?.payload;
@@ -248,6 +327,7 @@ describe("registered-user Clashfinder imports", () => {
 					await worker.fetch(`/festivals/${published.festival.id}/public-key`)
 				).text();
 				if (signed) {
+					seededState = signed.update;
 					expect(
 						ed25519.verify(
 							signed.signature,
@@ -275,6 +355,11 @@ describe("registered-user Clashfinder imports", () => {
 				expect(repeatedUpdate.value.authoritySeq).toBe(seededAuthoritySeq);
 			}
 		}
+
+		// Artist profiles and their set references must survive the same signed
+		// FestivalState checkpoint path consumed by offline clients.
+		expect(seededState).toBeDefined();
+		await assertArtistProfileRoundTrip(published.festival.id, seededState!);
 
 		const duplicateBody = JSON.stringify({ clashfinder: "community2027" });
 		const duplicate = await worker.fetch(previewPath, {

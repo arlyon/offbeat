@@ -172,6 +172,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   String dco_decode_String(dynamic raw);
 
   @protected
+  ArtistLinkDto dco_decode_artist_link_dto(dynamic raw);
+
+  @protected
+  ArtistProfileDto dco_decode_artist_profile_dto(dynamic raw);
+
+  @protected
   AttestationDto dco_decode_attestation_dto(dynamic raw);
 
   @protected
@@ -265,6 +271,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<String> dco_decode_list_String(dynamic raw);
+
+  @protected
+  List<ArtistLinkDto> dco_decode_list_artist_link_dto(dynamic raw);
+
+  @protected
+  List<ArtistProfileDto> dco_decode_list_artist_profile_dto(dynamic raw);
 
   @protected
   List<ChatMessageDto> dco_decode_list_chat_message_dto(dynamic raw);
@@ -525,6 +537,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   String sse_decode_String(SseDeserializer deserializer);
 
   @protected
+  ArtistLinkDto sse_decode_artist_link_dto(SseDeserializer deserializer);
+
+  @protected
+  ArtistProfileDto sse_decode_artist_profile_dto(SseDeserializer deserializer);
+
+  @protected
   AttestationDto sse_decode_attestation_dto(SseDeserializer deserializer);
 
   @protected
@@ -634,6 +652,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<String> sse_decode_list_String(SseDeserializer deserializer);
+
+  @protected
+  List<ArtistLinkDto> sse_decode_list_artist_link_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<ArtistProfileDto> sse_decode_list_artist_profile_dto(
+    SseDeserializer deserializer,
+  );
 
   @protected
   List<ChatMessageDto> sse_decode_list_chat_message_dto(
@@ -952,6 +980,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_String(String self, SseSerializer serializer);
 
   @protected
+  void sse_encode_artist_link_dto(ArtistLinkDto self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_artist_profile_dto(
+    ArtistProfileDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_attestation_dto(
     AttestationDto self,
     SseSerializer serializer,
@@ -1088,6 +1125,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_list_String(List<String> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_artist_link_dto(
+    List<ArtistLinkDto> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_artist_profile_dto(
+    List<ArtistProfileDto> self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_list_chat_message_dto(

@@ -16,6 +16,7 @@ const fixture: ClashfinderApiResponse = {
 					name: "Artist One",
 					start: "2027-06-12 12:00",
 					end: "2027-06-12 13:00",
+					mbId: "a74b1b7f-71a5-4011-9441-d0b5e4122711",
 				},
 			],
 		},
@@ -60,6 +61,9 @@ describe("festival import", () => {
 			setCount: 1,
 		});
 		expect(result.lineup.sets).toHaveLength(1);
+		expect(result.lineup.sets[0].artistMbid).toBe(
+			"a74b1b7f-71a5-4011-9441-d0b5e4122711",
+		);
 	});
 
 	it("rejects empty and invalid schedules", () => {

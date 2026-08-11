@@ -1288,6 +1288,24 @@ class _OffbeatShellState extends State<_OffbeatShell>
         )
         .toList();
     final dayById = {for (final day in days) day.id: day};
+    final artistProfilesById = {
+      for (final profile in lineup.artists)
+        profile.id: ArtistProfile(
+          id: profile.id,
+          name: profile.name,
+          mbid: profile.mbid,
+          wikidataId: profile.wikidataId,
+          aliases: profile.aliases,
+          artistType: profile.artistType,
+          country: profile.country,
+          genres: profile.genres,
+          description: profile.description,
+          links: profile.links
+              .map((link) => ArtistLink(kind: link.kind, url: link.url))
+              .toList(),
+          updatedAt: profile.updatedAt,
+        ),
+    };
     final today = DateTime(_now.year, _now.month, _now.day);
     final currentMinute = _now.hour * 60 + _now.minute;
     final builtSets = lineup.sets.map((lineupSet) {
@@ -1296,6 +1314,11 @@ class _OffbeatShellState extends State<_OffbeatShell>
         'day': lineupSet.day,
         'stage': lineupSet.stage,
         'artist': lineupSet.artist,
+        'artistIds': lineupSet.artistIds,
+        'artistProfiles': lineupSet.artistIds
+            .map((artistId) => artistProfilesById[artistId])
+            .whereType<ArtistProfile>()
+            .toList(),
         'startMin': lineupSet.startMin,
         'durationMin': lineupSet.durationMin,
         'genre': lineupSet.genre,

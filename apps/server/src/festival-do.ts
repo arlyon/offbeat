@@ -1,9 +1,11 @@
 import { DurableObject } from "cloudflare:workers";
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
 import {
+	type ArtistProfile,
 	ErrorCode,
 	FestivalUpdateKind,
 	GossipEnvelopeSchema,
+	type Lineup,
 	type RelayClientMessage,
 	RelayClientMessageSchema,
 	RelayServerMessageSchema,
@@ -1782,23 +1784,7 @@ export class FestivalDO extends DurableObject {
 	 * Creates a Yrs doc with root-map keys "stages", "days", "sets" (Y.Maps),
 	 * signs the update with the DO's Ed25519 key, and persists to yrs_docs.
 	 */
-	async seedLineup(
-		festivalId: string,
-		lineup: {
-			stages: { id: string; name: string; short: string; color: string; order: number }[];
-			days: { id: string; label: string; num: number; month: string; year: number }[];
-			sets: {
-				id: string;
-				day: string;
-				stage: string;
-				artist: string;
-				startMin: number;
-				durationMin: number;
-				genre: string;
-				cancelled: boolean;
-			}[];
-		},
-	): Promise<void> {
+	async seedLineup(festivalId: string, lineup: Lineup): Promise<void> {
 		if (!this.#secretKey || !this.#publicKey) {
 			throw new Error("Keypair not initialized");
 		}
@@ -1859,11 +1845,19 @@ export class FestivalDO extends DurableObject {
 			m.set("day", set.day);
 			m.set("stage", set.stage);
 			m.set("artist", set.artist);
+			if (set.artistMbid) m.set("artistMbid", set.artistMbid);
+			m.set("artistIds", JSON.stringify(set.artistIds ?? []));
 			m.set("startMin", set.startMin);
 			m.set("durationMin", set.durationMin);
 			m.set("genre", set.genre);
 			m.set("cancelled", set.cancelled);
 			setsMap.set(set.id, m);
+		}
+		const artistsMap = doc.getMap("artists");
+		for (const artist of lineup.artists ?? []) {
+			const m = new Y.Map();
+			writeArtistProfile(m, artist);
+			artistsMap.set(artist.id, m);
 		}
 
 		// Persist a signed canonical checkpoint before marking the Yrs document as
@@ -1896,23 +1890,7 @@ export class FestivalDO extends DurableObject {
 	 * Uses #mutatePublicDoc to load, mutate, sign, persist, and broadcast.
 	 * If no existing doc is found, falls through to seedLineup().
 	 */
-	async updateLineup(
-		festivalId: string,
-		lineup: {
-			stages: { id: string; name: string; short: string; color: string; order: number }[];
-			days: { id: string; label: string; num: number; month: string; year: number }[];
-			sets: {
-				id: string;
-				day: string;
-				stage: string;
-				artist: string;
-				startMin: number;
-				durationMin: number;
-				genre: string;
-				cancelled: boolean;
-			}[];
-		},
-	): Promise<void> {
+	async updateLineup(festivalId: string, lineup: Lineup): Promise<void> {
 		if (!this.#secretKey || !this.#publicKey) {
 			throw new Error("Keypair not initialized");
 		}
@@ -1931,6 +1909,7 @@ export class FestivalDO extends DurableObject {
 			const stagesMap = doc.getMap("stages") as Y.Map<Y.Map<unknown>>;
 			const daysMap = doc.getMap("days") as Y.Map<Y.Map<unknown>>;
 			const setsMap = doc.getMap("sets") as Y.Map<Y.Map<unknown>>;
+			const artistsMap = doc.getMap("artists") as Y.Map<Y.Map<unknown>>;
 
 			// Remove stale entries
 			const newStageIds = new Set(lineup.stages.map((s) => s.id));
@@ -1978,16 +1957,63 @@ export class FestivalDO extends DurableObject {
 				m.set("day", set.day);
 				m.set("stage", set.stage);
 				m.set("artist", set.artist);
+				if (set.artistMbid) m.set("artistMbid", set.artistMbid);
+				else m.delete("artistMbid");
+				m.set("artistIds", JSON.stringify(set.artistIds ?? []));
 				m.set("startMin", set.startMin);
 				m.set("durationMin", set.durationMin);
 				m.set("genre", set.genre);
 				m.set("cancelled", set.cancelled);
+			}
+			if (lineup.artists) {
+				const newArtistIds = new Set(lineup.artists.map((artist) => artist.id));
+				for (const key of [...artistsMap.keys()]) {
+					if (!newArtistIds.has(key)) artistsMap.delete(key);
+				}
+				for (const artist of lineup.artists) {
+					let m = artistsMap.get(artist.id);
+					if (!m || !(m instanceof Y.Map)) {
+						m = new Y.Map();
+						artistsMap.set(artist.id, m);
+					}
+					writeArtistProfile(m, artist);
+				}
 			}
 		});
 
 		console.log(
 			`[updateLineup] updated ${docId}: ${lineup.stages.length} stages, ${lineup.days.length} days, ${lineup.sets.length} sets`,
 		);
+	}
+
+	async applyArtistEnrichment(
+		festivalId: string,
+		profile: ArtistProfile,
+		setIds: string[],
+	): Promise<void> {
+		if (!this.#secretKey || !this.#publicKey) throw new Error("Keypair not initialized");
+		if (this.#festivalId !== festivalId) throw new Error("Festival identity mismatch");
+		await this.#mutatePublicDoc((doc) => {
+			const artistsMap = doc.getMap("artists") as Y.Map<Y.Map<unknown>>;
+			let artistMap = artistsMap.get(profile.id);
+			if (!artistMap || !(artistMap instanceof Y.Map)) {
+				artistMap = new Y.Map();
+				artistsMap.set(profile.id, artistMap);
+			}
+			writeArtistProfile(artistMap, profile);
+
+			const setsMap = doc.getMap("sets") as Y.Map<Y.Map<unknown>>;
+			for (const setId of setIds) {
+				const setMap = setsMap.get(setId);
+				if (!setMap || !(setMap instanceof Y.Map)) continue;
+				const artistIds = parseStringArray(setMap.get("artistIds"));
+				artistIds.add(profile.id);
+				setMap.set(
+					"artistIds",
+					JSON.stringify([...artistIds].sort((left, right) => left.localeCompare(right))),
+				);
+			}
+		});
 	}
 
 	// -----------------------------------------------------------------------
@@ -2262,6 +2288,36 @@ interface WeatherData {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+function writeArtistProfile(map: Y.Map<unknown>, profile: ArtistProfile) {
+	map.set("name", profile.name);
+	map.set("mbid", profile.mbid);
+	if (profile.wikidataId) map.set("wikidataId", profile.wikidataId);
+	else map.delete("wikidataId");
+	map.set("aliases", JSON.stringify(profile.aliases));
+	if (profile.artistType) map.set("artistType", profile.artistType);
+	else map.delete("artistType");
+	if (profile.country) map.set("country", profile.country);
+	else map.delete("country");
+	map.set("genres", JSON.stringify(profile.genres));
+	if (profile.description) map.set("description", profile.description);
+	else map.delete("description");
+	map.set("links", JSON.stringify(profile.links));
+	map.set("provenance", JSON.stringify(profile.provenance));
+	map.set("updatedAt", profile.updatedAt);
+}
+
+function parseStringArray(value: unknown): Set<string> {
+	if (typeof value !== "string") return new Set();
+	try {
+		const parsed = JSON.parse(value) as unknown;
+		return Array.isArray(parsed)
+			? new Set(parsed.filter((item): item is string => typeof item === "string"))
+			: new Set();
+	} catch {
+		return new Set();
+	}
+}
 
 function hexToBytes(hex: string): Uint8Array {
 	const bytes = new Uint8Array(hex.length / 2);

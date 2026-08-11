@@ -1,13 +1,16 @@
 import { Hono } from "hono";
+import type { ArtistEnrichmentMessage } from "./artist-enrichment";
 import { MAX_IMPORT_REQUEST_BYTES } from "./festival-import";
 
 type Env = {
 	Bindings: {
 		MAIN_DO: DurableObjectNamespace;
 		FESTIVAL_DO: DurableObjectNamespace;
+		ARTIST_ENRICHMENT_QUEUE: Queue<ArtistEnrichmentMessage>;
 		ADMIN_SECRET_KEY?: string;
 		MAIN_DO_ROOT_SECRET?: string;
 		DEV_BYPASS_WEBAUTHN?: string;
+		DISABLE_ARTIST_ENRICHMENT?: string;
 	};
 };
 
@@ -37,6 +40,33 @@ app.get("/.well-known/assetlinks.json", (c) => {
 function getMainDO(env: Env["Bindings"]) {
 	const id = env.MAIN_DO.idFromName("main");
 	return env.MAIN_DO.get(id);
+}
+
+interface MainArtistEnrichmentRpc {
+	getArtistEnrichmentCandidates(festivalId: string): Promise<ArtistEnrichmentMessage[]>;
+	markArtistEnrichmentQueued(jobIds: string[]): Promise<void>;
+}
+
+async function enqueueArtistEnrichment(env: Env["Bindings"], festivalId: string) {
+	const main = getMainDO(env) as unknown as MainArtistEnrichmentRpc;
+	const candidates = await main.getArtistEnrichmentCandidates(festivalId);
+	for (let offset = 0; offset < candidates.length; offset += 100) {
+		const batch = candidates.slice(offset, offset + 100);
+		await env.ARTIST_ENRICHMENT_QUEUE.sendBatch(batch.map((body) => ({ body })));
+		await main.markArtistEnrichmentQueued(batch.map((candidate) => candidate.jobId));
+	}
+}
+
+function scheduleArtistEnrichment(
+	c: { env: Env["Bindings"]; executionCtx: ExecutionContext },
+	festivalId: string,
+) {
+	if (c.env.DISABLE_ARTIST_ENRICHMENT === "true") return;
+	c.executionCtx.waitUntil(
+		enqueueArtistEnrichment(c.env, festivalId).catch((error) => {
+			console.error(`[artist-enrichment] failed to enqueue festival ${festivalId}`, error);
+		}),
+	);
 }
 
 function requireUrl(value: string): URL {
@@ -138,8 +168,15 @@ app.get("/festivals/:id", (c) => {
 });
 
 // POST /festivals — create a new festival (admin-only, forwarded with auth headers)
-app.post("/festivals", (c) => {
-	return forwardToMainDO(c.env, "/festivals", c.req.raw);
+app.post("/festivals", async (c) => {
+	const response = await forwardToMainDO(c.env, "/festivals", c.req.raw);
+	if (!response.ok) return response;
+	const result = (await response.json()) as { festival?: { id: string } };
+	if (result.festival?.id) {
+		await ensureFestivalConfig(c.env, result.festival.id, true);
+		scheduleArtistEnrichment(c, result.festival.id);
+	}
+	return Response.json(result, { status: response.status });
 });
 
 // POST /festival-imports/preview — registered-user Clashfinder preview.
@@ -153,6 +190,7 @@ app.post("/festival-imports/preview", async (c) => {
 	};
 	if (result.status === "existing" && result.festival?.id) {
 		await ensureFestivalConfig(c.env, result.festival.id, true);
+		scheduleArtistEnrichment(c, result.festival.id);
 	}
 	return Response.json(result, { status: response.status });
 });
@@ -169,6 +207,7 @@ app.post("/festival-imports/:previewId/publish", async (c) => {
 	};
 	if (result.festival?.id) {
 		await ensureFestivalConfig(c.env, result.festival.id, true);
+		scheduleArtistEnrichment(c, result.festival.id);
 	}
 	return Response.json(result, { status: response.status });
 });
@@ -196,17 +235,16 @@ app.put("/festivals/:id/lineup", async (c) => {
 	const stub = c.env.FESTIVAL_DO.get(doId);
 	const configResp = await stub.fetch(new Request("http://internal/config", { method: "GET" }));
 	const config = (await configResp.json()) as { opensAt: string | null; closesAt: string | null };
+	const lineup = await resp.json();
 	if (config.opensAt && config.closesAt) {
-		const lineup = await resp.json();
 		await (
 			stub as unknown as {
 				updateLineup(festivalId: string, lineup: unknown): Promise<void>;
 			}
 		).updateLineup(id, lineup);
-		return Response.json(lineup);
 	}
-
-	return resp;
+	scheduleArtistEnrichment(c, id);
+	return Response.json(lineup, { status: resp.status });
 });
 
 // GET /auth/public-key — MainDO's attestation issuer key

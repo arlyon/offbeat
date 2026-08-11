@@ -396,12 +396,14 @@ void main() {
             day: 'fri',
             stage: 'main',
             artist: 'KNOWN ARTIST',
+            artistIds: [],
             startMin: 60,
             durationMin: 60,
             genre: 'test',
             cancelled: false,
           ),
         ],
+        artists: [],
       );
       const member = GroupMemberDto(
         userId: 'luke',

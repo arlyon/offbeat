@@ -7,6 +7,10 @@ export * from "./generated/offbeat/v1/types_pb.js";
 export * from "./public-chat.js";
 export * from "./relay-auth.js";
 export type {
+	ArtistFieldProvenance,
+	ArtistLink,
+	ArtistLinkKind,
+	ArtistProfile,
 	ChatMessage as LegacyChatMessage,
 	Day,
 	Festival,

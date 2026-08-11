@@ -1,7 +1,19 @@
 import { DurableObject } from "cloudflare:workers";
 import { ed25519 } from "@noble/curves/ed25519.js";
-import type { ClashfinderApiResponse, ClashfinderSource, Lineup } from "@offbeat/protocol";
+import type {
+	ArtistProfile,
+	ClashfinderApiResponse,
+	ClashfinderSource,
+	Lineup,
+} from "@offbeat/protocol";
 import { fetchClashfinder, parseClashfinderApi } from "@offbeat/protocol";
+import {
+	type ArtistEnrichmentMessage,
+	type ArtistEnrichmentOutcome,
+	artistEnrichmentJobId,
+	artistEnrichmentSourceKey,
+	isAmbiguousArtistBilling,
+} from "./artist-enrichment";
 import {
 	generateAuthenticationOptions,
 	generateRegistrationOptions,
@@ -133,6 +145,8 @@ export class MainDO extends DurableObject {
 				day_id TEXT NOT NULL,
 				stage_id TEXT NOT NULL,
 				artist TEXT NOT NULL,
+				artist_mbid TEXT,
+				artist_ids TEXT NOT NULL DEFAULT '[]',
 				start_min INTEGER NOT NULL,
 				duration_min INTEGER NOT NULL,
 				genre TEXT NOT NULL DEFAULT '',
@@ -222,8 +236,53 @@ export class MainDO extends DurableObject {
 				festival_id TEXT NOT NULL,
 				expires_at INTEGER NOT NULL
 			);
+
+			CREATE TABLE IF NOT EXISTS festival_artists (
+				festival_id TEXT NOT NULL REFERENCES festivals(id),
+				id TEXT NOT NULL,
+				source_key TEXT NOT NULL,
+				profile_json TEXT NOT NULL,
+				updated_at INTEGER NOT NULL,
+				PRIMARY KEY (festival_id, id),
+				UNIQUE (festival_id, source_key)
+			);
+
+			CREATE TABLE IF NOT EXISTS artist_enrichment_cache (
+				source_key TEXT PRIMARY KEY,
+				outcome_json TEXT NOT NULL,
+				expires_at INTEGER NOT NULL,
+				updated_at INTEGER NOT NULL
+			);
+
+			CREATE TABLE IF NOT EXISTS artist_enrichment_jobs (
+				id TEXT PRIMARY KEY,
+				festival_id TEXT NOT NULL REFERENCES festivals(id),
+				source_key TEXT NOT NULL,
+				billing TEXT NOT NULL,
+				mbid TEXT,
+				set_ids_json TEXT NOT NULL,
+				status TEXT NOT NULL DEFAULT 'pending',
+				attempts INTEGER NOT NULL DEFAULT 0,
+				last_error TEXT,
+				updated_at INTEGER NOT NULL
+			);
 		`);
 		this.#migrateFestivalStagesPrimaryKey();
+		this.#migrateFestivalSetColumns();
+	}
+
+	#migrateFestivalSetColumns() {
+		const columns = new Set(
+			(this.sql.exec("PRAGMA table_info(festival_sets)").toArray() as Array<{ name: string }>).map(
+				(column) => column.name,
+			),
+		);
+		if (!columns.has("artist_mbid")) {
+			this.sql.exec("ALTER TABLE festival_sets ADD COLUMN artist_mbid TEXT");
+		}
+		if (!columns.has("artist_ids")) {
+			this.sql.exec("ALTER TABLE festival_sets ADD COLUMN artist_ids TEXT NOT NULL DEFAULT '[]'");
+		}
 	}
 
 	#migrateFestivalStagesPrimaryKey() {
@@ -294,13 +353,17 @@ export class MainDO extends DurableObject {
 
 		for (const set of lineup.sets) {
 			this.sql.exec(
-				`INSERT INTO festival_sets (id, festival_id, day_id, stage_id, artist, start_min, duration_min, genre, cancelled)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				`INSERT INTO festival_sets
+				 (id, festival_id, day_id, stage_id, artist, artist_mbid, artist_ids,
+				  start_min, duration_min, genre, cancelled)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				set.id,
 				festivalId,
 				set.day,
 				set.stage,
 				set.artist,
+				set.artistMbid ?? null,
+				JSON.stringify(set.artistIds ?? []),
 				set.startMin,
 				set.durationMin,
 				set.genre,
@@ -734,6 +797,8 @@ export class MainDO extends DurableObject {
 			day_id: string;
 			stage_id: string;
 			artist: string;
+			artist_mbid: string | null;
+			artist_ids: string;
 			start_min: number;
 			duration_min: number;
 			genre: string;
@@ -751,6 +816,9 @@ export class MainDO extends DurableObject {
 		const sets = this.sql
 			.exec("SELECT * FROM festival_sets WHERE festival_id = ? ORDER BY start_min", id)
 			.toArray() as unknown as SetRow[];
+		const artists = this.sql
+			.exec("SELECT profile_json FROM festival_artists WHERE festival_id = ? ORDER BY id", id)
+			.toArray() as unknown as Array<{ profile_json: string }>;
 
 		return {
 			festival: { id, name: festival.name as string, location: festival.location as string },
@@ -773,12 +841,174 @@ export class MainDO extends DurableObject {
 				day: s.day_id,
 				stage: s.stage_id,
 				artist: s.artist,
+				...(s.artist_mbid ? { artistMbid: s.artist_mbid } : {}),
+				...(parseStoredJson<string[]>(s.artist_ids, `set ${s.id} artist IDs`).length > 0
+					? { artistIds: parseStoredJson<string[]>(s.artist_ids, `set ${s.id} artist IDs`) }
+					: {}),
 				startMin: s.start_min,
 				durationMin: s.duration_min,
 				genre: s.genre,
 				cancelled: s.cancelled === 1,
 			})),
+			...(artists.length > 0
+				? {
+						artists: artists.map((artist) =>
+							parseStoredJson<ArtistProfile>(artist.profile_json, "festival artist profile"),
+						),
+					}
+				: {}),
 		};
+	}
+
+	getArtistEnrichmentCandidates(festivalId: string): ArtistEnrichmentMessage[] {
+		if (!this.#getFestival(festivalId)) return [];
+		this.sql.exec(
+			"DELETE FROM artist_enrichment_cache WHERE expires_at < ?",
+			Math.floor(Date.now() / 1000),
+		);
+		const rows = this.sql
+			.exec(
+				"SELECT id, artist, artist_mbid, artist_ids FROM festival_sets WHERE festival_id = ? ORDER BY artist, id",
+				festivalId,
+			)
+			.toArray() as unknown as Array<{
+			id: string;
+			artist: string;
+			artist_mbid: string | null;
+			artist_ids: string;
+		}>;
+		const grouped = new Map<string, { billing: string; mbid?: string; setIds: string[] }>();
+		for (const row of rows) {
+			const artistIds = parseStoredJson<string[]>(row.artist_ids, `set ${row.id} artist IDs`);
+			if (artistIds.length > 0 || (!row.artist_mbid && isAmbiguousArtistBilling(row.artist))) {
+				continue;
+			}
+			const sourceKey = artistEnrichmentSourceKey(row.artist, row.artist_mbid ?? undefined);
+			const existing = grouped.get(sourceKey);
+			if (existing) {
+				existing.setIds.push(row.id);
+			} else {
+				grouped.set(sourceKey, {
+					billing: row.artist,
+					...(row.artist_mbid ? { mbid: row.artist_mbid } : {}),
+					setIds: [row.id],
+				});
+			}
+		}
+
+		const now = Math.floor(Date.now() / 1000);
+		return [...grouped.entries()].map(([sourceKey, candidate]) => {
+			const setIds = [...candidate.setIds].sort((left, right) => left.localeCompare(right));
+			const jobId = artistEnrichmentJobId(festivalId, sourceKey, setIds);
+			this.sql.exec(
+				`INSERT OR IGNORE INTO artist_enrichment_jobs
+				 (id, festival_id, source_key, billing, mbid, set_ids_json, status, updated_at)
+				 VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)`,
+				jobId,
+				festivalId,
+				sourceKey,
+				candidate.billing,
+				candidate.mbid ?? null,
+				JSON.stringify(setIds),
+				now,
+			);
+			return {
+				jobId,
+				sourceKey,
+				festivalId,
+				setIds,
+				billing: candidate.billing,
+				...(candidate.mbid ? { mbid: candidate.mbid } : {}),
+			};
+		});
+	}
+
+	getCachedArtistEnrichment(sourceKey: string): ArtistEnrichmentOutcome | null {
+		const rows = this.sql
+			.exec(
+				"SELECT outcome_json FROM artist_enrichment_cache WHERE source_key = ? AND expires_at >= ? LIMIT 1",
+				sourceKey,
+				Math.floor(Date.now() / 1000),
+			)
+			.toArray() as unknown as Array<{ outcome_json: string }>;
+		return rows[0]
+			? parseStoredJson<ArtistEnrichmentOutcome>(rows[0].outcome_json, "artist enrichment cache")
+			: null;
+	}
+
+	markArtistEnrichmentQueued(jobIds: string[]) {
+		const now = Math.floor(Date.now() / 1000);
+		for (const jobId of jobIds) {
+			this.sql.exec(
+				"UPDATE artist_enrichment_jobs SET status = 'queued', updated_at = ? WHERE id = ? AND status != 'complete'",
+				now,
+				jobId,
+			);
+		}
+	}
+
+	applyArtistEnrichment(message: ArtistEnrichmentMessage, outcome: ArtistEnrichmentOutcome) {
+		const now = Math.floor(Date.now() / 1000);
+		const expiresAt = now + (outcome.status === "enriched" ? 30 : 7) * 24 * 60 * 60;
+		this.ctx.storage.transactionSync(() => {
+			this.sql.exec(
+				`INSERT OR REPLACE INTO artist_enrichment_cache
+				 (source_key, outcome_json, expires_at, updated_at) VALUES (?, ?, ?, ?)`,
+				message.sourceKey,
+				JSON.stringify(outcome),
+				expiresAt,
+				now,
+			);
+			this.sql.exec(
+				"UPDATE artist_enrichment_jobs SET status = ?, attempts = attempts + 1, last_error = NULL, updated_at = ? WHERE id = ?",
+				outcome.status,
+				now,
+				message.jobId,
+			);
+			if (outcome.status !== "enriched") return;
+			this.sql.exec(
+				`INSERT OR REPLACE INTO festival_artists
+				 (festival_id, id, source_key, profile_json, updated_at) VALUES (?, ?, ?, ?, ?)`,
+				message.festivalId,
+				outcome.profile.id,
+				message.sourceKey,
+				JSON.stringify(outcome.profile),
+				now,
+			);
+			for (const setId of message.setIds) {
+				const rows = this.sql
+					.exec(
+						"SELECT artist_ids FROM festival_sets WHERE festival_id = ? AND id = ? LIMIT 1",
+						message.festivalId,
+						setId,
+					)
+					.toArray() as unknown as Array<{ artist_ids: string }>;
+				if (!rows[0]) continue;
+				const artistIds = new Set(
+					parseStoredJson<string[]>(rows[0].artist_ids, `set ${setId} artist IDs`),
+				);
+				artistIds.add(outcome.profile.id);
+				this.sql.exec(
+					"UPDATE festival_sets SET artist_ids = ? WHERE festival_id = ? AND id = ?",
+					JSON.stringify([...artistIds].sort((left, right) => left.localeCompare(right))),
+					message.festivalId,
+					setId,
+				);
+			}
+		});
+		return outcome.status === "enriched"
+			? { profile: outcome.profile, setIds: message.setIds }
+			: null;
+	}
+
+	markArtistEnrichmentFailure(jobId: string, error: string) {
+		this.sql.exec(
+			`UPDATE artist_enrichment_jobs
+			 SET status = 'failed', attempts = attempts + 1, last_error = ?, updated_at = ? WHERE id = ?`,
+			error.slice(0, 500),
+			Math.floor(Date.now() / 1000),
+			jobId,
+		);
 	}
 
 	/** Clean up expired challenges. */
@@ -1196,7 +1426,9 @@ export class MainDO extends DurableObject {
 				return new Response("Festival not found", { status: 404 });
 			}
 
-			// Delete lineup data first (foreign key constraints)
+			// Delete festival-owned data first (foreign key constraints).
+			this.sql.exec("DELETE FROM artist_enrichment_jobs WHERE festival_id = ?", id);
+			this.sql.exec("DELETE FROM festival_artists WHERE festival_id = ?", id);
 			this.sql.exec("DELETE FROM festival_sets WHERE festival_id = ?", id);
 			this.sql.exec("DELETE FROM festival_days WHERE festival_id = ?", id);
 			this.sql.exec("DELETE FROM festival_stages WHERE festival_id = ?", id);

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../data/group_schedule_overlay.dart';
 import '../../data/models.dart';
@@ -77,10 +78,14 @@ class _SetDetailsSheetState extends State<_SetDetailsSheet> {
       _starredOverrides[_selectedSet.id] ?? _selectedSet.starred;
 
   List<FestSet> get _artistSets {
+    final artistIds = _selectedSet.artistIds.toSet();
     final artist = _normalizeArtist(_selectedSet.artist);
-    final sets = widget.allSets
-        .where((set) => _normalizeArtist(set.artist) == artist)
-        .toList();
+    final sets = widget.allSets.where((set) {
+      if (artistIds.isNotEmpty) {
+        return set.artistIds.any(artistIds.contains);
+      }
+      return _normalizeArtist(set.artist) == artist;
+    }).toList();
     _sortSets(sets);
     return sets;
   }
@@ -149,6 +154,23 @@ class _SetDetailsSheetState extends State<_SetDetailsSheet> {
   void _goBack() {
     if (_history.isEmpty) return;
     setState(() => _selectedSet = _history.removeLast());
+  }
+
+  Future<void> _openArtistLink(ArtistLink link) async {
+    final uri = Uri.tryParse(link.url);
+    final isSafe = uri != null && uri.scheme == 'https' && uri.host.isNotEmpty;
+    var launched = false;
+    if (isSafe) {
+      try {
+        launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      } on Exception {
+        launched = false;
+      }
+    }
+    if (!mounted || launched) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('COULD NOT OPEN LINK')));
   }
 
   @override
@@ -220,6 +242,13 @@ class _SetDetailsSheetState extends State<_SetDetailsSheet> {
                         label: 'GENRE',
                         value: set.genre.toUpperCase(),
                       ),
+                    if (set.artistProfiles.isNotEmpty) ...[
+                      const SizedBox(height: 22),
+                      _ArtistProfileSection(
+                        profiles: set.artistProfiles,
+                        onLinkTap: _openArtistLink,
+                      ),
+                    ],
                     const SizedBox(height: 22),
                     _ArtistPath(
                       sets: artistSets,
@@ -350,6 +379,261 @@ class _Header extends StatelessWidget {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ArtistProfileSection extends StatelessWidget {
+  final List<ArtistProfile> profiles;
+  final ValueChanged<ArtistLink> onLinkTap;
+
+  const _ArtistProfileSection({
+    required this.profiles,
+    required this.onLinkTap,
+  });
+
+  static bool _safeLink(ArtistLink link) {
+    final uri = Uri.tryParse(link.url);
+    return uri != null && uri.scheme == 'https' && uri.host.isNotEmpty;
+  }
+
+  static List<ArtistLink> _visibleLinks(ArtistProfile profile) {
+    const supportedKinds = {'spotify', 'soundcloud', 'website'};
+    final byKind = <String, ArtistLink>{};
+    for (final link in profile.links) {
+      final kind = link.kind.toLowerCase();
+      if (supportedKinds.contains(kind) && _safeLink(link)) {
+        byKind.putIfAbsent(kind, () => link);
+      }
+    }
+    return [
+      for (final kind in const ['spotify', 'soundcloud', 'website'])
+        ?byKind[kind],
+    ];
+  }
+
+  static bool _hasContent(ArtistProfile profile) {
+    return (profile.description?.trim().isNotEmpty ?? false) ||
+        profile.genres.isNotEmpty ||
+        (profile.country?.trim().isNotEmpty ?? false) ||
+        (profile.artistType?.trim().isNotEmpty ?? false) ||
+        _visibleLinks(profile).isNotEmpty;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final visibleProfiles = profiles.where(_hasContent).toList();
+    if (visibleProfiles.isEmpty) return const SizedBox.shrink();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const _SectionLabel(label: 'ABOUT'),
+        const SizedBox(height: 10),
+        for (var index = 0; index < visibleProfiles.length; index++) ...[
+          if (index > 0) ...[
+            const SizedBox(height: 16),
+            DottedBorder.top(child: const SizedBox(height: 16)),
+          ],
+          _ArtistProfileBlock(
+            profile: visibleProfiles[index],
+            showName: visibleProfiles.length > 1,
+            links: _visibleLinks(visibleProfiles[index]),
+            onLinkTap: onLinkTap,
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _ArtistProfileBlock extends StatelessWidget {
+  final ArtistProfile profile;
+  final bool showName;
+  final List<ArtistLink> links;
+  final ValueChanged<ArtistLink> onLinkTap;
+
+  const _ArtistProfileBlock({
+    required this.profile,
+    required this.showName,
+    required this.links,
+    required this.onLinkTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final metadata = [
+      if (profile.country?.trim() case final country? when country.isNotEmpty)
+        country,
+      if (profile.artistType?.trim() case final type? when type.isNotEmpty)
+        type,
+    ];
+    final description = profile.description?.trim();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _ArtistPlaceholder(name: profile.name),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (showName) ...[
+                    Text(
+                      profile.name.toUpperCase(),
+                      style: _metaStyle.copyWith(color: colorFg),
+                    ),
+                    const SizedBox(height: 8),
+                  ],
+                  if (metadata.isNotEmpty) ...[
+                    Text(metadata.join(' · ').toUpperCase(), style: _metaStyle),
+                    const SizedBox(height: 8),
+                  ] else if (!showName) ...[
+                    const Text('OFFLINE PROFILE', style: _metaStyle),
+                    const SizedBox(height: 8),
+                  ],
+                  if (description != null && description.isNotEmpty)
+                    Text(
+                      description,
+                      style: const TextStyle(
+                        fontFamily: 'Helvetica',
+                        fontSize: 14,
+                        height: 1.45,
+                        color: colorFg2,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        if (profile.genres.isNotEmpty) ...[
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              for (final genre in profile.genres.take(5))
+                _GenreLabel(label: genre),
+            ],
+          ),
+          const SizedBox(height: 12),
+        ],
+        if (links.isNotEmpty)
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final link in links)
+                _ArtistLinkAction(link: link, onTap: () => onLinkTap(link)),
+            ],
+          ),
+      ],
+    );
+  }
+}
+
+class _ArtistPlaceholder extends StatelessWidget {
+  final String name;
+
+  const _ArtistPlaceholder({required this.name});
+
+  @override
+  Widget build(BuildContext context) {
+    final trimmedName = name.trim();
+    final initial = trimmedName.isEmpty
+        ? '?'
+        : String.fromCharCodes(trimmedName.runes.take(1)).toUpperCase();
+    return Semantics(
+      image: true,
+      excludeSemantics: true,
+      label: 'Artist image unavailable, placeholder for $name',
+      child: Container(
+        width: 56,
+        height: 56,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: colorAccentWash,
+          border: Border.all(color: colorDotted, width: bdDotWidth),
+        ),
+        child: Text(
+          initial,
+          style: const TextStyle(
+            fontFamily: 'Helvetica',
+            fontSize: 24,
+            fontWeight: FontWeight.w700,
+            color: colorAccent,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _GenreLabel extends StatelessWidget {
+  final String label;
+
+  const _GenreLabel({required this.label});
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+    decoration: BoxDecoration(border: Border.all(color: colorDotted)),
+    child: Text(
+      label.toUpperCase(),
+      style: _metaStyle.copyWith(color: colorFg2),
+    ),
+  );
+}
+
+class _ArtistLinkAction extends StatelessWidget {
+  final ArtistLink link;
+  final VoidCallback onTap;
+
+  const _ArtistLinkAction({required this.link, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final kind = link.kind.toLowerCase();
+    final icon = switch (kind) {
+      'spotify' => Icons.play_circle_outline,
+      'soundcloud' => Icons.cloud_outlined,
+      _ => Icons.language,
+    };
+    final label = switch (kind) {
+      'spotify' => 'SPOTIFY',
+      'soundcloud' => 'SOUNDCLOUD',
+      _ => 'WEBSITE',
+    };
+
+    return Semantics(
+      button: true,
+      label: 'Open $label externally',
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          child: Container(
+            constraints: const BoxConstraints(minHeight: tapMin),
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            decoration: BoxDecoration(
+              border: Border.all(color: colorDotted, width: bdDotWidth),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon, size: 16, color: colorAccent),
+                const SizedBox(width: 8),
+                Text(label, style: _metaStyle.copyWith(color: colorFg)),
+              ],
+            ),
+          ),
         ),
       ),
     );

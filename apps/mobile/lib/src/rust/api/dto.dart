@@ -6,7 +6,7 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `chat_trust_label`, `month_number`, `sort_lineup_days`
+// These functions are ignored because they are not marked as `pub`: `chat_trust_label`, `month_number`, `parse_artist_links`, `parse_json_string_list`, `sort_lineup_days`
 
 /// Read lineup from a doc manager (used by watch_lineup).
 ///
@@ -58,6 +58,83 @@ abstract class PeerEntry implements RustOpaqueInterface {}
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<SyncStatus>>
 abstract class SyncStatus implements RustOpaqueInterface {}
+
+class ArtistLinkDto {
+  final String kind;
+  final String url;
+
+  const ArtistLinkDto({required this.kind, required this.url});
+
+  @override
+  int get hashCode => kind.hashCode ^ url.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ArtistLinkDto &&
+          runtimeType == other.runtimeType &&
+          kind == other.kind &&
+          url == other.url;
+}
+
+class ArtistProfileDto {
+  final String id;
+  final String name;
+  final String mbid;
+  final String? wikidataId;
+  final List<String> aliases;
+  final String? artistType;
+  final String? country;
+  final List<String> genres;
+  final String? description;
+  final List<ArtistLinkDto> links;
+  final String updatedAt;
+
+  const ArtistProfileDto({
+    required this.id,
+    required this.name,
+    required this.mbid,
+    this.wikidataId,
+    required this.aliases,
+    this.artistType,
+    this.country,
+    required this.genres,
+    this.description,
+    required this.links,
+    required this.updatedAt,
+  });
+
+  @override
+  int get hashCode =>
+      id.hashCode ^
+      name.hashCode ^
+      mbid.hashCode ^
+      wikidataId.hashCode ^
+      aliases.hashCode ^
+      artistType.hashCode ^
+      country.hashCode ^
+      genres.hashCode ^
+      description.hashCode ^
+      links.hashCode ^
+      updatedAt.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ArtistProfileDto &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          name == other.name &&
+          mbid == other.mbid &&
+          wikidataId == other.wikidataId &&
+          aliases == other.aliases &&
+          artistType == other.artistType &&
+          country == other.country &&
+          genres == other.genres &&
+          description == other.description &&
+          links == other.links &&
+          updatedAt == other.updatedAt;
+}
 
 class AttestationDto {
   final String message;
@@ -521,15 +598,18 @@ class LineupDto {
   final List<LineupStageDto> stages;
   final List<LineupDayDto> days;
   final List<LineupSetDto> sets;
+  final List<ArtistProfileDto> artists;
 
   const LineupDto({
     required this.stages,
     required this.days,
     required this.sets,
+    required this.artists,
   });
 
   @override
-  int get hashCode => stages.hashCode ^ days.hashCode ^ sets.hashCode;
+  int get hashCode =>
+      stages.hashCode ^ days.hashCode ^ sets.hashCode ^ artists.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -538,7 +618,8 @@ class LineupDto {
           runtimeType == other.runtimeType &&
           stages == other.stages &&
           days == other.days &&
-          sets == other.sets;
+          sets == other.sets &&
+          artists == other.artists;
 }
 
 class LineupSetDto {
@@ -546,6 +627,8 @@ class LineupSetDto {
   final String day;
   final String stage;
   final String artist;
+  final String? artistMbid;
+  final List<String> artistIds;
   final int startMin;
   final int durationMin;
   final String genre;
@@ -556,6 +639,8 @@ class LineupSetDto {
     required this.day,
     required this.stage,
     required this.artist,
+    this.artistMbid,
+    required this.artistIds,
     required this.startMin,
     required this.durationMin,
     required this.genre,
@@ -568,6 +653,8 @@ class LineupSetDto {
       day.hashCode ^
       stage.hashCode ^
       artist.hashCode ^
+      artistMbid.hashCode ^
+      artistIds.hashCode ^
       startMin.hashCode ^
       durationMin.hashCode ^
       genre.hashCode ^
@@ -582,6 +669,8 @@ class LineupSetDto {
           day == other.day &&
           stage == other.stage &&
           artist == other.artist &&
+          artistMbid == other.artistMbid &&
+          artistIds == other.artistIds &&
           startMin == other.startMin &&
           durationMin == other.durationMin &&
           genre == other.genre &&

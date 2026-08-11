@@ -212,12 +212,47 @@ class Day {
       'dec': 12,
     };
     final monthKey = month.trim().toLowerCase();
-    final monthNumber = months[
-        monthKey.length >= 3 ? monthKey.substring(0, 3) : monthKey];
+    final monthNumber =
+        months[monthKey.length >= 3 ? monthKey.substring(0, 3) : monthKey];
     final day = int.tryParse(dayNum);
     if (year <= 0 || monthNumber == null || day == null) return null;
     return DateTime(year, monthNumber, day);
   }
+}
+
+class ArtistLink {
+  final String kind;
+  final String url;
+
+  const ArtistLink({required this.kind, required this.url});
+}
+
+class ArtistProfile {
+  final String id;
+  final String name;
+  final String mbid;
+  final String? wikidataId;
+  final List<String> aliases;
+  final String? artistType;
+  final String? country;
+  final List<String> genres;
+  final String? description;
+  final List<ArtistLink> links;
+  final String updatedAt;
+
+  const ArtistProfile({
+    required this.id,
+    required this.name,
+    required this.mbid,
+    this.wikidataId,
+    this.aliases = const [],
+    this.artistType,
+    this.country,
+    this.genres = const [],
+    this.description,
+    this.links = const [],
+    required this.updatedAt,
+  });
 }
 
 class FestSet {
@@ -225,6 +260,8 @@ class FestSet {
   final String day;
   final String stage;
   final String artist;
+  final List<String> artistIds;
+  final List<ArtistProfile> artistProfiles;
   final int t; // minutes from midnight
   final int dur; // minutes
   final String genre;
@@ -240,6 +277,8 @@ class FestSet {
     required this.day,
     required this.stage,
     required this.artist,
+    this.artistIds = const [],
+    this.artistProfiles = const [],
     required this.t,
     required this.dur,
     required this.genre,
@@ -257,6 +296,12 @@ class FestSet {
       day: j['day'] as String,
       stage: j['stage'] as String,
       artist: j['artist'] as String,
+      artistIds: (j['artistIds'] as List<dynamic>?)?.cast<String>() ?? const [],
+      artistProfiles:
+          (j['artistProfiles'] as List<dynamic>?)
+              ?.whereType<ArtistProfile>()
+              .toList() ??
+          const [],
       t: (j['startMin'] as num).toInt(),
       dur: (j['durationMin'] as num).toInt(),
       genre: (j['genre'] as String?) ?? '',
@@ -279,6 +324,8 @@ class FestSet {
     day: day,
     stage: stage,
     artist: artist,
+    artistIds: artistIds,
+    artistProfiles: artistProfiles,
     t: t ?? this.t,
     dur: dur,
     genre: genre,

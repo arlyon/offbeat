@@ -29,7 +29,7 @@
 use crate::api::dto::*;
 use crate::api::*;
 use flutter_rust_bridge::for_generated::byteorder::{NativeEndian, ReadBytesExt, WriteBytesExt};
-use flutter_rust_bridge::for_generated::{Lifetimeable, Lockable, transform_result_dco};
+use flutter_rust_bridge::for_generated::{transform_result_dco, Lifetimeable, Lockable};
 use flutter_rust_bridge::{Handler, IntoIntoDart};
 
 // Section: boilerplate
@@ -4123,6 +4123,48 @@ impl SseDecode for String {
     }
 }
 
+impl SseDecode for crate::api::dto::ArtistLinkDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_kind = <String>::sse_decode(deserializer);
+        let mut var_url = <String>::sse_decode(deserializer);
+        return crate::api::dto::ArtistLinkDto {
+            kind: var_kind,
+            url: var_url,
+        };
+    }
+}
+
+impl SseDecode for crate::api::dto::ArtistProfileDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_id = <String>::sse_decode(deserializer);
+        let mut var_name = <String>::sse_decode(deserializer);
+        let mut var_mbid = <String>::sse_decode(deserializer);
+        let mut var_wikidataId = <Option<String>>::sse_decode(deserializer);
+        let mut var_aliases = <Vec<String>>::sse_decode(deserializer);
+        let mut var_artistType = <Option<String>>::sse_decode(deserializer);
+        let mut var_country = <Option<String>>::sse_decode(deserializer);
+        let mut var_genres = <Vec<String>>::sse_decode(deserializer);
+        let mut var_description = <Option<String>>::sse_decode(deserializer);
+        let mut var_links = <Vec<crate::api::dto::ArtistLinkDto>>::sse_decode(deserializer);
+        let mut var_updatedAt = <String>::sse_decode(deserializer);
+        return crate::api::dto::ArtistProfileDto {
+            id: var_id,
+            name: var_name,
+            mbid: var_mbid,
+            wikidata_id: var_wikidataId,
+            aliases: var_aliases,
+            artist_type: var_artistType,
+            country: var_country,
+            genres: var_genres,
+            description: var_description,
+            links: var_links,
+            updated_at: var_updatedAt,
+        };
+    }
+}
+
 impl SseDecode for crate::api::dto::AttestationDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -4414,10 +4456,12 @@ impl SseDecode for crate::api::dto::LineupDto {
         let mut var_stages = <Vec<crate::api::dto::LineupStageDto>>::sse_decode(deserializer);
         let mut var_days = <Vec<crate::api::dto::LineupDayDto>>::sse_decode(deserializer);
         let mut var_sets = <Vec<crate::api::dto::LineupSetDto>>::sse_decode(deserializer);
+        let mut var_artists = <Vec<crate::api::dto::ArtistProfileDto>>::sse_decode(deserializer);
         return crate::api::dto::LineupDto {
             stages: var_stages,
             days: var_days,
             sets: var_sets,
+            artists: var_artists,
         };
     }
 }
@@ -4429,6 +4473,8 @@ impl SseDecode for crate::api::dto::LineupSetDto {
         let mut var_day = <String>::sse_decode(deserializer);
         let mut var_stage = <String>::sse_decode(deserializer);
         let mut var_artist = <String>::sse_decode(deserializer);
+        let mut var_artistMbid = <Option<String>>::sse_decode(deserializer);
+        let mut var_artistIds = <Vec<String>>::sse_decode(deserializer);
         let mut var_startMin = <i32>::sse_decode(deserializer);
         let mut var_durationMin = <i32>::sse_decode(deserializer);
         let mut var_genre = <String>::sse_decode(deserializer);
@@ -4438,6 +4484,8 @@ impl SseDecode for crate::api::dto::LineupSetDto {
             day: var_day,
             stage: var_stage,
             artist: var_artist,
+            artist_mbid: var_artistMbid,
+            artist_ids: var_artistIds,
             start_min: var_startMin,
             duration_min: var_durationMin,
             genre: var_genre,
@@ -4471,6 +4519,32 @@ impl SseDecode for Vec<String> {
         let mut ans_ = Vec::with_capacity(len_ as usize);
         for idx_ in 0..len_ {
             ans_.push(<String>::sse_decode(deserializer));
+        }
+        return ans_;
+    }
+}
+
+impl SseDecode for Vec<crate::api::dto::ArtistLinkDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(<crate::api::dto::ArtistLinkDto>::sse_decode(deserializer));
+        }
+        return ans_;
+    }
+}
+
+impl SseDecode for Vec<crate::api::dto::ArtistProfileDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(<crate::api::dto::ArtistProfileDto>::sse_decode(
+                deserializer,
+            ));
         }
         return ans_;
     }
@@ -5177,6 +5251,57 @@ impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<PeerEntry>> for PeerEntry {
 }
 
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::dto::ArtistLinkDto {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.kind.into_into_dart().into_dart(),
+            self.url.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::dto::ArtistLinkDto
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::dto::ArtistLinkDto>
+    for crate::api::dto::ArtistLinkDto
+{
+    fn into_into_dart(self) -> crate::api::dto::ArtistLinkDto {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::dto::ArtistProfileDto {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.id.into_into_dart().into_dart(),
+            self.name.into_into_dart().into_dart(),
+            self.mbid.into_into_dart().into_dart(),
+            self.wikidata_id.into_into_dart().into_dart(),
+            self.aliases.into_into_dart().into_dart(),
+            self.artist_type.into_into_dart().into_dart(),
+            self.country.into_into_dart().into_dart(),
+            self.genres.into_into_dart().into_dart(),
+            self.description.into_into_dart().into_dart(),
+            self.links.into_into_dart().into_dart(),
+            self.updated_at.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::dto::ArtistProfileDto
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::dto::ArtistProfileDto>
+    for crate::api::dto::ArtistProfileDto
+{
+    fn into_into_dart(self) -> crate::api::dto::ArtistProfileDto {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::dto::AttestationDto {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
@@ -5513,6 +5638,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::dto::LineupDto {
             self.stages.into_into_dart().into_dart(),
             self.days.into_into_dart().into_dart(),
             self.sets.into_into_dart().into_dart(),
+            self.artists.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -5531,6 +5657,8 @@ impl flutter_rust_bridge::IntoDart for crate::api::dto::LineupSetDto {
             self.day.into_into_dart().into_dart(),
             self.stage.into_into_dart().into_dart(),
             self.artist.into_into_dart().into_dart(),
+            self.artist_mbid.into_into_dart().into_dart(),
+            self.artist_ids.into_into_dart().into_dart(),
             self.start_min.into_into_dart().into_dart(),
             self.duration_min.into_into_dart().into_dart(),
             self.genre.into_into_dart().into_dart(),
@@ -5994,6 +6122,31 @@ impl SseEncode for String {
     }
 }
 
+impl SseEncode for crate::api::dto::ArtistLinkDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.kind, serializer);
+        <String>::sse_encode(self.url, serializer);
+    }
+}
+
+impl SseEncode for crate::api::dto::ArtistProfileDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.id, serializer);
+        <String>::sse_encode(self.name, serializer);
+        <String>::sse_encode(self.mbid, serializer);
+        <Option<String>>::sse_encode(self.wikidata_id, serializer);
+        <Vec<String>>::sse_encode(self.aliases, serializer);
+        <Option<String>>::sse_encode(self.artist_type, serializer);
+        <Option<String>>::sse_encode(self.country, serializer);
+        <Vec<String>>::sse_encode(self.genres, serializer);
+        <Option<String>>::sse_encode(self.description, serializer);
+        <Vec<crate::api::dto::ArtistLinkDto>>::sse_encode(self.links, serializer);
+        <String>::sse_encode(self.updated_at, serializer);
+    }
+}
+
 impl SseEncode for crate::api::dto::AttestationDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -6190,6 +6343,7 @@ impl SseEncode for crate::api::dto::LineupDto {
         <Vec<crate::api::dto::LineupStageDto>>::sse_encode(self.stages, serializer);
         <Vec<crate::api::dto::LineupDayDto>>::sse_encode(self.days, serializer);
         <Vec<crate::api::dto::LineupSetDto>>::sse_encode(self.sets, serializer);
+        <Vec<crate::api::dto::ArtistProfileDto>>::sse_encode(self.artists, serializer);
     }
 }
 
@@ -6200,6 +6354,8 @@ impl SseEncode for crate::api::dto::LineupSetDto {
         <String>::sse_encode(self.day, serializer);
         <String>::sse_encode(self.stage, serializer);
         <String>::sse_encode(self.artist, serializer);
+        <Option<String>>::sse_encode(self.artist_mbid, serializer);
+        <Vec<String>>::sse_encode(self.artist_ids, serializer);
         <i32>::sse_encode(self.start_min, serializer);
         <i32>::sse_encode(self.duration_min, serializer);
         <String>::sse_encode(self.genre, serializer);
@@ -6224,6 +6380,26 @@ impl SseEncode for Vec<String> {
         <i32>::sse_encode(self.len() as _, serializer);
         for item in self {
             <String>::sse_encode(item, serializer);
+        }
+    }
+}
+
+impl SseEncode for Vec<crate::api::dto::ArtistLinkDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::api::dto::ArtistLinkDto>::sse_encode(item, serializer);
+        }
+    }
+}
+
+impl SseEncode for Vec<crate::api::dto::ArtistProfileDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::api::dto::ArtistProfileDto>::sse_encode(item, serializer);
         }
     }
 }
@@ -6618,7 +6794,7 @@ mod io {
     use flutter_rust_bridge::for_generated::byteorder::{
         NativeEndian, ReadBytesExt, WriteBytesExt,
     };
-    use flutter_rust_bridge::for_generated::{Lifetimeable, Lockable, transform_result_dco};
+    use flutter_rust_bridge::for_generated::{transform_result_dco, Lifetimeable, Lockable};
     use flutter_rust_bridge::{Handler, IntoIntoDart};
 
     // Section: boilerplate
@@ -6728,7 +6904,7 @@ mod web {
     };
     use flutter_rust_bridge::for_generated::wasm_bindgen;
     use flutter_rust_bridge::for_generated::wasm_bindgen::prelude::*;
-    use flutter_rust_bridge::for_generated::{Lifetimeable, Lockable, transform_result_dco};
+    use flutter_rust_bridge::for_generated::{transform_result_dco, Lifetimeable, Lockable};
     use flutter_rust_bridge::{Handler, IntoIntoDart};
 
     // Section: boilerplate

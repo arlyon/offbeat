@@ -11,12 +11,34 @@ class_name = "MainDO"
 name = "FESTIVAL_DO"
 class_name = "FestivalDO"
 
+[[durable_objects.bindings]]
+name = "ARTIST_ENRICHMENT_LIMITER"
+class_name = "ArtistEnrichmentLimiterDO"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["MainDO", "FestivalDO"]
 
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["ArtistEnrichmentLimiterDO"]
+
+[[queues.producers]]
+binding = "ARTIST_ENRICHMENT_QUEUE"
+queue = "offbeat-artist-enrichment"
+
+[[queues.consumers]]
+queue = "offbeat-artist-enrichment"
+max_batch_size = 1
+max_batch_timeout = 5
+max_retries = 5
+dead_letter_queue = "offbeat-artist-enrichment-dlq"
+max_concurrency = 1
+retry_delay = 15
+
 [vars]
 RP_ID = "offbeat-server.arlyon.workers.dev"
+MUSICBRAINZ_USER_AGENT = "Offbeat/1.0 (https://github.com/arlyon/offbeat)"
 
 # Clashfinder API credentials - set these with:
 #   wrangler secret put CLASHFINDER_USERNAME

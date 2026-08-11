@@ -1,9 +1,9 @@
 // These types are re-exported from the parent module (mod.rs) and used
 // in function signatures throughout this module.
-use offbeat_core::OffbeatNode;
 use offbeat_core::connection_manager::{GossipStatus, PeerEntry, PeerSource};
 use offbeat_core::doc_manager::DocManager;
 use offbeat_core::notifier::SyncStatus;
+use offbeat_core::OffbeatNode;
 
 // ---------------------------------------------------------------------------
 // DTOs
@@ -118,11 +118,32 @@ pub struct LineupDayDto {
     pub year: i32,
 }
 
+pub struct ArtistLinkDto {
+    pub kind: String,
+    pub url: String,
+}
+
+pub struct ArtistProfileDto {
+    pub id: String,
+    pub name: String,
+    pub mbid: String,
+    pub wikidata_id: Option<String>,
+    pub aliases: Vec<String>,
+    pub artist_type: Option<String>,
+    pub country: Option<String>,
+    pub genres: Vec<String>,
+    pub description: Option<String>,
+    pub links: Vec<ArtistLinkDto>,
+    pub updated_at: String,
+}
+
 pub struct LineupSetDto {
     pub id: String,
     pub day: String,
     pub stage: String,
     pub artist: String,
+    pub artist_mbid: Option<String>,
+    pub artist_ids: Vec<String>,
     pub start_min: i32,
     pub duration_min: i32,
     pub genre: String,
@@ -133,6 +154,7 @@ pub struct LineupDto {
     pub stages: Vec<LineupStageDto>,
     pub days: Vec<LineupDayDto>,
     pub sets: Vec<LineupSetDto>,
+    pub artists: Vec<ArtistProfileDto>,
 }
 
 pub struct HourlyWeatherDto {
@@ -283,6 +305,27 @@ fn month_number(month: &str) -> u8 {
     }
 }
 
+fn parse_json_string_list(value: Option<String>) -> Vec<String> {
+    value
+        .and_then(|json| serde_json::from_str::<Vec<String>>(&json).ok())
+        .unwrap_or_default()
+}
+
+fn parse_artist_links(value: Option<String>) -> Vec<ArtistLinkDto> {
+    let values = value
+        .and_then(|json| serde_json::from_str::<Vec<serde_json::Value>>(&json).ok())
+        .unwrap_or_default();
+    values
+        .into_iter()
+        .filter_map(|value| {
+            Some(ArtistLinkDto {
+                kind: value.get("kind")?.as_str()?.to_string(),
+                url: value.get("url")?.as_str()?.to_string(),
+            })
+        })
+        .collect()
+}
+
 fn sort_lineup_days(days: &mut [LineupDayDto]) {
     days.sort_by(|a, b| {
         a.year
@@ -339,6 +382,8 @@ pub fn read_lineup_from_doc(dm: &DocManager, doc_id: &str) -> Option<LineupDto> 
                 day: any_str(&f, "day")?,
                 stage: any_str(&f, "stage")?,
                 artist: any_str(&f, "artist")?,
+                artist_mbid: any_str(&f, "artistMbid"),
+                artist_ids: parse_json_string_list(any_str(&f, "artistIds")),
                 start_min: any_i32(&f, "startMin")?,
                 duration_min: any_i32(&f, "durationMin")?,
                 genre: any_str(&f, "genre")?,
@@ -347,60 +392,37 @@ pub fn read_lineup_from_doc(dm: &DocManager, doc_id: &str) -> Option<LineupDto> 
         })
         .collect();
 
+    let mut artists: Vec<ArtistProfileDto> = dm
+        .read_nested_map_entries(doc_id, "artists")
+        .into_iter()
+        .filter_map(|(id, f)| {
+            Some(ArtistProfileDto {
+                id,
+                name: any_str(&f, "name")?,
+                mbid: any_str(&f, "mbid")?,
+                wikidata_id: any_str(&f, "wikidataId"),
+                aliases: parse_json_string_list(any_str(&f, "aliases")),
+                artist_type: any_str(&f, "artistType"),
+                country: any_str(&f, "country"),
+                genres: parse_json_string_list(any_str(&f, "genres")),
+                description: any_str(&f, "description"),
+                links: parse_artist_links(any_str(&f, "links")),
+                updated_at: any_str(&f, "updatedAt")?,
+            })
+        })
+        .collect();
+    artists.sort_by(|a, b| a.id.cmp(&b.id));
+
     if stages.is_empty() && days.is_empty() && sets.is_empty() {
         return None;
     }
 
-    Some(LineupDto { stages, days, sets })
-}
-
-#[cfg(test)]
-mod lineup_day_order_tests {
-    use super::{LineupDayDto, sort_lineup_days};
-
-    fn day(id: &str, year: i32, month: &str, num: i32) -> LineupDayDto {
-        LineupDayDto {
-            id: id.to_string(),
-            label: id.to_string(),
-            num,
-            month: month.to_string(),
-            year,
-        }
-    }
-
-    #[test]
-    fn sorts_days_chronologically_across_crdt_iteration_order() {
-        let mut days = vec![
-            day("sun", 2026, "Aug", 9),
-            day("fri", 2026, "Aug", 7),
-            day("mon", 2026, "Aug", 10),
-            day("sat", 2026, "Aug", 8),
-            day("thu", 2026, "Aug", 6),
-        ];
-
-        sort_lineup_days(&mut days);
-
-        assert_eq!(
-            days.iter().map(|day| day.id.as_str()).collect::<Vec<_>>(),
-            ["thu", "fri", "sat", "sun", "mon"]
-        );
-    }
-
-    #[test]
-    fn sorts_days_across_month_and_year_boundaries() {
-        let mut days = vec![
-            day("jan-next", 2027, "Jan", 1),
-            day("dec-last", 2026, "Dec", 31),
-            day("nov", 2026, "November", 30),
-        ];
-
-        sort_lineup_days(&mut days);
-
-        assert_eq!(
-            days.iter().map(|day| day.id.as_str()).collect::<Vec<_>>(),
-            ["nov", "dec-last", "jan-next"]
-        );
-    }
+    Some(LineupDto {
+        stages,
+        days,
+        sets,
+        artists,
+    })
 }
 
 /// Read weather from a doc manager (used by get_weather / watch_weather).
@@ -580,4 +602,53 @@ pub fn group_id_from_key(key: Vec<u8>) -> anyhow::Result<String> {
         .try_into()
         .map_err(|_| anyhow::anyhow!("key must be exactly 32 bytes"))?;
     Ok(offbeat_core::crypto::group_id_from_key(&arr))
+}
+
+#[cfg(test)]
+mod lineup_day_order_tests {
+    use super::{sort_lineup_days, LineupDayDto};
+
+    fn day(id: &str, year: i32, month: &str, num: i32) -> LineupDayDto {
+        LineupDayDto {
+            id: id.to_string(),
+            label: id.to_string(),
+            num,
+            month: month.to_string(),
+            year,
+        }
+    }
+
+    #[test]
+    fn sorts_days_chronologically_across_crdt_iteration_order() {
+        let mut days = vec![
+            day("sun", 2026, "Aug", 9),
+            day("fri", 2026, "Aug", 7),
+            day("mon", 2026, "Aug", 10),
+            day("sat", 2026, "Aug", 8),
+            day("thu", 2026, "Aug", 6),
+        ];
+
+        sort_lineup_days(&mut days);
+
+        assert_eq!(
+            days.iter().map(|day| day.id.as_str()).collect::<Vec<_>>(),
+            ["thu", "fri", "sat", "sun", "mon"]
+        );
+    }
+
+    #[test]
+    fn sorts_days_across_month_and_year_boundaries() {
+        let mut days = vec![
+            day("jan-next", 2027, "Jan", 1),
+            day("dec-last", 2026, "Dec", 31),
+            day("nov", 2026, "November", 30),
+        ];
+
+        sort_lineup_days(&mut days);
+
+        assert_eq!(
+            days.iter().map(|day| day.id.as_str()).collect::<Vec<_>>(),
+            ["nov", "dec-last", "jan-next"]
+        );
+    }
 }
