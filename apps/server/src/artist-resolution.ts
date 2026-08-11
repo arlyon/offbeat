@@ -647,7 +647,7 @@ async function postJson(
 		response = await Promise.race([
 			fetcher(url, {
 				method: "POST",
-				redirect: "error",
+				redirect: "manual",
 				headers: {
 					Authorization: `Bearer ${apiKey}`,
 					"Content-Type": "application/json",

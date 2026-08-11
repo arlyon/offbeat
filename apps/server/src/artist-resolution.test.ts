@@ -132,6 +132,7 @@ describe("artist billing resolution", () => {
 			expect(request).toBe("https://api.tavily.com/search");
 			expect(init).toMatchObject({
 				method: "POST",
+				redirect: "manual",
 				headers: {
 					Authorization: `Bearer ${OPTIONS.tavilyApiKey}`,
 					"Content-Type": "application/json",
