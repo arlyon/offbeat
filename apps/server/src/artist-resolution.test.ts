@@ -160,22 +160,82 @@ describe("artist billing resolution", () => {
 		expect(gatewayBody.model).toBe(ARTIST_RESOLUTION_MODEL);
 		expect(gatewayBody.response_format).toEqual({ type: "json_object" });
 		if (!Array.isArray(gatewayBody.messages)) throw new Error("expected gateway messages");
-		const [systemMessage, userMessage] = gatewayBody.messages;
-		if (
-			!systemMessage ||
-			typeof systemMessage !== "object" ||
-			!("content" in systemMessage) ||
-			typeof systemMessage.content !== "string" ||
-			!userMessage ||
-			typeof userMessage !== "object" ||
-			!("content" in userMessage) ||
-			typeof userMessage.content !== "string"
-		) {
-			throw new Error("expected gateway message content");
+		expect(gatewayBody.messages).toHaveLength(3);
+		const [systemMessage, contextMessage, candidateMessage] = gatewayBody.messages;
+		for (const message of [systemMessage, contextMessage, candidateMessage]) {
+			if (
+				!message ||
+				typeof message !== "object" ||
+				!("content" in message) ||
+				typeof message.content !== "string"
+			) {
+				throw new Error("expected gateway message content");
+			}
 		}
 		expect(systemMessage.content).toContain("UNTRUSTED DATA");
 		expect(systemMessage.content).toContain("Exclude collateral event guests");
-		expect(userMessage.content).toContain("<untrusted_data>");
+		expect(contextMessage.content).toContain("<untrusted_lineup>");
+		expect(contextMessage.content).toContain("Other Festival Act");
+		expect(candidateMessage.content).toContain("<untrusted_candidate>");
+		expect(candidateMessage.content).toContain("Harry & Dan Present Tea Dance");
+	});
+
+	it("keeps the shared lineup in an identical DeepSeek prompt prefix", async () => {
+		const contextBillings = ["Zulu", "Alpha", "Other Festival Act"];
+		const firstFetcher = providerFetch(HARRY_RESULTS, HARRY_PROPOSAL);
+		const secondFetcher = providerFetch(HARRY_RESULTS, HARRY_PROPOSAL);
+
+		await resolveArtistBilling(inputFor("Harry & Dan Present Tea Dance", contextBillings), {
+			...OPTIONS,
+			fetch: firstFetcher,
+		});
+		await resolveArtistBilling(inputFor("Harry & Dan Present Tea Dance (Live)", contextBillings), {
+			...OPTIONS,
+			fetch: secondFetcher,
+		});
+
+		const firstBody = parseRequestBody(firstFetcher.mock.calls[3]?.[1]?.body);
+		const secondBody = parseRequestBody(secondFetcher.mock.calls[3]?.[1]?.body);
+		if (!Array.isArray(firstBody.messages) || !Array.isArray(secondBody.messages)) {
+			throw new Error("expected gateway messages");
+		}
+		expect(firstBody.messages.slice(0, 2)).toEqual(secondBody.messages.slice(0, 2));
+		expect(firstBody.messages[2]).not.toEqual(secondBody.messages[2]);
+	});
+
+	it("accepts the bounded full-festival lineup context", async () => {
+		const contextBillings = Array.from({ length: 250 }, (_, index) => `Artist ${index}`);
+		const fetcher = providerFetch(HARRY_RESULTS, HARRY_PROPOSAL);
+
+		const result = await resolveArtistBilling(
+			inputFor("Harry & Dan Present Tea Dance", contextBillings),
+			{ ...OPTIONS, fetch: fetcher },
+		);
+
+		expect(result.status).toBe("resolved");
+		expect(fetcher).toHaveBeenCalledTimes(4);
+	});
+
+	it("rejects lineup context beyond its count and character budgets", async () => {
+		const fetcher = vi.fn<typeof fetch>();
+		const tooMany = Array.from({ length: 251 }, (_, index) => `Artist ${index}`);
+		const tooLarge = Array.from({ length: 100 }, (_, index) =>
+			`${index}`.padEnd(400, "x"),
+		);
+
+		await expect(
+			resolveArtistBilling(inputFor("Harry & Dan Present Tea Dance", tooMany), {
+				...OPTIONS,
+				fetch: fetcher,
+			}),
+		).resolves.toMatchObject({ status: "unresolved", reason: "invalid_input" });
+		await expect(
+			resolveArtistBilling(inputFor("Harry & Dan Present Tea Dance", tooLarge), {
+				...OPTIONS,
+				fetch: fetcher,
+			}),
+		).resolves.toMatchObject({ status: "unresolved", reason: "invalid_input" });
+		expect(fetcher).not.toHaveBeenCalled();
 	});
 
 	it("accepts Harry and Dan aliases while preserving the exact source and presented title", async () => {
