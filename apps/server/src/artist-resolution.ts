@@ -97,6 +97,7 @@ export interface ArtistResolutionOptions {
 	tavilyApiKey: string;
 	deepSeekApiKey: string;
 	gatewayBaseUrl: string;
+	gatewayToken: string;
 	fetch?: typeof fetch;
 	timeoutMs?: number;
 	maxResponseBytes?: number;
@@ -347,6 +348,7 @@ export async function resolveArtistBilling(
 			fetcher,
 			timeoutMs,
 			maxResponseBytes,
+			{ "cf-aig-authorization": `Bearer ${options.gatewayToken}` },
 		);
 	}
 	const proposal = decodeDeepSeekProposal(deepSeekResponse);
@@ -629,6 +631,7 @@ async function postJson(
 	fetcher: typeof fetch,
 	timeoutMs: number,
 	maxResponseBytes: number,
+	additionalHeaders: Readonly<Record<string, string>> = {},
 ): Promise<unknown> {
 	const controller = new AbortController();
 	let rejectTimeout: (reason?: unknown) => void = () => undefined;
@@ -648,6 +651,7 @@ async function postJson(
 				headers: {
 					Authorization: `Bearer ${apiKey}`,
 					"Content-Type": "application/json",
+					...additionalHeaders,
 				},
 				body: JSON.stringify(body),
 				signal: controller.signal,
@@ -789,7 +793,7 @@ function inputIsValid(input: ArtistResolutionInput): boolean {
 }
 
 function optionsAreValid(options: ArtistResolutionOptions): boolean {
-	if (!options?.tavilyApiKey || !options.deepSeekApiKey) return false;
+	if (!options?.tavilyApiKey || !options.deepSeekApiKey || !options.gatewayToken) return false;
 	try {
 		return new URL(options.gatewayBaseUrl).protocol === "https:";
 	} catch {

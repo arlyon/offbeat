@@ -13,6 +13,7 @@ type Env = {
 		DISABLE_ARTIST_ENRICHMENT?: string;
 		DISABLE_ARTIST_RESOLUTION?: string;
 		AI_GATEWAY_BASE_URL?: string;
+		AI_GATEWAY_TOKEN?: string;
 		ARTIST_RESOLUTION_MODEL?: string;
 		DEEPSEEK_API_KEY?: string;
 		TAVILY_API_KEY?: string;

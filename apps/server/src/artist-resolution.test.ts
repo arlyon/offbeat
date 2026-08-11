@@ -16,6 +16,7 @@ const OPTIONS = {
 	tavilyApiKey: "tavily-secret-value",
 	deepSeekApiKey: "deepseek-secret-value",
 	gatewayBaseUrl: "https://gateway.ai.cloudflare.com/v1/account/gateway/deepseek",
+	gatewayToken: "cloudflare-gateway-secret-value",
 };
 
 function inputFor(sourceBilling: string, contextBillings = ["Mya", "Other Festival Act"]): ArtistResolutionInput {
@@ -155,6 +156,7 @@ describe("artist billing resolution", () => {
 		expect(gatewayRequest).toBe(`${OPTIONS.gatewayBaseUrl}/chat/completions`);
 		expect(gatewayInit?.headers).toMatchObject({
 			Authorization: `Bearer ${OPTIONS.deepSeekApiKey}`,
+			"cf-aig-authorization": `Bearer ${OPTIONS.gatewayToken}`,
 		});
 		const gatewayBody = parseRequestBody(gatewayInit?.body);
 		expect(gatewayBody.model).toBe(ARTIST_RESOLUTION_MODEL);

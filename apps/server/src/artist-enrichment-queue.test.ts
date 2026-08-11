@@ -259,6 +259,7 @@ describe("artist enrichment queue", () => {
 		env.ARTIST_RESOLUTION_MODEL = "deepseek-v4-flash";
 		env.AI_GATEWAY_BASE_URL =
 			"https://gateway.ai.cloudflare.com/v1/account/gateway/deepseek";
+		env.AI_GATEWAY_TOKEN = "gateway-test";
 		env.DEEPSEEK_API_KEY = "deepseek-test";
 		env.TAVILY_API_KEY = "tavily-test";
 

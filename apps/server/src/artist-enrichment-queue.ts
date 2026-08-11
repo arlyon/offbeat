@@ -30,6 +30,7 @@ export interface ArtistEnrichmentQueueEnv {
 	ARTIST_ENRICHMENT_LIMITER: DurableObjectNamespace;
 	MUSICBRAINZ_USER_AGENT: string;
 	AI_GATEWAY_BASE_URL?: string;
+	AI_GATEWAY_TOKEN?: string;
 	ARTIST_RESOLUTION_MODEL?: string;
 	DEEPSEEK_API_KEY?: string;
 	TAVILY_API_KEY?: string;
@@ -138,6 +139,7 @@ export async function handleArtistEnrichmentQueue(
 				tavilyApiKey: env.TAVILY_API_KEY ?? "",
 				deepSeekApiKey: env.DEEPSEEK_API_KEY ?? "",
 				gatewayBaseUrl: env.AI_GATEWAY_BASE_URL ?? "",
+				gatewayToken: env.AI_GATEWAY_TOKEN ?? "",
 				cache: {
 					getSearch: (cacheKey) => main.getCachedArtistResolutionSearch(cacheKey),
 					putSearch: (cacheKey, response) =>
@@ -434,7 +436,9 @@ function artistResolutionConfigured(env: ArtistEnrichmentQueueEnv): boolean {
 		env.DISABLE_ARTIST_RESOLUTION !== "true" &&
 		env.ARTIST_RESOLUTION_MODEL !== undefined &&
 		env.ARTIST_RESOLUTION_MODEL === ARTIST_RESOLUTION_MODEL &&
-		Boolean(env.AI_GATEWAY_BASE_URL && env.DEEPSEEK_API_KEY && env.TAVILY_API_KEY)
+		Boolean(
+			env.AI_GATEWAY_BASE_URL && env.AI_GATEWAY_TOKEN && env.DEEPSEEK_API_KEY && env.TAVILY_API_KEY,
+		)
 	);
 }
 
