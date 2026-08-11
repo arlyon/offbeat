@@ -1,0 +1,59 @@
+{
+  "schemaVersion": 1,
+  "id": "tramadol",
+  "sourceName": "Tramadol",
+  "sourceUrl": "https://psychonautwiki.org/wiki/Tramadol",
+  "sourceRevision": "165646",
+  "sourceRevisionTimestamp": "2025-01-31T19:17:56Z",
+  "retrievedAt": "2026-08-11T10:10:19.886112Z",
+  "contentLicense": "CC BY 4.0 semantic data",
+  "contentLicenseUrl": "https://psychonautwiki.org/wiki/Copyrights",
+  "graphqlQuery": "query SubstanceForOfflineReference($query: String!) {\n  substances(query: $query) {\n    name\n    url\n    commonNames\n    class {\n      psychoactive\n    }\n    roas {\n      name\n      dose {\n        units\n        threshold\n        light { min max }\n        common { min max }\n        strong { min max }\n        heavy\n      }\n      duration {\n        onset { min max units }\n        duration { min max units }\n        total { min max units }\n      }\n    }\n  }\n}",
+  "sourcePayloadSha256": "8677624a11f336d6492042647327e63dcc0b9346358f750f6dcbd4a38bab8ac3",
+  "generatorVersion": "offbeat-psychonautwiki-import/2",
+  "commonNames": [
+    "Tramadol",
+    "Tramal",
+    "Tadol",
+    "Tramacur",
+    "Tramundin"
+  ],
+  "psychoactiveClasses": [
+    "Opioids"
+  ],
+  "routes": [
+    {
+      "name": "oral",
+      "dose": {
+        "units": "mg",
+        "threshold": 25.0,
+        "light": {
+          "min": 25.0,
+          "max": 100.0
+        },
+        "common": {
+          "min": 100.0,
+          "max": 250.0
+        },
+        "strong": {
+          "min": 250.0,
+          "max": 300.0
+        },
+        "heavy": 300.0
+      },
+      "duration": {
+        "onset": {
+          "min": 15.0,
+          "max": 60.0,
+          "units": "minutes"
+        },
+        "duration": null,
+        "total": {
+          "min": 6.0,
+          "max": 10.0,
+          "units": "hours"
+        }
+      }
+    }
+  ]
+}

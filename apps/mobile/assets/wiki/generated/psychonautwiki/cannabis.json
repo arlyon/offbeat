@@ -1,0 +1,113 @@
+{
+  "schemaVersion": 1,
+  "id": "cannabis",
+  "sourceName": "Cannabis",
+  "sourceUrl": "https://psychonautwiki.org/wiki/Cannabis",
+  "sourceRevision": "168491",
+  "sourceRevisionTimestamp": "2025-08-08T14:53:34Z",
+  "retrievedAt": "2026-08-11T10:10:15.885786Z",
+  "contentLicense": "CC BY 4.0 semantic data",
+  "contentLicenseUrl": "https://psychonautwiki.org/wiki/Copyrights",
+  "graphqlQuery": "query SubstanceForOfflineReference($query: String!) {\n  substances(query: $query) {\n    name\n    url\n    commonNames\n    class {\n      psychoactive\n    }\n    roas {\n      name\n      dose {\n        units\n        threshold\n        light { min max }\n        common { min max }\n        strong { min max }\n        heavy\n      }\n      duration {\n        onset { min max units }\n        duration { min max units }\n        total { min max units }\n      }\n    }\n  }\n}",
+  "sourcePayloadSha256": "99f694892c731094132ceb38744cff951ea905470df5cdf0d70848b661d31f49",
+  "generatorVersion": "offbeat-psychonautwiki-import/2",
+  "commonNames": [
+    "Cannabis",
+    "Marijuana",
+    "Weed",
+    "Pot",
+    "Mary Jane",
+    "Grass",
+    "Herb",
+    "Green",
+    "Bud",
+    "Tree",
+    "THC"
+  ],
+  "psychoactiveClasses": [],
+  "routes": [
+    {
+      "name": "oral",
+      "dose": {
+        "units": "mg",
+        "threshold": 1.0,
+        "light": {
+          "min": 2.5,
+          "max": 5.0
+        },
+        "common": {
+          "min": 5.0,
+          "max": 10.0
+        },
+        "strong": {
+          "min": 10.0,
+          "max": 25.0
+        },
+        "heavy": 25.0
+      },
+      "duration": {
+        "onset": {
+          "min": 20.0,
+          "max": 60.0,
+          "units": "minutes"
+        },
+        "duration": null,
+        "total": {
+          "min": 4.0,
+          "max": 10.0,
+          "units": "hours"
+        }
+      }
+    },
+    {
+      "name": "smoked",
+      "dose": {
+        "units": "mg",
+        "threshold": 0.4,
+        "light": {
+          "min": 0.4,
+          "max": 2.0
+        },
+        "common": {
+          "min": 2.0,
+          "max": 4.0
+        },
+        "strong": {
+          "min": 4.0,
+          "max": 10.0
+        },
+        "heavy": 10.0
+      },
+      "duration": {
+        "onset": {
+          "min": 0.1,
+          "max": 10.0,
+          "units": "minutes"
+        },
+        "duration": null,
+        "total": {
+          "min": 2.5,
+          "max": 5.0,
+          "units": "hours"
+        }
+      }
+    },
+    {
+      "name": "sublingual",
+      "dose": null,
+      "duration": {
+        "onset": {
+          "min": 1.0,
+          "max": 10.0,
+          "units": "minutes"
+        },
+        "duration": null,
+        "total": {
+          "min": 3.0,
+          "max": 7.0,
+          "units": "hours"
+        }
+      }
+    }
+  ]
+}

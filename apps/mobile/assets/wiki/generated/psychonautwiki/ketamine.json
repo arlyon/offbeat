@@ -1,0 +1,95 @@
+{
+  "schemaVersion": 1,
+  "id": "ketamine",
+  "sourceName": "Ketamine",
+  "sourceUrl": "https://psychonautwiki.org/wiki/Ketamine",
+  "sourceRevision": "170226",
+  "sourceRevisionTimestamp": "2026-07-11T00:07:03Z",
+  "retrievedAt": "2026-08-11T10:10:17.574756Z",
+  "contentLicense": "CC BY 4.0 semantic data",
+  "contentLicenseUrl": "https://psychonautwiki.org/wiki/Copyrights",
+  "graphqlQuery": "query SubstanceForOfflineReference($query: String!) {\n  substances(query: $query) {\n    name\n    url\n    commonNames\n    class {\n      psychoactive\n    }\n    roas {\n      name\n      dose {\n        units\n        threshold\n        light { min max }\n        common { min max }\n        strong { min max }\n        heavy\n      }\n      duration {\n        onset { min max units }\n        duration { min max units }\n        total { min max units }\n      }\n    }\n  }\n}",
+  "sourcePayloadSha256": "3640cd229b59e706fc04a5b01d7dd418279eb2a6a9feff2f63e6649e9b7d0013",
+  "generatorVersion": "offbeat-psychonautwiki-import/2",
+  "commonNames": [
+    "Ketamine",
+    "K",
+    "Ket",
+    "Kitty",
+    "Special K",
+    "Cat Tranquilizer",
+    "Ketaset",
+    "Ketalar",
+    "Ketanest",
+    "Vitamin K",
+    "Purple",
+    "Jet"
+  ],
+  "psychoactiveClasses": [
+    "Dissociatives"
+  ],
+  "routes": [
+    {
+      "name": "insufflated",
+      "dose": {
+        "units": "mg",
+        "threshold": 5.0,
+        "light": {
+          "min": 10.0,
+          "max": 30.0
+        },
+        "common": {
+          "min": 30.0,
+          "max": 75.0
+        },
+        "strong": {
+          "min": 75.0,
+          "max": 150.0
+        },
+        "heavy": 150.0
+      },
+      "duration": {
+        "onset": {
+          "min": 1.0,
+          "max": 3.0,
+          "units": "minutes"
+        },
+        "duration": null,
+        "total": {
+          "min": 1.0,
+          "max": 2.0,
+          "units": "hours"
+        }
+      }
+    },
+    {
+      "name": "oral",
+      "dose": {
+        "units": "mg",
+        "threshold": 50.0,
+        "light": {
+          "min": 50.0,
+          "max": 100.0
+        },
+        "common": {
+          "min": 100.0,
+          "max": 300.0
+        },
+        "strong": {
+          "min": 300.0,
+          "max": 450.0
+        },
+        "heavy": 450.0
+      },
+      "duration": {
+        "onset": {
+          "min": 10.0,
+          "max": 30.0,
+          "units": "minutes"
+        },
+        "duration": null,
+        "total": null
+      }
+    }
+  ]
+}

@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "id": "alcohol",
+  "sourceName": "Alcohol",
+  "sourceUrl": "https://psychonautwiki.org/wiki/Alcohol",
+  "sourceRevision": "170265",
+  "sourceRevisionTimestamp": "2026-07-31T22:29:07Z",
+  "retrievedAt": "2026-08-11T10:10:15.036385Z",
+  "contentLicense": "CC BY 4.0 semantic data",
+  "contentLicenseUrl": "https://psychonautwiki.org/wiki/Copyrights",
+  "graphqlQuery": "query SubstanceForOfflineReference($query: String!) {\n  substances(query: $query) {\n    name\n    url\n    commonNames\n    class {\n      psychoactive\n    }\n    roas {\n      name\n      dose {\n        units\n        threshold\n        light { min max }\n        common { min max }\n        strong { min max }\n        heavy\n      }\n      duration {\n        onset { min max units }\n        duration { min max units }\n        total { min max units }\n      }\n    }\n  }\n}",
+  "sourcePayloadSha256": "adf5b2d279fc6ca3d2986dfb604e21084fcc9a036608c3049f8a8c9d4b959e48",
+  "generatorVersion": "offbeat-psychonautwiki-import/2",
+  "commonNames": [
+    "Alcohol",
+    "Booze",
+    "Liquor",
+    "Moonshine",
+    "Sauce",
+    "Juice",
+    "Bevvy"
+  ],
+  "psychoactiveClasses": [
+    "Depressant"
+  ],
+  "routes": [
+    {
+      "name": "oral",
+      "dose": {
+        "units": "g",
+        "threshold": 10.0,
+        "light": {
+          "min": 10.0,
+          "max": 20.0
+        },
+        "common": {
+          "min": 20.0,
+          "max": 30.0
+        },
+        "strong": {
+          "min": 30.0,
+          "max": 40.0
+        },
+        "heavy": 40.0
+      },
+      "duration": {
+        "onset": {
+          "min": 2.0,
+          "max": 5.0,
+          "units": "minutes"
+        },
+        "duration": null,
+        "total": {
+          "min": 1.5,
+          "max": 5.0,
+          "units": "hours"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,92 @@
+{
+  "schemaVersion": 1,
+  "id": "4-aco-dmt",
+  "sourceName": "4-AcO-DMT",
+  "sourceUrl": "https://psychonautwiki.org/wiki/4-AcO-DMT",
+  "sourceRevision": "166908",
+  "sourceRevisionTimestamp": "2025-05-02T23:56:35Z",
+  "retrievedAt": "2026-08-11T10:10:14.786991Z",
+  "contentLicense": "CC BY 4.0 semantic data",
+  "contentLicenseUrl": "https://psychonautwiki.org/wiki/Copyrights",
+  "graphqlQuery": "query SubstanceForOfflineReference($query: String!) {\n  substances(query: $query) {\n    name\n    url\n    commonNames\n    class {\n      psychoactive\n    }\n    roas {\n      name\n      dose {\n        units\n        threshold\n        light { min max }\n        common { min max }\n        strong { min max }\n        heavy\n      }\n      duration {\n        onset { min max units }\n        duration { min max units }\n        total { min max units }\n      }\n    }\n  }\n}",
+  "sourcePayloadSha256": "367dbfc855da5b263737d0bbdd41521df04fca31ecc498145f4b26ca84748584",
+  "generatorVersion": "offbeat-psychonautwiki-import/2",
+  "commonNames": [
+    "4-AcO-DMT",
+    "4-Acetoxy-DMT",
+    "Psilacetin",
+    "O-Acetylpsilocin",
+    "Synthetic mushrooms"
+  ],
+  "psychoactiveClasses": [
+    "Psychedelic"
+  ],
+  "routes": [
+    {
+      "name": "insufflated",
+      "dose": {
+        "units": "mg",
+        "threshold": 5.0,
+        "light": {
+          "min": 10.0,
+          "max": 15.0
+        },
+        "common": {
+          "min": 15.0,
+          "max": 25.0
+        },
+        "strong": {
+          "min": 25.0,
+          "max": 50.0
+        },
+        "heavy": 50.0
+      },
+      "duration": {
+        "onset": {
+          "min": 5.0,
+          "max": 25.0,
+          "units": "minutes"
+        },
+        "duration": null,
+        "total": {
+          "min": 3.0,
+          "max": 5.0,
+          "units": "hours"
+        }
+      }
+    },
+    {
+      "name": "oral",
+      "dose": {
+        "units": "mg",
+        "threshold": 5.0,
+        "light": {
+          "min": 7.5,
+          "max": 15.0
+        },
+        "common": {
+          "min": 15.0,
+          "max": 25.0
+        },
+        "strong": {
+          "min": 25.0,
+          "max": 45.0
+        },
+        "heavy": 45.0
+      },
+      "duration": {
+        "onset": {
+          "min": 15.0,
+          "max": 40.0,
+          "units": "minutes"
+        },
+        "duration": null,
+        "total": {
+          "min": 4.0,
+          "max": 7.0,
+          "units": "hours"
+        }
+      }
+    }
+  ]
+}

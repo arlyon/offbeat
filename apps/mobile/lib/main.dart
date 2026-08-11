@@ -24,6 +24,7 @@ import 'screens/chat/public_chat_screen.dart';
 import 'screens/you/registration_screen.dart';
 import 'screens/you/you_screen.dart';
 import 'screens/social/social_screen.dart';
+import 'wiki/wiki_screen.dart';
 import 'services/auth_service.dart';
 import 'services/admin_service.dart';
 import 'services/festival_admin_service.dart';
@@ -924,6 +925,14 @@ class _OffbeatShellState extends State<_OffbeatShell>
     }
   }
 
+  void _openWiki() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => WikiScreen(countryCode: _selectedFestival?.cc),
+      ),
+    );
+  }
+
   void _showSettingsSheet() {
     _refreshAdminStatus();
     showModalBottomSheet(
@@ -1059,6 +1068,14 @@ class _OffbeatShellState extends State<_OffbeatShell>
                   onRestartBle: () => _node?.restartBle(),
                 ),
                 rightWidgets: [
+                  Semantics(
+                    button: true,
+                    label: 'Open offline field guide',
+                    child: NavIconButton(
+                      icon: Icons.health_and_safety_outlined,
+                      onTap: _openWiki,
+                    ),
+                  ),
                   // Crossfade between settings (lobby) and search+admin (festival)
                   AnimatedBuilder(
                     animation: _navController,

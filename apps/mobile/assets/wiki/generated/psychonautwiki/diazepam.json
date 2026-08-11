@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "id": "diazepam",
+  "sourceName": "Diazepam",
+  "sourceUrl": "https://psychonautwiki.org/wiki/Diazepam",
+  "sourceRevision": "168156",
+  "sourceRevisionTimestamp": "2025-07-11T14:47:10Z",
+  "retrievedAt": "2026-08-11T10:10:16.553807Z",
+  "contentLicense": "CC BY 4.0 semantic data",
+  "contentLicenseUrl": "https://psychonautwiki.org/wiki/Copyrights",
+  "graphqlQuery": "query SubstanceForOfflineReference($query: String!) {\n  substances(query: $query) {\n    name\n    url\n    commonNames\n    class {\n      psychoactive\n    }\n    roas {\n      name\n      dose {\n        units\n        threshold\n        light { min max }\n        common { min max }\n        strong { min max }\n        heavy\n      }\n      duration {\n        onset { min max units }\n        duration { min max units }\n        total { min max units }\n      }\n    }\n  }\n}",
+  "sourcePayloadSha256": "b4e618a4144acf6038617485c1ba6a9a4cfadd5a43e2e675459cddedfde28e6e",
+  "generatorVersion": "offbeat-psychonautwiki-import/2",
+  "commonNames": [
+    "Valium",
+    "Diastat",
+    "Mother's Little Helper",
+    "Apaurin"
+  ],
+  "psychoactiveClasses": [
+    "Depressant"
+  ],
+  "routes": [
+    {
+      "name": "oral",
+      "dose": {
+        "units": "mg",
+        "threshold": 1.0,
+        "light": {
+          "min": 2.5,
+          "max": 5.0
+        },
+        "common": {
+          "min": 5.0,
+          "max": 15.0
+        },
+        "strong": {
+          "min": 15.0,
+          "max": 30.0
+        },
+        "heavy": 30.0
+      },
+      "duration": {
+        "onset": {
+          "min": 20.0,
+          "max": 40.0,
+          "units": "minutes"
+        },
+        "duration": null,
+        "total": {
+          "min": 4.0,
+          "max": 8.0,
+          "units": "hours"
+        }
+      }
+    }
+  ]
+}

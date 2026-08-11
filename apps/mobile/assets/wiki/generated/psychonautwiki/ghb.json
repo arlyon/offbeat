@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "id": "ghb",
+  "sourceName": "GHB",
+  "sourceUrl": "https://psychonautwiki.org/wiki/GHB",
+  "sourceRevision": "170109",
+  "sourceRevisionTimestamp": "2026-03-17T05:19:06Z",
+  "retrievedAt": "2026-08-11T10:10:17.240237Z",
+  "contentLicense": "CC BY 4.0 semantic data",
+  "contentLicenseUrl": "https://psychonautwiki.org/wiki/Copyrights",
+  "graphqlQuery": "query SubstanceForOfflineReference($query: String!) {\n  substances(query: $query) {\n    name\n    url\n    commonNames\n    class {\n      psychoactive\n    }\n    roas {\n      name\n      dose {\n        units\n        threshold\n        light { min max }\n        common { min max }\n        strong { min max }\n        heavy\n      }\n      duration {\n        onset { min max units }\n        duration { min max units }\n        total { min max units }\n      }\n    }\n  }\n}",
+  "sourcePayloadSha256": "77a098ca1e5bc6f585854e9c55c93a4d71a722a79b9dcc09f989ce04333cbb79",
+  "generatorVersion": "offbeat-psychonautwiki-import/2",
+  "commonNames": [
+    "GHB",
+    "G",
+    "Xyrem",
+    "Sodium oxybate"
+  ],
+  "psychoactiveClasses": [
+    "Depressant"
+  ],
+  "routes": [
+    {
+      "name": "oral",
+      "dose": {
+        "units": "g",
+        "threshold": 0.5,
+        "light": {
+          "min": 0.5,
+          "max": 1.0
+        },
+        "common": {
+          "min": 1.0,
+          "max": 2.5
+        },
+        "strong": {
+          "min": 2.5,
+          "max": 4.0
+        },
+        "heavy": 4.0
+      },
+      "duration": {
+        "onset": {
+          "min": 5.0,
+          "max": 30.0,
+          "units": "minutes"
+        },
+        "duration": null,
+        "total": {
+          "min": 1.5,
+          "max": 2.5,
+          "units": "hours"
+        }
+      }
+    }
+  ]
+}

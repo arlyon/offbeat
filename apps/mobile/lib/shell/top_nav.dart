@@ -245,8 +245,8 @@ class NavIconButton extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       child: SizedBox(
-        width: 36,
-        height: 36,
+        width: tapMin,
+        height: tapMin,
         child: Stack(
           alignment: Alignment.center,
           children: [

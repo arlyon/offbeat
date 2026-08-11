@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "id": "nitrous-oxide",
+  "sourceName": "Nitrous",
+  "sourceUrl": "https://psychonautwiki.org/wiki/Nitrous",
+  "sourceRevision": "167646",
+  "sourceRevisionTimestamp": "2025-06-26T13:59:12Z",
+  "retrievedAt": "2026-08-11T10:10:19.224327Z",
+  "contentLicense": "CC BY 4.0 semantic data",
+  "contentLicenseUrl": "https://psychonautwiki.org/wiki/Copyrights",
+  "graphqlQuery": "query SubstanceForOfflineReference($query: String!) {\n  substances(query: $query) {\n    name\n    url\n    commonNames\n    class {\n      psychoactive\n    }\n    roas {\n      name\n      dose {\n        units\n        threshold\n        light { min max }\n        common { min max }\n        strong { min max }\n        heavy\n      }\n      duration {\n        onset { min max units }\n        duration { min max units }\n        total { min max units }\n      }\n    }\n  }\n}",
+  "sourcePayloadSha256": "72076b9971e5e9ae92e6c0233c6ad6ab1e9a65c315ee31e777273e9de0942401",
+  "generatorVersion": "offbeat-psychonautwiki-import/2",
+  "commonNames": [
+    "Nitrous Oxide",
+    "Laughing Gas",
+    "Nitrous",
+    "Hippy Crack",
+    "NOS",
+    "Nitro",
+    "N2O",
+    "Nangs"
+  ],
+  "psychoactiveClasses": [
+    "Dissociatives"
+  ],
+  "routes": [
+    {
+      "name": "inhaled",
+      "dose": {
+        "units": "g",
+        "threshold": 4.0,
+        "light": {
+          "min": 4.0,
+          "max": 8.0
+        },
+        "common": {
+          "min": 8.0,
+          "max": 16.0
+        },
+        "strong": {
+          "min": 16.0,
+          "max": 40.0
+        },
+        "heavy": 40.0
+      },
+      "duration": {
+        "onset": {
+          "min": 5.0,
+          "max": 10.0,
+          "units": "seconds"
+        },
+        "duration": null,
+        "total": {
+          "min": 1.0,
+          "max": 5.0,
+          "units": "minutes"
+        }
+      }
+    }
+  ]
+}

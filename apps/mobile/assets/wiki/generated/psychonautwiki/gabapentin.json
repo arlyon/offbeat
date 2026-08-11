@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "id": "gabapentin",
+  "sourceName": "Gabapentin",
+  "sourceUrl": "https://psychonautwiki.org/wiki/Gabapentin",
+  "sourceRevision": "169791",
+  "sourceRevisionTimestamp": "2025-11-29T03:53:20Z",
+  "retrievedAt": "2026-08-11T10:10:17.039139Z",
+  "contentLicense": "CC BY 4.0 semantic data",
+  "contentLicenseUrl": "https://psychonautwiki.org/wiki/Copyrights",
+  "graphqlQuery": "query SubstanceForOfflineReference($query: String!) {\n  substances(query: $query) {\n    name\n    url\n    commonNames\n    class {\n      psychoactive\n    }\n    roas {\n      name\n      dose {\n        units\n        threshold\n        light { min max }\n        common { min max }\n        strong { min max }\n        heavy\n      }\n      duration {\n        onset { min max units }\n        duration { min max units }\n        total { min max units }\n      }\n    }\n  }\n}",
+  "sourcePayloadSha256": "6bc15f81077253a0ea4c98e4af16b3d599607ef691e0332e409b1a7a122b9d82",
+  "generatorVersion": "offbeat-psychonautwiki-import/2",
+  "commonNames": [
+    "Gabapentin",
+    "Neurontin",
+    "Gabarone",
+    "Gralise"
+  ],
+  "psychoactiveClasses": [
+    "Depressant"
+  ],
+  "routes": [
+    {
+      "name": "oral",
+      "dose": {
+        "units": "mg",
+        "threshold": 200.0,
+        "light": {
+          "min": 200.0,
+          "max": 900.0
+        },
+        "common": {
+          "min": 900.0,
+          "max": 1500.0
+        },
+        "strong": {
+          "min": 1500.0,
+          "max": 2400.0
+        },
+        "heavy": 2400.0
+      },
+      "duration": {
+        "onset": {
+          "min": 30.0,
+          "max": 120.0,
+          "units": "minutes"
+        },
+        "duration": null,
+        "total": {
+          "min": 6.0,
+          "max": 10.0,
+          "units": "hours"
+        }
+      }
+    }
+  ]
+}

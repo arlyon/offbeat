@@ -1,0 +1,45 @@
+{
+  "bundles": [
+    {
+      "id": "mdma",
+      "queryName": "MDMA",
+      "retrievedAt": "2026-08-11T00:00:00.000Z",
+      "revision": {
+        "id": "123456",
+        "timestamp": "2026-08-10T12:00:00Z"
+      },
+      "graphqlResponse": {
+        "data": {
+          "substances": [
+            {
+              "name": "MDMA",
+              "url": "https://psychonautwiki.org/wiki/MDMA",
+              "commonNames": ["Ecstasy"],
+              "class": {
+                "psychoactive": ["Entactogen", "Stimulant"]
+              },
+              "roas": [
+                {
+                  "name": "oral",
+                  "dose": {
+                    "units": "mg",
+                    "threshold": 20,
+                    "light": {"min": 20, "max": 80},
+                    "common": {"min": 80, "max": 120},
+                    "strong": {"min": 120, "max": 150},
+                    "heavy": 150
+                  },
+                  "duration": {
+                    "onset": {"min": 30, "max": 45, "units": "minutes"},
+                    "duration": null,
+                    "total": {"min": 3, "max": 6, "units": "hours"}
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,201 @@
+{
+  "schemaVersion": 1,
+  "id": "methamphetamine",
+  "sourceName": "Methamphetamine",
+  "sourceUrl": "https://psychonautwiki.org/wiki/Methamphetamine",
+  "sourceRevision": "169876",
+  "sourceRevisionTimestamp": "2025-11-29T08:25:14Z",
+  "retrievedAt": "2026-08-11T10:10:18.412756Z",
+  "contentLicense": "CC BY 4.0 semantic data",
+  "contentLicenseUrl": "https://psychonautwiki.org/wiki/Copyrights",
+  "graphqlQuery": "query SubstanceForOfflineReference($query: String!) {\n  substances(query: $query) {\n    name\n    url\n    commonNames\n    class {\n      psychoactive\n    }\n    roas {\n      name\n      dose {\n        units\n        threshold\n        light { min max }\n        common { min max }\n        strong { min max }\n        heavy\n      }\n      duration {\n        onset { min max units }\n        duration { min max units }\n        total { min max units }\n      }\n    }\n  }\n}",
+  "sourcePayloadSha256": "a0a94468d9f0dd2e8744bf2b77f947e78e18284fe601db9600b159b4a71ae8c4",
+  "generatorVersion": "offbeat-psychonautwiki-import/2",
+  "commonNames": [
+    "Methamphetamine",
+    "Meth",
+    "Crystal",
+    "Desoxyn",
+    "Speed",
+    "Ma",
+    "Ice",
+    "Glass",
+    "Shard",
+    "Tina",
+    "T",
+    "Tweak",
+    "Crank",
+    "Shabu",
+    "Yaba"
+  ],
+  "psychoactiveClasses": [
+    "Stimulants"
+  ],
+  "routes": [
+    {
+      "name": "insufflated",
+      "dose": {
+        "units": "mg",
+        "threshold": 5.0,
+        "light": {
+          "min": 5.0,
+          "max": 10.0
+        },
+        "common": {
+          "min": 10.0,
+          "max": 30.0
+        },
+        "strong": {
+          "min": 30.0,
+          "max": 60.0
+        },
+        "heavy": 60.0
+      },
+      "duration": {
+        "onset": {
+          "min": 3.0,
+          "max": 5.0,
+          "units": "minutes"
+        },
+        "duration": null,
+        "total": {
+          "min": 4.0,
+          "max": 7.0,
+          "units": "hours"
+        }
+      }
+    },
+    {
+      "name": "intravenous",
+      "dose": {
+        "units": "mg",
+        "threshold": 5.0,
+        "light": {
+          "min": 5.0,
+          "max": 10.0
+        },
+        "common": {
+          "min": 10.0,
+          "max": 30.0
+        },
+        "strong": {
+          "min": 30.0,
+          "max": 40.0
+        },
+        "heavy": 40.0
+      },
+      "duration": {
+        "onset": {
+          "min": 15.0,
+          "max": 30.0,
+          "units": "seconds"
+        },
+        "duration": null,
+        "total": {
+          "min": 4.0,
+          "max": 8.0,
+          "units": "hours"
+        }
+      }
+    },
+    {
+      "name": "oral",
+      "dose": {
+        "units": "mg",
+        "threshold": 5.0,
+        "light": {
+          "min": 5.0,
+          "max": 10.0
+        },
+        "common": {
+          "min": 10.0,
+          "max": 25.0
+        },
+        "strong": {
+          "min": 25.0,
+          "max": 50.0
+        },
+        "heavy": 50.0
+      },
+      "duration": {
+        "onset": {
+          "min": 15.0,
+          "max": 45.0,
+          "units": "minutes"
+        },
+        "duration": null,
+        "total": {
+          "min": 8.0,
+          "max": 12.0,
+          "units": "hours"
+        }
+      }
+    },
+    {
+      "name": "rectal",
+      "dose": {
+        "units": "mg",
+        "threshold": 5.0,
+        "light": {
+          "min": 5.0,
+          "max": 10.0
+        },
+        "common": {
+          "min": 10.0,
+          "max": 30.0
+        },
+        "strong": {
+          "min": 30.0,
+          "max": 40.0
+        },
+        "heavy": 40.0
+      },
+      "duration": {
+        "onset": {
+          "min": 5.0,
+          "max": 15.0,
+          "units": "minutes"
+        },
+        "duration": null,
+        "total": {
+          "min": 6.0,
+          "max": 10.0,
+          "units": "hours"
+        }
+      }
+    },
+    {
+      "name": "smoked",
+      "dose": {
+        "units": "mg",
+        "threshold": 5.0,
+        "light": {
+          "min": 5.0,
+          "max": 10.0
+        },
+        "common": {
+          "min": 10.0,
+          "max": 20.0
+        },
+        "strong": {
+          "min": 20.0,
+          "max": 60.0
+        },
+        "heavy": 60.0
+      },
+      "duration": {
+        "onset": {
+          "min": 7.0,
+          "max": 10.0,
+          "units": "seconds"
+        },
+        "duration": null,
+        "total": {
+          "min": 2.0,
+          "max": 6.0,
+          "units": "hours"
+        }
+      }
+    }
+  ]
+}

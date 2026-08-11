@@ -1,0 +1,166 @@
+{
+  "schemaVersion": 1,
+  "id": "cocaine",
+  "sourceName": "Cocaine",
+  "sourceUrl": "https://psychonautwiki.org/wiki/Cocaine",
+  "sourceRevision": "169796",
+  "sourceRevisionTimestamp": "2025-11-29T03:55:27Z",
+  "retrievedAt": "2026-08-11T10:10:16.104264Z",
+  "contentLicense": "CC BY 4.0 semantic data",
+  "contentLicenseUrl": "https://psychonautwiki.org/wiki/Copyrights",
+  "graphqlQuery": "query SubstanceForOfflineReference($query: String!) {\n  substances(query: $query) {\n    name\n    url\n    commonNames\n    class {\n      psychoactive\n    }\n    roas {\n      name\n      dose {\n        units\n        threshold\n        light { min max }\n        common { min max }\n        strong { min max }\n        heavy\n      }\n      duration {\n        onset { min max units }\n        duration { min max units }\n        total { min max units }\n      }\n    }\n  }\n}",
+  "sourcePayloadSha256": "e1c807a235615cac52222d037d3f4128b603e364fc196c32f8de130b59376022",
+  "generatorVersion": "offbeat-psychonautwiki-import/2",
+  "commonNames": [
+    "Cocaine",
+    "Coke",
+    "Coca",
+    "Crack",
+    "Blow",
+    "Girl",
+    "White",
+    "Snow",
+    "Nose Candy",
+    "Yayo",
+    "Perico",
+    "Gear",
+    "Chari"
+  ],
+  "psychoactiveClasses": [
+    "Stimulants"
+  ],
+  "routes": [
+    {
+      "name": "insufflated",
+      "dose": {
+        "units": "mg",
+        "threshold": 5.0,
+        "light": {
+          "min": 10.0,
+          "max": 30.0
+        },
+        "common": {
+          "min": 30.0,
+          "max": 60.0
+        },
+        "strong": {
+          "min": 60.0,
+          "max": 90.0
+        },
+        "heavy": 90.0
+      },
+      "duration": {
+        "onset": {
+          "min": 3.0,
+          "max": 10.0,
+          "units": "minutes"
+        },
+        "duration": null,
+        "total": {
+          "min": 10.0,
+          "max": 90.0,
+          "units": "minutes"
+        }
+      }
+    },
+    {
+      "name": "intravenous",
+      "dose": {
+        "units": "mg",
+        "threshold": 2.0,
+        "light": {
+          "min": 2.0,
+          "max": 5.0
+        },
+        "common": {
+          "min": 5.0,
+          "max": 10.0
+        },
+        "strong": {
+          "min": 10.0,
+          "max": 15.0
+        },
+        "heavy": 15.0
+      },
+      "duration": {
+        "onset": {
+          "min": 3.0,
+          "max": 5.0,
+          "units": "seconds"
+        },
+        "duration": null,
+        "total": {
+          "min": 5.0,
+          "max": 15.0,
+          "units": "minutes"
+        }
+      }
+    },
+    {
+      "name": "oral",
+      "dose": {
+        "units": "mg",
+        "threshold": 13.0,
+        "light": {
+          "min": 13.0,
+          "max": 75.0
+        },
+        "common": {
+          "min": 75.0,
+          "max": 150.0
+        },
+        "strong": {
+          "min": 150.0,
+          "max": 225.0
+        },
+        "heavy": 225.0
+      },
+      "duration": {
+        "onset": {
+          "min": 30.0,
+          "max": 40.0,
+          "units": "minutes"
+        },
+        "duration": null,
+        "total": {
+          "min": 120.0,
+          "max": 240.0,
+          "units": "minutes"
+        }
+      }
+    },
+    {
+      "name": "smoked",
+      "dose": {
+        "units": "mg",
+        "threshold": 2.5,
+        "light": {
+          "min": 5.0,
+          "max": 15.0
+        },
+        "common": {
+          "min": 15.0,
+          "max": 30.0
+        },
+        "strong": {
+          "min": 30.0,
+          "max": 45.0
+        },
+        "heavy": 45.0
+      },
+      "duration": {
+        "onset": {
+          "min": 3.0,
+          "max": 5.0,
+          "units": "seconds"
+        },
+        "duration": null,
+        "total": {
+          "min": 5.0,
+          "max": 15.0,
+          "units": "minutes"
+        }
+      }
+    }
+  ]
+}
