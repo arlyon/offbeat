@@ -1,0 +1,207 @@
+{
+  "copyright": "Licensed under a Creative Commons Attribution-NonCommercial 3.0 License https://creativecommons.org/licenses/by-nc/3.0/. Free for non-commercial use. Contact halvin@clashfinder.com for other uses.",
+  "created": "2026-03-05 11:26",
+  "lastEdit": "2026-07-06 23:06",
+  "modified": "2026-07-06 23:06",
+  "name": "LOST 2026",
+  "id": "lost26",
+  "url": "https://clashfinder.com/s/lost26/",
+  "printAdvisory": 5,
+  "timezone": "Europe/London",
+  "tzOffset": 3600,
+  "tzNote": "Start and end times are given in the timezone of the event. Offset by -tzOffset for UTC.",
+  "auth": {
+    "result": "pass",
+    "authUsername": "arlyon"
+  },
+  "locations": [
+    {
+      "name": "Bamboo 1 Stage",
+      "events": [
+        {
+          "name": "Grace & Raffaella",
+          "short": "gracer(1)",
+          "start": "2026-07-03 19:30",
+          "end": "2026-07-03 21:00"
+        },
+        {
+          "name": "Yawning Portal present Anywhere – Extended",
+          "short": "yawnin(1)",
+          "start": "2026-07-04 01:30",
+          "end": "2026-07-04 02:45"
+        },
+        {
+          "name": "Ulla",
+          "short": "ulla(1)",
+          "start": "2026-07-04 11:00",
+          "end": "2026-07-04 13:00"
+        },
+        {
+          "name": "Kiernan Laveaux",
+          "short": "kierna(1)",
+          "start": "2026-07-04 14:00",
+          "end": "2026-07-04 16:00"
+        },
+        {
+          "name": "BV/XT (Ben Vince + Xterea)",
+          "short": "bvxtbe(1)",
+          "start": "2026-07-04 17:00",
+          "end": "2026-07-04 19:00"
+        },
+        {
+          "name": "Saint Abdullah & Eomac",
+          "short": "sainta(1)",
+          "start": "2026-07-04 20:00",
+          "end": "2026-07-04 21:00"
+        },
+        {
+          "name": "20_14 assembly w/ Felicia Ledesma, Voice Actor, Rune Kielsgaard",
+          "short": "2014as(1)",
+          "start": "2026-07-05 01:30",
+          "end": "2026-07-05 02:30"
+        },
+        {
+          "name": "Debit presents Cumbia Relajada Tribute",
+          "short": "debitp(1)",
+          "start": "2026-07-05 12:00",
+          "end": "2026-07-05 14:00"
+        },
+        {
+          "name": "CCL presents Liquidtime",
+          "short": "cclpre(1)",
+          "start": "2026-07-05 15:00",
+          "end": "2026-07-05 17:00"
+        },
+        {
+          "name": "Yunis",
+          "short": "yunis(1)",
+          "start": "2026-07-05 18:00",
+          "end": "2026-07-05 19:00"
+        },
+        {
+          "name": "Foodman",
+          "short": "foodma(1)",
+          "start": "2026-07-05 19:00",
+          "end": "2026-07-05 21:00"
+        }
+      ]
+    },
+    {
+      "name": "Bamboo 2 Stage",
+      "events": [
+        {
+          "name": "More Eaze",
+          "short": "moreea(1)",
+          "start": "2026-07-04 13:00",
+          "end": "2026-07-04 14:00"
+        },
+        {
+          "name": "Raisa K feat. Coby Sey",
+          "short": "raisak1(1)",
+          "start": "2026-07-04 16:00",
+          "end": "2026-07-04 17:00"
+        },
+        {
+          "name": "SECRET GUESTS (Ange Halliwell & Pablo Altar)",
+          "short": "secret(1)",
+          "start": "2026-07-04 19:00",
+          "end": "2026-07-04 20:00"
+        },
+        {
+          "name": "Dylan Henner",
+          "short": "dylanh(1)",
+          "start": "2026-07-05 11:00",
+          "end": "2026-07-05 12:00"
+        },
+        {
+          "name": "Heith & Tarawangsawelas present Duori",
+          "short": "heitht(1)",
+          "start": "2026-07-05 14:00",
+          "end": "2026-07-05 15:00"
+        },
+        {
+          "name": "Jabu",
+          "short": "jabu(1)",
+          "start": "2026-07-05 17:00",
+          "end": "2026-07-05 18:00"
+        }
+      ]
+    },
+    {
+      "name": "Pyramid Stage",
+      "events": [
+        {
+          "name": "TLF Trio",
+          "short": "tlftri(1)",
+          "start": "2026-07-03 21:30",
+          "end": "2026-07-03 22:30"
+        },
+        {
+          "name": "keiyaA ",
+          "short": "keiyaa(1)",
+          "start": "2026-07-03 22:30",
+          "end": "2026-07-03 23:30"
+        },
+        {
+          "name": "SUUTOO presents STARFIRE",
+          "short": "suutoo(1)",
+          "start": "2026-07-03 23:30",
+          "end": "2026-07-04 00:30"
+        },
+        {
+          "name": "feoo ",
+          "short": "feoo1(1)",
+          "start": "2026-07-04 21:30",
+          "end": "2026-07-04 22:30"
+        },
+        {
+          "name": "Microplastics (96 Back + aya + Jennifer Walton)",
+          "short": "microp1(1)",
+          "start": "2026-07-04 22:30",
+          "end": "2026-07-04 23:30"
+        },
+        {
+          "name": "Prison Religion present Psalms",
+          "short": "prison(1)",
+          "start": "2026-07-04 23:30",
+          "end": "2026-07-05 00:30"
+        }
+      ]
+    },
+    {
+      "name": "Gate Stage",
+      "events": [
+        {
+          "name": "RHR",
+          "short": "rhr(1)",
+          "start": "2026-07-04 01:00",
+          "end": "2026-07-04 03:00"
+        },
+        {
+          "name": "KAVARI (dj set)",
+          "short": "kavari1(1)",
+          "start": "2026-07-04 03:00",
+          "end": "2026-07-04 04:00"
+        },
+        {
+          "name": "JOKKOO (Baba Sy, Mooki6 & B4mba)",
+          "short": "jokkoo(1)",
+          "start": "2026-07-05 01:00",
+          "end": "2026-07-05 02:30"
+        },
+        {
+          "name": "Bobby Bethoven",
+          "short": "bobbyb1(1)",
+          "start": "2026-07-05 02:30",
+          "end": "2026-07-05 04:00"
+        },
+        {
+          "name": "gyrofield",
+          "short": "gyrofi(1)",
+          "start": "2026-07-05 21:00",
+          "end": "2026-07-06 00:00"
+        }
+      ]
+    }
+  ]
+}

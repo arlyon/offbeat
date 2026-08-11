@@ -1,3 +1,4 @@
+import { parseArtistBilling } from "./artist-billing.js";
 import type { ClashfinderApiEvent, ClashfinderApiResponse } from "./clashfinder-api.js";
 import type { Day, Lineup, Set as LineupSet, Stage } from "./types.js";
 
@@ -111,7 +112,7 @@ export function parseClashfinderApi(
 	}
 
 	// Sort days chronologically and build Day objects
-	const sortedDayKeys = [...dayMap.keys()].sort();
+	const sortedDayKeys = [...dayMap.keys()].sort((left, right) => left.localeCompare(right));
 	const days: Day[] = sortedDayKeys.map((key) => {
 		const entry = dayMap.get(key);
 		if (!entry) throw new Error(`Day entry not found for key: ${key}`);
@@ -147,12 +148,18 @@ export function parseClashfinderApi(
 				"-",
 			);
 
+		const parsedBilling = parseArtistBilling(event.artist, event.artistMbid);
 		return {
 			id: stableId(idSource),
 			day: dayId,
 			stage: event.stage.id,
 			artist: event.artist,
+			sourceBilling: event.artist,
 			...(event.artistMbid ? { artistMbid: event.artistMbid } : {}),
+			...(parsedBilling.presentedTitle ? { presentedTitle: parsedBilling.presentedTitle } : {}),
+			...(parsedBilling.performanceQualifiers.length > 0
+				? { performanceQualifiers: parsedBilling.performanceQualifiers }
+				: {}),
 			startMin,
 			durationMin,
 			genre: "",

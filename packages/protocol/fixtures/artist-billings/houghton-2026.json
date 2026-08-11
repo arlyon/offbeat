@@ -1,0 +1,70 @@
+{
+  "festival": "Houghton Festival 2026",
+  "officialTimetableUrl": "https://www.houghtonfestival.co.uk/wp-content/uploads/2026/08/htn26-timetable-mobile-0805.pdf",
+  "retrievedAt": "2026-08-11",
+  "billings": [
+    {
+      "sourceBilling": "MIDLAND",
+      "expectedCanonicalNames": ["Midland"]
+    },
+    {
+      "sourceBilling": "MIDLAND (AMBIENT SET)",
+      "expectedCanonicalNames": ["Midland"],
+      "expectedQualifiers": ["ambient_set"]
+    },
+    {
+      "sourceBilling": "AL WOOTTON (DJ SET)",
+      "expectedCanonicalNames": ["Al Wootton"],
+      "expectedQualifiers": ["dj_set"]
+    },
+    {
+      "sourceBilling": "DEADBEAT (DJ SET)",
+      "expectedCanonicalNames": ["Deadbeat"],
+      "expectedQualifiers": ["dj_set"]
+    },
+    {
+      "sourceBilling": "THE GHOST",
+      "expectedCanonicalNames": ["The Ghost"]
+    },
+    {
+      "sourceBilling": "GENE ON EARTH",
+      "expectedCanonicalNames": ["Gene On Earth"]
+    },
+    {
+      "sourceBilling": "COAST 2 COAST (THE GHOST & GENE ON EARTH)",
+      "expectedCanonicalNames": ["The Ghost", "Gene On Earth"]
+    },
+    {
+      "sourceBilling": "DAN BEAUMONT",
+      "expectedCanonicalNames": ["Dan Beaumont"]
+    },
+    {
+      "sourceBilling": "HARRY & DAN TEA DANCE",
+      "expectedCanonicalNames": ["Midland", "Dan Beaumont"],
+      "expectedPresentedTitle": "Tea Dance"
+    },
+    {
+      "sourceBilling": "Harry & Dan Present Tea Dance",
+      "sourceKind": "user-reported-import-variant",
+      "expectedCanonicalNames": ["Midland", "Dan Beaumont"],
+      "expectedPresentedTitle": "Tea Dance"
+    },
+    {
+      "sourceBilling": "HAMISH & TOBY",
+      "expectedCanonicalNames": ["Hamish & Toby"]
+    },
+    {
+      "sourceBilling": "TRUTH & LIES",
+      "expectedCanonicalNames": ["Truth & Lies"]
+    },
+    {
+      "sourceBilling": "NÍDIA & VALENTINA (LIVE)",
+      "expectedCanonicalNames": ["Nídia", "Valentina"],
+      "expectedQualifiers": ["live"]
+    },
+    {
+      "sourceBilling": "UNDERGROUND RESISTANCE FEATURING SAUL WILLIAMS",
+      "expectedCanonicalNames": ["Underground Resistance", "Saul Williams"]
+    }
+  ]
+}

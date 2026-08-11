@@ -69,13 +69,63 @@ export interface ArtistProfile {
 	updatedAt: string;
 }
 
+export type ArtistCreditRole = "performer" | "presenter" | "guest";
+
+export type PerformanceQualifier = "dj_set" | "live" | "ambient_set" | "hybrid_set";
+
+export interface ArtistCredit {
+	artistId: string;
+	canonicalName: string;
+	creditedAs: string;
+	role: ArtistCreditRole;
+}
+
+export interface ArtistCreditProposal {
+	canonicalName: string;
+	creditedAs: string;
+	role: ArtistCreditRole;
+	confidence: number;
+}
+
+export interface ArtistResolutionEvidence {
+	url: string;
+	title: string;
+	claims: Array<"alias" | "act_identity" | "event_billing">;
+	retrievedAt: string;
+}
+
+export interface ArtistBillingResolution {
+	id: string;
+	sourceBilling: string;
+	billingKey: string;
+	status: "resolved" | "needs_review" | "unresolved";
+	method: "deterministic" | "ai" | "manual" | "legacy";
+	confidence: number;
+	credits: ArtistCredit[];
+	proposedCredits?: ArtistCreditProposal[];
+	presentedTitle?: string;
+	performanceQualifiers: PerformanceQualifier[];
+	evidence: ArtistResolutionEvidence[];
+	inputHash: string;
+	processorVersion: string;
+	model?: string;
+	version: number;
+}
+
 export interface Set {
 	id: string;
 	day: string; // Day id ref
 	stage: string; // Stage id ref
+	/** Exact source billing retained for backward-compatible display. */
 	artist: string;
+	/** Explicit copy of the exact source billing for newer clients. */
+	sourceBilling?: string;
 	artistMbid?: string;
 	artistIds?: string[];
+	billingResolutionId?: string;
+	artistCredits?: ArtistCredit[];
+	presentedTitle?: string;
+	performanceQualifiers?: PerformanceQualifier[];
 	startMin: number; // minutes from midnight
 	durationMin: number;
 	genre: string;
@@ -88,6 +138,7 @@ export interface Lineup {
 	days: Day[];
 	sets: Set[];
 	artists?: ArtistProfile[];
+	billingResolutions?: ArtistBillingResolution[];
 }
 
 export interface MemberLocation {

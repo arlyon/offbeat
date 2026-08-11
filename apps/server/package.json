@@ -13,7 +13,8 @@
 		"festival:seed": "npx tsx scripts/seed-festivals.ts",
 		"festival:delete": "npx tsx scripts/delete-festival.ts",
 		"festival:reset": "npx tsx scripts/reset-all.ts",
-		"festival:announce": "npx tsx scripts/announce.ts"
+		"festival:announce": "npx tsx scripts/announce.ts",
+		"artist:resolution": "npx tsx scripts/artist-resolution.ts"
 	},
 	"dependencies": {
 		"@bufbuild/protobuf": "^2.12.0",

@@ -31,6 +31,34 @@ describe("artist enrichment", () => {
 		expect(fetcher).not.toHaveBeenCalled();
 	});
 
+	it("does not let a source MBID collapse a composite billing", async () => {
+		const fetcher = vi.fn<typeof fetch>();
+		const outcome = await enrichArtist(
+			{
+				festivalId: "festival",
+				setIds: ["set-1"],
+				billing: "Raisa K feat. Coby Sey",
+				mbid: MBID,
+			},
+			{ userAgent: "Offbeat/Test", fetch: fetcher },
+		);
+		expect(outcome).toEqual({ status: "unresolved", reason: "ambiguous_billing" });
+		expect(fetcher).not.toHaveBeenCalled();
+	});
+
+	it("rejects a source MBID whose canonical name and aliases do not match the billing", async () => {
+		const fetcher = vi
+			.fn<typeof fetch>()
+			.mockResolvedValueOnce(
+				jsonResponse({ id: MBID, name: "Different Artist", aliases: [{ name: "Other Name" }] }),
+			);
+		const outcome = await enrichArtist(
+			{ festivalId: "festival", setIds: ["set-1"], billing: "Example Artist", mbid: MBID },
+			{ userAgent: "Offbeat/Test", fetch: fetcher },
+		);
+		expect(outcome).toEqual({ status: "unresolved", reason: "mbid_name_mismatch" });
+	});
+
 	it("recognizes only explicit collaboration separators", () => {
 		expect(isAmbiguousArtistBilling("A & B")).toBe(true);
 		expect(isAmbiguousArtistBilling("A b2b B")).toBe(true);
@@ -134,6 +162,26 @@ describe("artist enrichment", () => {
 		expect(outcome).toMatchObject({ status: "enriched", profile: { mbid: MBID } });
 		expect(fetcher).toHaveBeenCalledTimes(2);
 		expect(beforeMusicBrainzRequest).toHaveBeenCalledTimes(2);
+	});
+
+	it("allows an AI-confirmed legitimate separator act to use exact provider matching", async () => {
+		const fetcher = vi
+			.fn<typeof fetch>()
+			.mockResolvedValueOnce(
+				jsonResponse({ artists: [{ id: MBID, name: "Chase & Status", score: 100 }] }),
+			)
+			.mockResolvedValueOnce(jsonResponse({ id: MBID, name: "Chase & Status" }));
+
+		await expect(
+			enrichArtist(
+				{ festivalId: "festival", setIds: ["set-1"], billing: "Chase & Status" },
+				{
+					userAgent: "Offbeat/Test",
+					fetch: fetcher,
+					allowAmbiguousBilling: true,
+				},
+			),
+		).resolves.toMatchObject({ status: "enriched", profile: { name: "Chase & Status" } });
 	});
 
 	it("does not guess when multiple exact candidates remain", async () => {

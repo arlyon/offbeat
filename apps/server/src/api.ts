@@ -11,6 +11,11 @@ type Env = {
 		MAIN_DO_ROOT_SECRET?: string;
 		DEV_BYPASS_WEBAUTHN?: string;
 		DISABLE_ARTIST_ENRICHMENT?: string;
+		DISABLE_ARTIST_RESOLUTION?: string;
+		AI_GATEWAY_BASE_URL?: string;
+		ARTIST_RESOLUTION_MODEL?: string;
+		DEEPSEEK_API_KEY?: string;
+		TAVILY_API_KEY?: string;
 	};
 };
 
@@ -47,14 +52,66 @@ interface MainArtistEnrichmentRpc {
 	markArtistEnrichmentQueued(jobIds: string[]): Promise<void>;
 }
 
-async function enqueueArtistEnrichment(env: Env["Bindings"], festivalId: string) {
+interface ArtistEnqueueResult {
+	queuedJobs: number;
+	complete: boolean;
+}
+
+export async function enqueueArtistEnrichment(
+	env: Env["Bindings"],
+	festivalId: string,
+): Promise<ArtistEnqueueResult> {
+	let candidates: ArtistEnrichmentMessage[];
 	const main = getMainDO(env) as unknown as MainArtistEnrichmentRpc;
-	const candidates = await main.getArtistEnrichmentCandidates(festivalId);
+	try {
+		candidates = await main.getArtistEnrichmentCandidates(festivalId);
+	} catch {
+		return { queuedJobs: 0, complete: false };
+	}
+	let queuedJobs = 0;
 	for (let offset = 0; offset < candidates.length; offset += 100) {
 		const batch = candidates.slice(offset, offset + 100);
-		await env.ARTIST_ENRICHMENT_QUEUE.sendBatch(batch.map((body) => ({ body })));
-		await main.markArtistEnrichmentQueued(batch.map((candidate) => candidate.jobId));
+		try {
+			await env.ARTIST_ENRICHMENT_QUEUE.sendBatch(batch.map((body) => ({ body })));
+			queuedJobs += batch.length;
+			await main.markArtistEnrichmentQueued(batch.map((candidate) => candidate.jobId));
+		} catch {
+			return { queuedJobs, complete: false };
+		}
 	}
+	return { queuedJobs, complete: true };
+}
+
+async function enqueueArtistResolutionFestivals(
+	env: Env["Bindings"],
+	festivalIds: readonly string[],
+): Promise<{
+	queuedFestivals: number;
+	queuedJobs: number;
+	failedFestivalIds: string[];
+	disabled: boolean;
+}> {
+	if (env.DISABLE_ARTIST_ENRICHMENT === "true") {
+		return {
+			queuedFestivals: 0,
+			queuedJobs: 0,
+			failedFestivalIds: [...festivalIds],
+			disabled: true,
+		};
+	}
+	let queuedFestivals = 0;
+	let queuedJobs = 0;
+	const failedFestivalIds: string[] = [];
+	for (const festivalId of festivalIds) {
+		const result = await enqueueArtistEnrichment(env, festivalId);
+		queuedJobs += result.queuedJobs;
+		if (result.complete) {
+			queuedFestivals += 1;
+		} else {
+			failedFestivalIds.push(festivalId);
+		}
+	}
+	return { queuedFestivals, queuedJobs, failedFestivalIds, disabled: false };
 }
 
 function scheduleArtistEnrichment(
@@ -63,8 +120,10 @@ function scheduleArtistEnrichment(
 ) {
 	if (c.env.DISABLE_ARTIST_ENRICHMENT === "true") return;
 	c.executionCtx.waitUntil(
-		enqueueArtistEnrichment(c.env, festivalId).catch((error) => {
-			console.error(`[artist-enrichment] failed to enqueue festival ${festivalId}`, error);
+		enqueueArtistEnrichment(c.env, festivalId).then((result) => {
+			if (!result.complete) {
+				console.error(`[artist-enrichment] failed to fully enqueue festival ${festivalId}`);
+			}
 		}),
 	);
 }
@@ -155,10 +214,25 @@ app.get("/festivals", (c) => {
 	return forwardToMainDO(c.env, "/festivals", c.req.raw);
 });
 
+// POST /artist-resolutions/backfill — enqueue all existing festivals idempotently.
+app.post("/artist-resolutions/backfill", async (c) => {
+	const response = await forwardToMainDOBounded(c.env, "/artist-resolutions/backfill", c.req.raw);
+	if (!response.ok) return response;
+	const result = (await response.json()) as { festivalIds: string[] };
+	const queued = await enqueueArtistResolutionFestivals(c.env, result.festivalIds);
+	return Response.json(queued, { status: queued.failedFestivalIds.length > 0 ? 207 : 200 });
+});
+
 // GET /festivals/:id/lineup
 app.get("/festivals/:id/lineup", (c) => {
 	const id = c.req.param("id");
 	return forwardToMainDO(c.env, `/festivals/${id}/lineup`, c.req.raw);
+});
+
+// GET /festivals/:id/artist-resolutions — admin review list.
+app.get("/festivals/:id/artist-resolutions", (c) => {
+	const id = c.req.param("id");
+	return forwardToMainDO(c.env, `/festivals/${id}/artist-resolutions`, c.req.raw);
 });
 
 // GET /festivals/:id
@@ -210,6 +284,43 @@ app.post("/festival-imports/:previewId/publish", async (c) => {
 		scheduleArtistEnrichment(c, result.festival.id);
 	}
 	return Response.json(result, { status: response.status });
+});
+
+// POST /festivals/:id/artist-resolutions/retry — enqueue an idempotent backfill/retry.
+app.post("/festivals/:id/artist-resolutions/retry", async (c) => {
+	const id = c.req.param("id");
+	const response = await forwardToMainDOBounded(
+		c.env,
+		`/festivals/${id}/artist-resolutions/retry`,
+		c.req.raw,
+	);
+	if (!response.ok) return response;
+	const queued = await enqueueArtistResolutionFestivals(c.env, [id]);
+	return Response.json(queued, { status: queued.failedFestivalIds.length > 0 ? 207 : 200 });
+});
+
+// PUT /festivals/:id/artist-resolutions — durable global manual override.
+app.put("/festivals/:id/artist-resolutions", async (c) => {
+	const id = c.req.param("id");
+	const response = await forwardToMainDOBounded(
+		c.env,
+		`/festivals/${id}/artist-resolutions`,
+		c.req.raw,
+	);
+	if (!response.ok) return response;
+	const application = (await response.json()) as {
+		resolution: unknown;
+		profiles: unknown[];
+		applications: Array<{ festivalId: string; setIds: string[] }>;
+	};
+	const queued = await enqueueArtistResolutionFestivals(
+		c.env,
+		application.applications.map((target) => target.festivalId),
+	);
+	return Response.json(
+		{ ...application, ...queued },
+		{ status: queued.failedFestivalIds.length > 0 ? 207 : 202 },
+	);
 });
 
 // PUT /festivals/:id — update festival metadata (admin-only)

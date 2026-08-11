@@ -1,18 +1,25 @@
 import { DurableObject } from "cloudflare:workers";
 import { ed25519 } from "@noble/curves/ed25519.js";
 import type {
+	ArtistBillingResolution,
+	ArtistCredit,
 	ArtistProfile,
 	ClashfinderApiResponse,
 	ClashfinderSource,
 	Lineup,
+	PerformanceQualifier,
 } from "@offbeat/protocol";
-import { fetchClashfinder, parseClashfinderApi } from "@offbeat/protocol";
+import {
+	fetchClashfinder,
+	normalizeArtistBilling,
+	parseArtistBilling,
+	parseClashfinderApi,
+} from "@offbeat/protocol";
 import {
 	type ArtistEnrichmentMessage,
 	type ArtistEnrichmentOutcome,
 	artistEnrichmentJobId,
 	artistEnrichmentSourceKey,
-	isAmbiguousArtistBilling,
 } from "./artist-enrichment";
 import {
 	generateAuthenticationOptions,
@@ -48,12 +55,64 @@ function requireUrl(value: string): URL {
 	}
 }
 
+async function readBoundedRequestBody(
+	headers: Headers,
+	bodyStream: ReadableStream<Uint8Array> | null,
+	maxBytes: number,
+): Promise<Uint8Array<ArrayBuffer> | Response> {
+	const contentLength = Number(headers.get("Content-Length") ?? "0");
+	if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+		return new Response("Artist admin request is too large", { status: 413 });
+	}
+	if (!bodyStream) return new Uint8Array(new ArrayBuffer(0));
+	const reader = bodyStream.getReader();
+	const chunks: Uint8Array[] = [];
+	let total = 0;
+	while (true) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		total += value.byteLength;
+		if (total > maxBytes) {
+			await reader.cancel();
+			return new Response("Artist admin request is too large", { status: 413 });
+		}
+		chunks.push(value);
+	}
+	const body = new Uint8Array(new ArrayBuffer(total));
+	let offset = 0;
+	for (const chunk of chunks) {
+		body.set(chunk, offset);
+		offset += chunk.byteLength;
+	}
+	return body;
+}
+
 function parseStoredJson<T>(value: string, label: string): T {
 	try {
 		return JSON.parse(value) as T;
 	} catch (error) {
 		throw new Error(`Invalid JSON in ${label}`, { cause: error });
 	}
+}
+
+function stableResolutionId(billingKey: string): string {
+	let hash = 2166136261;
+	for (let index = 0; index < billingKey.length; index += 1) {
+		hash ^= billingKey.charCodeAt(index);
+		hash = Math.imul(hash, 16777619);
+	}
+	return `artist-resolution-v1-${(hash >>> 0).toString(16).padStart(8, "0")}`;
+}
+
+interface ArtistOverrideInput {
+	billingKey: string;
+	credits: Array<{
+		artistId: string;
+		creditedAs: string;
+		role: "performer" | "presenter" | "guest";
+	}>;
+	presentedTitle?: string;
+	performanceQualifiers?: PerformanceQualifier[];
 }
 
 export class MainDO extends DurableObject {
@@ -101,6 +160,11 @@ export class MainDO extends DurableObject {
 
 	#initSchema() {
 		this.sql.exec(`
+			CREATE TABLE IF NOT EXISTS main_schema_migrations (
+				name TEXT PRIMARY KEY,
+				completed_at INTEGER NOT NULL
+			);
+
 			CREATE TABLE IF NOT EXISTS festivals (
 				id TEXT PRIMARY KEY,
 				name TEXT NOT NULL,
@@ -145,8 +209,14 @@ export class MainDO extends DurableObject {
 				day_id TEXT NOT NULL,
 				stage_id TEXT NOT NULL,
 				artist TEXT NOT NULL,
+				source_billing TEXT NOT NULL,
+				billing_key TEXT NOT NULL,
 				artist_mbid TEXT,
 				artist_ids TEXT NOT NULL DEFAULT '[]',
+				billing_resolution_id TEXT,
+				artist_credits TEXT NOT NULL DEFAULT '[]',
+				presented_title TEXT,
+				performance_qualifiers TEXT NOT NULL DEFAULT '[]',
 				start_min INTEGER NOT NULL,
 				duration_min INTEGER NOT NULL,
 				genre TEXT NOT NULL DEFAULT '',
@@ -266,9 +336,115 @@ export class MainDO extends DurableObject {
 				last_error TEXT,
 				updated_at INTEGER NOT NULL
 			);
+
+			CREATE TABLE IF NOT EXISTS canonical_artists (
+				id TEXT PRIMARY KEY,
+				source_key TEXT NOT NULL,
+				profile_json TEXT NOT NULL,
+				updated_at INTEGER NOT NULL
+			);
+
+			CREATE TABLE IF NOT EXISTS artist_billing_resolutions (
+				id TEXT PRIMARY KEY,
+				billing_key TEXT NOT NULL UNIQUE,
+				source_billing TEXT NOT NULL,
+				status TEXT NOT NULL,
+				method TEXT NOT NULL,
+				confidence REAL NOT NULL,
+				resolution_json TEXT NOT NULL,
+				input_hash TEXT NOT NULL,
+				processor_version TEXT NOT NULL,
+				model TEXT,
+				version INTEGER NOT NULL,
+				updated_at INTEGER NOT NULL
+			);
+
+			CREATE TABLE IF NOT EXISTS artist_resolution_search_cache (
+				cache_key TEXT PRIMARY KEY,
+				provider TEXT NOT NULL,
+				response_json TEXT NOT NULL,
+				retrieved_at INTEGER NOT NULL
+			);
+
+			CREATE TABLE IF NOT EXISTS artist_resolution_ai_cache (
+				cache_key TEXT PRIMARY KEY,
+				model TEXT NOT NULL,
+				response_json TEXT NOT NULL,
+				created_at INTEGER NOT NULL
+			);
+
+			CREATE TABLE IF NOT EXISTS artist_admin_nonces (
+				nonce TEXT PRIMARY KEY,
+				public_key TEXT NOT NULL,
+				created_at INTEGER NOT NULL
+			);
+
+			CREATE TABLE IF NOT EXISTS artist_billing_overrides (
+				scope TEXT NOT NULL,
+				scope_id TEXT NOT NULL,
+				billing_key TEXT NOT NULL,
+				resolution_json TEXT NOT NULL,
+				revision INTEGER NOT NULL,
+				updated_at INTEGER NOT NULL,
+				PRIMARY KEY (scope, scope_id, billing_key)
+			);
+
+			CREATE TABLE IF NOT EXISTS festival_resolution_applications (
+				festival_id TEXT NOT NULL REFERENCES festivals(id),
+				billing_key TEXT NOT NULL,
+				resolution_id TEXT NOT NULL,
+				resolution_version INTEGER NOT NULL,
+				set_ids_json TEXT NOT NULL,
+				applied_at INTEGER,
+				updated_at INTEGER NOT NULL,
+				PRIMARY KEY (festival_id, billing_key)
+			);
 		`);
 		this.#migrateFestivalStagesPrimaryKey();
 		this.#migrateFestivalSetColumns();
+		this.#migrateResolutionApplicationColumns();
+		this.#migrateCanonicalArtists();
+	}
+
+	#migrateResolutionApplicationColumns() {
+		const columns = new Set(
+			(
+				this.sql.exec("PRAGMA table_info(festival_resolution_applications)").toArray() as Array<{
+					name: string;
+				}>
+			).map((column) => column.name),
+		);
+		if (!columns.has("applied_at")) {
+			this.sql.exec("ALTER TABLE festival_resolution_applications ADD COLUMN applied_at INTEGER");
+		}
+	}
+
+	#migrateCanonicalArtists() {
+		if (this.#migrationComplete("canonical-artists-v1")) return;
+		const rows = this.sql
+			.exec(
+				`SELECT id, source_key, profile_json, updated_at FROM festival_artists
+				 ORDER BY updated_at DESC`,
+			)
+			.toArray() as unknown as Array<{
+			id: string;
+			source_key: string;
+			profile_json: string;
+			updated_at: number;
+		}>;
+		this.ctx.storage.transactionSync(() => {
+			for (const row of rows) {
+				this.sql.exec(
+					`INSERT OR IGNORE INTO canonical_artists
+					 (id, source_key, profile_json, updated_at) VALUES (?, ?, ?, ?)`,
+					row.id,
+					row.source_key,
+					row.profile_json,
+					row.updated_at,
+				);
+			}
+			this.#completeMigration("canonical-artists-v1");
+		});
 	}
 
 	#migrateFestivalSetColumns() {
@@ -283,6 +459,75 @@ export class MainDO extends DurableObject {
 		if (!columns.has("artist_ids")) {
 			this.sql.exec("ALTER TABLE festival_sets ADD COLUMN artist_ids TEXT NOT NULL DEFAULT '[]'");
 		}
+		if (!columns.has("source_billing")) {
+			this.sql.exec("ALTER TABLE festival_sets ADD COLUMN source_billing TEXT");
+		}
+		if (!columns.has("billing_key")) {
+			this.sql.exec("ALTER TABLE festival_sets ADD COLUMN billing_key TEXT");
+		}
+		if (!columns.has("billing_resolution_id")) {
+			this.sql.exec("ALTER TABLE festival_sets ADD COLUMN billing_resolution_id TEXT");
+		}
+		if (!columns.has("artist_credits")) {
+			this.sql.exec(
+				"ALTER TABLE festival_sets ADD COLUMN artist_credits TEXT NOT NULL DEFAULT '[]'",
+			);
+		}
+		if (!columns.has("presented_title")) {
+			this.sql.exec("ALTER TABLE festival_sets ADD COLUMN presented_title TEXT");
+		}
+		if (!columns.has("performance_qualifiers")) {
+			this.sql.exec(
+				"ALTER TABLE festival_sets ADD COLUMN performance_qualifiers TEXT NOT NULL DEFAULT '[]'",
+			);
+		}
+
+		if (this.#migrationComplete("artist-billing-columns-v1")) {
+			this.sql.exec(
+				"CREATE INDEX IF NOT EXISTS idx_festival_sets_billing_key ON festival_sets(festival_id, billing_key)",
+			);
+			return;
+		}
+		const rows = this.sql
+			.exec("SELECT festival_id, id, artist, artist_mbid FROM festival_sets")
+			.toArray() as unknown as Array<{
+			festival_id: string;
+			id: string;
+			artist: string;
+			artist_mbid: string | null;
+		}>;
+		for (const row of rows) {
+			const parsed = parseArtistBilling(row.artist, row.artist_mbid ?? undefined);
+			this.sql.exec(
+				`UPDATE festival_sets
+				 SET source_billing = COALESCE(source_billing, ?),
+				     billing_key = COALESCE(billing_key, ?)
+				 WHERE festival_id = ? AND id = ?`,
+				row.artist,
+				parsed.billingKey,
+				row.festival_id,
+				row.id,
+			);
+		}
+		this.sql.exec(
+			"CREATE INDEX IF NOT EXISTS idx_festival_sets_billing_key ON festival_sets(festival_id, billing_key)",
+		);
+		this.#completeMigration("artist-billing-columns-v1");
+	}
+
+	#migrationComplete(name: string): boolean {
+		return (
+			this.sql.exec("SELECT 1 FROM main_schema_migrations WHERE name = ?", name).toArray().length >
+			0
+		);
+	}
+
+	#completeMigration(name: string) {
+		this.sql.exec(
+			"INSERT OR IGNORE INTO main_schema_migrations (name, completed_at) VALUES (?, ?)",
+			name,
+			Math.floor(Date.now() / 1000),
+		);
 	}
 
 	#migrateFestivalStagesPrimaryKey() {
@@ -352,24 +597,129 @@ export class MainDO extends DurableObject {
 		}
 
 		for (const set of lineup.sets) {
+			const sourceBilling = set.sourceBilling ?? set.artist;
+			const parsed = parseArtistBilling(sourceBilling, set.artistMbid);
 			this.sql.exec(
 				`INSERT INTO festival_sets
-				 (id, festival_id, day_id, stage_id, artist, artist_mbid, artist_ids,
-				  start_min, duration_min, genre, cancelled)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				 (id, festival_id, day_id, stage_id, artist, source_billing, billing_key,
+				  artist_mbid, artist_ids, billing_resolution_id, artist_credits,
+				  presented_title, performance_qualifiers, start_min, duration_min, genre, cancelled)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				set.id,
 				festivalId,
 				set.day,
 				set.stage,
 				set.artist,
+				sourceBilling,
+				parsed.billingKey,
 				set.artistMbid ?? null,
 				JSON.stringify(set.artistIds ?? []),
+				set.billingResolutionId ?? null,
+				JSON.stringify(set.artistCredits ?? []),
+				set.presentedTitle ?? parsed.presentedTitle ?? null,
+				JSON.stringify(set.performanceQualifiers ?? parsed.performanceQualifiers),
 				set.startMin,
 				set.durationMin,
 				set.genre,
 				set.cancelled ? 1 : 0,
 			);
 		}
+		this.#reapplyCachedArtistResolutions(festivalId);
+	}
+
+	#reapplyCachedArtistResolutions(festivalId: string) {
+		const keys = this.sql
+			.exec(
+				"SELECT DISTINCT billing_key FROM festival_sets WHERE festival_id = ? AND billing_key IS NOT NULL",
+				festivalId,
+			)
+			.toArray() as unknown as Array<{ billing_key: string }>;
+		for (const { billing_key: billingKey } of keys) {
+			const overrideRows = this.sql
+				.exec(
+					`SELECT resolution_json FROM artist_billing_overrides
+					 WHERE billing_key = ? AND ((scope = 'festival' AND scope_id = ?) OR scope = 'global')
+					 ORDER BY CASE scope WHEN 'festival' THEN 0 ELSE 1 END LIMIT 1`,
+					billingKey,
+					festivalId,
+				)
+				.toArray() as unknown as Array<{ resolution_json: string }>;
+			const cachedRows = this.sql
+				.exec(
+					"SELECT resolution_json FROM artist_billing_resolutions WHERE billing_key = ? AND status = 'resolved' LIMIT 1",
+					billingKey,
+				)
+				.toArray() as unknown as Array<{ resolution_json: string }>;
+			const serialized = overrideRows[0]?.resolution_json ?? cachedRows[0]?.resolution_json;
+			if (!serialized) continue;
+			const resolution = parseStoredJson<ArtistBillingResolution>(
+				serialized,
+				`artist billing resolution ${billingKey}`,
+			);
+			this.#applyResolutionToFestivalSets(festivalId, resolution);
+		}
+	}
+
+	#applyResolutionToFestivalSets(festivalId: string, resolution: ArtistBillingResolution) {
+		const rows = this.sql
+			.exec(
+				"SELECT id FROM festival_sets WHERE festival_id = ? AND billing_key = ? ORDER BY id",
+				festivalId,
+				resolution.billingKey,
+			)
+			.toArray() as unknown as Array<{ id: string }>;
+		if (rows.length === 0) return;
+		const setIds = rows.map((row) => row.id);
+		const artistIds = [...new Set(resolution.credits.map((credit) => credit.artistId))].sort(
+			(left, right) => left.localeCompare(right),
+		);
+		this.sql.exec(
+			`UPDATE festival_sets
+			 SET artist_ids = ?, billing_resolution_id = ?, artist_credits = ?,
+			     presented_title = ?, performance_qualifiers = ?
+			 WHERE festival_id = ? AND billing_key = ?`,
+			JSON.stringify(artistIds),
+			resolution.id,
+			JSON.stringify(resolution.credits),
+			resolution.presentedTitle ?? null,
+			JSON.stringify(resolution.performanceQualifiers),
+			festivalId,
+			resolution.billingKey,
+		);
+		for (const artistId of artistIds) {
+			const profiles = this.sql
+				.exec(
+					"SELECT source_key, profile_json, updated_at FROM canonical_artists WHERE id = ? LIMIT 1",
+					artistId,
+				)
+				.toArray() as unknown as Array<{
+				source_key: string;
+				profile_json: string;
+				updated_at: number;
+			}>;
+			if (!profiles[0]) continue;
+			this.sql.exec(
+				`INSERT OR REPLACE INTO festival_artists
+				 (festival_id, id, source_key, profile_json, updated_at) VALUES (?, ?, ?, ?, ?)`,
+				festivalId,
+				artistId,
+				profiles[0].source_key,
+				profiles[0].profile_json,
+				profiles[0].updated_at,
+			);
+		}
+		this.sql.exec(
+			`INSERT OR REPLACE INTO festival_resolution_applications
+			 (festival_id, billing_key, resolution_id, resolution_version, set_ids_json, applied_at,
+			  updated_at)
+			 VALUES (?, ?, ?, ?, ?, NULL, ?)`,
+			festivalId,
+			resolution.billingKey,
+			resolution.id,
+			resolution.version,
+			JSON.stringify(setIds),
+			Math.floor(Date.now() / 1000),
+		);
 	}
 
 	#getFestivals() {
@@ -494,6 +844,57 @@ export class MainDO extends DurableObject {
 			return new Response("Invalid signature", { status: 401 });
 		}
 
+		return null;
+	}
+
+	async #requireArtistResolutionAdmin(request: Request): Promise<Response | null> {
+		const pubKeyHex = request.headers.get("X-Admin-Key")?.toLowerCase();
+		const sigHex = request.headers.get("X-Admin-Sig");
+		const timestampText = request.headers.get("X-Admin-Timestamp");
+		const nonce = request.headers.get("X-Admin-Nonce")?.toLowerCase();
+		if (!pubKeyHex || !sigHex || !timestampText || !nonce) {
+			return new Response("Artist admin authentication headers required", { status: 401 });
+		}
+		if (!/^[0-9a-f]{64}$/.test(pubKeyHex) || !/^[0-9a-f]{128}$/i.test(sigHex)) {
+			return new Response("Invalid artist admin credentials", { status: 401 });
+		}
+		if (!/^[a-z0-9_-]{16,128}$/.test(nonce)) {
+			return new Response("Invalid artist admin nonce", { status: 401 });
+		}
+		const timestamp = Number(timestampText);
+		const now = Math.floor(Date.now() / 1000);
+		if (!Number.isSafeInteger(timestamp) || Math.abs(now - timestamp) > 300) {
+			return new Response("Artist admin timestamp is stale", { status: 401 });
+		}
+		const isAdmin =
+			this.sql.exec("SELECT 1 FROM admins WHERE public_key = ?", pubKeyHex).toArray().length > 0;
+		if (!isAdmin) return new Response("Not an admin", { status: 403 });
+		const requestClone = request.clone();
+		const body = await readBoundedRequestBody(
+			requestClone.headers,
+			requestClone.body,
+			MAX_IMPORT_REQUEST_BYTES,
+		);
+		if (body instanceof Response) return body;
+		const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", body));
+		const bodyHash = bytesToHex(digest);
+		const url = requireUrl(request.url);
+		const message = new TextEncoder().encode(
+			`${request.method.toUpperCase()}\n${url.pathname}\n${timestampText}\n${nonce}\n${bodyHash}`,
+		);
+		const valid = await verify(hexToBytes(pubKeyHex), message, hexToBytes(sigHex));
+		if (!valid) return new Response("Invalid signature", { status: 401 });
+		this.sql.exec("DELETE FROM artist_admin_nonces WHERE created_at < ?", now - 600);
+		try {
+			this.sql.exec(
+				"INSERT INTO artist_admin_nonces (nonce, public_key, created_at) VALUES (?, ?, ?)",
+				nonce,
+				pubKeyHex,
+				now,
+			);
+		} catch {
+			return new Response("Artist admin request was already used", { status: 409 });
+		}
 		return null;
 	}
 
@@ -797,8 +1198,13 @@ export class MainDO extends DurableObject {
 			day_id: string;
 			stage_id: string;
 			artist: string;
+			source_billing: string | null;
 			artist_mbid: string | null;
 			artist_ids: string;
+			billing_resolution_id: string | null;
+			artist_credits: string;
+			presented_title: string | null;
+			performance_qualifiers: string;
 			start_min: number;
 			duration_min: number;
 			genre: string;
@@ -819,6 +1225,16 @@ export class MainDO extends DurableObject {
 		const artists = this.sql
 			.exec("SELECT profile_json FROM festival_artists WHERE festival_id = ? ORDER BY id", id)
 			.toArray() as unknown as Array<{ profile_json: string }>;
+		const resolutions = this.sql
+			.exec(
+				`SELECT DISTINCT resolution_json FROM artist_billing_resolutions
+				 WHERE id IN (
+				   SELECT billing_resolution_id FROM festival_sets
+				   WHERE festival_id = ? AND billing_resolution_id IS NOT NULL
+				 ) ORDER BY id`,
+				id,
+			)
+			.toArray() as unknown as Array<{ resolution_json: string }>;
 
 		return {
 			festival: { id, name: festival.name as string, location: festival.location as string },
@@ -841,9 +1257,32 @@ export class MainDO extends DurableObject {
 				day: s.day_id,
 				stage: s.stage_id,
 				artist: s.artist,
+				sourceBilling: s.source_billing ?? s.artist,
 				...(s.artist_mbid ? { artistMbid: s.artist_mbid } : {}),
 				...(parseStoredJson<string[]>(s.artist_ids, `set ${s.id} artist IDs`).length > 0
 					? { artistIds: parseStoredJson<string[]>(s.artist_ids, `set ${s.id} artist IDs`) }
+					: {}),
+				...(s.billing_resolution_id ? { billingResolutionId: s.billing_resolution_id } : {}),
+				...(parseStoredJson<ArtistCredit[]>(s.artist_credits, `set ${s.id} artist credits`).length >
+				0
+					? {
+							artistCredits: parseStoredJson<ArtistCredit[]>(
+								s.artist_credits,
+								`set ${s.id} artist credits`,
+							),
+						}
+					: {}),
+				...(s.presented_title ? { presentedTitle: s.presented_title } : {}),
+				...(parseStoredJson<PerformanceQualifier[]>(
+					s.performance_qualifiers,
+					`set ${s.id} performance qualifiers`,
+				).length > 0
+					? {
+							performanceQualifiers: parseStoredJson<PerformanceQualifier[]>(
+								s.performance_qualifiers,
+								`set ${s.id} performance qualifiers`,
+							),
+						}
 					: {}),
 				startMin: s.start_min,
 				durationMin: s.duration_min,
@@ -857,39 +1296,68 @@ export class MainDO extends DurableObject {
 						),
 					}
 				: {}),
+			...(resolutions.length > 0
+				? {
+						billingResolutions: resolutions.map((resolution) =>
+							parseStoredJson<ArtistBillingResolution>(
+								resolution.resolution_json,
+								"festival artist billing resolution",
+							),
+						),
+					}
+				: {}),
 		};
 	}
 
 	getArtistEnrichmentCandidates(festivalId: string): ArtistEnrichmentMessage[] {
 		if (!this.#getFestival(festivalId)) return [];
-		this.sql.exec(
-			"DELETE FROM artist_enrichment_cache WHERE expires_at < ?",
-			Math.floor(Date.now() / 1000),
-		);
 		const rows = this.sql
 			.exec(
-				"SELECT id, artist, artist_mbid, artist_ids FROM festival_sets WHERE festival_id = ? ORDER BY artist, id",
+				`SELECT s.id, s.artist, s.source_billing, s.billing_key, s.artist_mbid,
+				        s.artist_ids, s.billing_resolution_id, a.applied_at
+				 FROM festival_sets s
+				 LEFT JOIN festival_resolution_applications a
+				   ON a.festival_id = s.festival_id AND a.billing_key = s.billing_key
+				 WHERE s.festival_id = ?
+				   AND (s.billing_resolution_id IS NULL OR a.applied_at IS NULL)
+				 ORDER BY s.artist, s.id`,
 				festivalId,
 			)
 			.toArray() as unknown as Array<{
 			id: string;
 			artist: string;
+			source_billing: string | null;
+			billing_key: string | null;
 			artist_mbid: string | null;
 			artist_ids: string;
+			billing_resolution_id: string | null;
+			applied_at: number | null;
 		}>;
-		const grouped = new Map<string, { billing: string; mbid?: string; setIds: string[] }>();
+		const contextBillings: string[] = [];
+		let contextCharacters = 0;
+		for (const billing of this.getArtistBillingContext(festivalId)) {
+			if (contextBillings.length >= 250 || contextCharacters + billing.length > 32_000) break;
+			contextBillings.push(billing);
+			contextCharacters += billing.length;
+		}
+		const grouped = new Map<
+			string,
+			{ sourceKey: string; billing: string; billingKey: string; mbid?: string; setIds: string[] }
+		>();
 		for (const row of rows) {
-			const artistIds = parseStoredJson<string[]>(row.artist_ids, `set ${row.id} artist IDs`);
-			if (artistIds.length > 0 || (!row.artist_mbid && isAmbiguousArtistBilling(row.artist))) {
-				continue;
-			}
-			const sourceKey = artistEnrichmentSourceKey(row.artist, row.artist_mbid ?? undefined);
-			const existing = grouped.get(sourceKey);
+			const billing = row.source_billing ?? row.artist;
+			const billingKey =
+				row.billing_key ?? parseArtistBilling(billing, row.artist_mbid ?? undefined).billingKey;
+			const sourceKey = artistEnrichmentSourceKey(billing, row.artist_mbid ?? undefined);
+			const groupKey = `${sourceKey}|${billingKey}`;
+			const existing = grouped.get(groupKey);
 			if (existing) {
 				existing.setIds.push(row.id);
 			} else {
-				grouped.set(sourceKey, {
-					billing: row.artist,
+				grouped.set(groupKey, {
+					sourceKey,
+					billing,
+					billingKey,
 					...(row.artist_mbid ? { mbid: row.artist_mbid } : {}),
 					setIds: [row.id],
 				});
@@ -897,16 +1365,16 @@ export class MainDO extends DurableObject {
 		}
 
 		const now = Math.floor(Date.now() / 1000);
-		return [...grouped.entries()].map(([sourceKey, candidate]) => {
+		return [...grouped.values()].map((candidate) => {
 			const setIds = [...candidate.setIds].sort((left, right) => left.localeCompare(right));
-			const jobId = artistEnrichmentJobId(festivalId, sourceKey, setIds);
+			const jobId = artistEnrichmentJobId(festivalId, candidate.billingKey, setIds);
 			this.sql.exec(
 				`INSERT OR IGNORE INTO artist_enrichment_jobs
 				 (id, festival_id, source_key, billing, mbid, set_ids_json, status, updated_at)
 				 VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)`,
 				jobId,
 				festivalId,
-				sourceKey,
+				candidate.sourceKey,
 				candidate.billing,
 				candidate.mbid ?? null,
 				JSON.stringify(setIds),
@@ -914,10 +1382,12 @@ export class MainDO extends DurableObject {
 			);
 			return {
 				jobId,
-				sourceKey,
+				sourceKey: candidate.sourceKey,
 				festivalId,
 				setIds,
 				billing: candidate.billing,
+				billingKey: candidate.billingKey,
+				contextBillings,
 				...(candidate.mbid ? { mbid: candidate.mbid } : {}),
 			};
 		});
@@ -926,9 +1396,8 @@ export class MainDO extends DurableObject {
 	getCachedArtistEnrichment(sourceKey: string): ArtistEnrichmentOutcome | null {
 		const rows = this.sql
 			.exec(
-				"SELECT outcome_json FROM artist_enrichment_cache WHERE source_key = ? AND expires_at >= ? LIMIT 1",
+				"SELECT outcome_json FROM artist_enrichment_cache WHERE source_key = ? LIMIT 1",
 				sourceKey,
-				Math.floor(Date.now() / 1000),
 			)
 			.toArray() as unknown as Array<{ outcome_json: string }>;
 		return rows[0]
@@ -947,9 +1416,31 @@ export class MainDO extends DurableObject {
 		}
 	}
 
+	cacheCanonicalArtistEnrichment(sourceKey: string, outcome: ArtistEnrichmentOutcome) {
+		const now = Math.floor(Date.now() / 1000);
+		this.sql.exec(
+			`INSERT OR REPLACE INTO artist_enrichment_cache
+			 (source_key, outcome_json, expires_at, updated_at) VALUES (?, ?, ?, ?)`,
+			sourceKey,
+			JSON.stringify(outcome),
+			253_402_300_799,
+			now,
+		);
+		if (outcome.status === "enriched") {
+			this.sql.exec(
+				`INSERT OR REPLACE INTO canonical_artists
+				 (id, source_key, profile_json, updated_at) VALUES (?, ?, ?, ?)`,
+				outcome.profile.id,
+				sourceKey,
+				JSON.stringify(outcome.profile),
+				now,
+			);
+		}
+	}
+
 	applyArtistEnrichment(message: ArtistEnrichmentMessage, outcome: ArtistEnrichmentOutcome) {
 		const now = Math.floor(Date.now() / 1000);
-		const expiresAt = now + (outcome.status === "enriched" ? 30 : 7) * 24 * 60 * 60;
+		const expiresAt = 253_402_300_799;
 		this.ctx.storage.transactionSync(() => {
 			this.sql.exec(
 				`INSERT OR REPLACE INTO artist_enrichment_cache
@@ -966,6 +1457,14 @@ export class MainDO extends DurableObject {
 				message.jobId,
 			);
 			if (outcome.status !== "enriched") return;
+			this.sql.exec(
+				`INSERT OR REPLACE INTO canonical_artists
+				 (id, source_key, profile_json, updated_at) VALUES (?, ?, ?, ?)`,
+				outcome.profile.id,
+				message.sourceKey,
+				JSON.stringify(outcome.profile),
+				now,
+			);
 			this.sql.exec(
 				`INSERT OR REPLACE INTO festival_artists
 				 (festival_id, id, source_key, profile_json, updated_at) VALUES (?, ?, ?, ?, ?)`,
@@ -1001,6 +1500,394 @@ export class MainDO extends DurableObject {
 			: null;
 	}
 
+	getArtistBillingContext(festivalId: string): string[] {
+		return (
+			this.sql
+				.exec(
+					"SELECT DISTINCT source_billing FROM festival_sets WHERE festival_id = ? ORDER BY source_billing",
+					festivalId,
+				)
+				.toArray() as unknown as Array<{ source_billing: string }>
+		).map((row) => row.source_billing);
+	}
+
+	getCanonicalArtistProfiles(artistIds: string[]): ArtistProfile[] {
+		const profiles: ArtistProfile[] = [];
+		for (const artistId of [...new Set(artistIds)].slice(0, 20)) {
+			const rows = this.sql
+				.exec("SELECT profile_json FROM canonical_artists WHERE id = ? LIMIT 1", artistId)
+				.toArray() as unknown as Array<{ profile_json: string }>;
+			if (rows[0]) {
+				profiles.push(
+					parseStoredJson<ArtistProfile>(rows[0].profile_json, `canonical artist ${artistId}`),
+				);
+			}
+		}
+		return profiles;
+	}
+
+	getCachedArtistBillingResolution(billingKey: string): ArtistBillingResolution | null {
+		const rows = this.sql
+			.exec(
+				"SELECT resolution_json FROM artist_billing_resolutions WHERE billing_key = ? LIMIT 1",
+				billingKey,
+			)
+			.toArray() as unknown as Array<{ resolution_json: string }>;
+		return rows[0]
+			? parseStoredJson<ArtistBillingResolution>(
+					rows[0].resolution_json,
+					`artist billing resolution ${billingKey}`,
+				)
+			: null;
+	}
+
+	getCachedArtistResolutionSearch(cacheKey: string): unknown | null {
+		const rows = this.sql
+			.exec(
+				"SELECT response_json FROM artist_resolution_search_cache WHERE cache_key = ? LIMIT 1",
+				cacheKey,
+			)
+			.toArray() as unknown as Array<{ response_json: string }>;
+		return rows[0]
+			? parseStoredJson<unknown>(rows[0].response_json, `artist search cache ${cacheKey}`)
+			: null;
+	}
+
+	putCachedArtistResolutionSearch(cacheKey: string, response: unknown) {
+		this.sql.exec(
+			`INSERT OR REPLACE INTO artist_resolution_search_cache
+			 (cache_key, provider, response_json, retrieved_at) VALUES (?, 'tavily', ?, ?)`,
+			cacheKey,
+			JSON.stringify(response),
+			Math.floor(Date.now() / 1000),
+		);
+	}
+
+	getCachedArtistResolutionAi(cacheKey: string): unknown | null {
+		const rows = this.sql
+			.exec(
+				"SELECT response_json FROM artist_resolution_ai_cache WHERE cache_key = ? LIMIT 1",
+				cacheKey,
+			)
+			.toArray() as unknown as Array<{ response_json: string }>;
+		return rows[0]
+			? parseStoredJson<unknown>(rows[0].response_json, `artist AI cache ${cacheKey}`)
+			: null;
+	}
+
+	putCachedArtistResolutionAi(cacheKey: string, model: string, response: unknown) {
+		this.sql.exec(
+			`INSERT OR REPLACE INTO artist_resolution_ai_cache
+			 (cache_key, model, response_json, created_at) VALUES (?, ?, ?, ?)`,
+			cacheKey,
+			model,
+			JSON.stringify(response),
+			Math.floor(Date.now() / 1000),
+		);
+	}
+
+	recordArtistBillingResolution(resolution: ArtistBillingResolution): ArtistBillingResolution {
+		const existing = this.getCachedArtistBillingResolution(resolution.billingKey);
+		if (existing?.method === "manual") return existing;
+		let stored = resolution;
+		if (existing) {
+			const unchanged =
+				existing.inputHash === resolution.inputHash &&
+				existing.processorVersion === resolution.processorVersion;
+			stored = {
+				...resolution,
+				id: existing.id,
+				version: unchanged ? existing.version : existing.version + 1,
+			};
+		}
+		this.sql.exec(
+			`INSERT OR REPLACE INTO artist_billing_resolutions
+			 (id, billing_key, source_billing, status, method, confidence, resolution_json,
+			  input_hash, processor_version, model, version, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			stored.id,
+			stored.billingKey,
+			stored.sourceBilling,
+			stored.status,
+			stored.method,
+			stored.confidence,
+			JSON.stringify(stored),
+			stored.inputHash,
+			stored.processorVersion,
+			stored.model ?? null,
+			stored.version,
+			Math.floor(Date.now() / 1000),
+		);
+		return stored;
+	}
+
+	applyArtistBillingResolution(
+		festivalId: string,
+		resolution: ArtistBillingResolution,
+		profiles: ArtistProfile[],
+	): { resolution: ArtistBillingResolution; profiles: ArtistProfile[]; setIds: string[] } | null {
+		let effectiveResolution = resolution;
+		let effectiveProfiles = profiles;
+		const existingResolution = this.getCachedArtistBillingResolution(resolution.billingKey);
+		if (resolution.method !== "manual") {
+			const overrideRows = this.sql
+				.exec(
+					`SELECT resolution_json FROM artist_billing_overrides
+					 WHERE billing_key = ? AND ((scope = 'festival' AND scope_id = ?) OR scope = 'global')
+					 ORDER BY CASE scope WHEN 'festival' THEN 0 ELSE 1 END LIMIT 1`,
+					resolution.billingKey,
+					festivalId,
+				)
+				.toArray() as unknown as Array<{ resolution_json: string }>;
+			let manual: ArtistBillingResolution | null = null;
+			if (overrideRows[0]) {
+				manual = parseStoredJson<ArtistBillingResolution>(
+					overrideRows[0].resolution_json,
+					`artist billing override ${resolution.billingKey}`,
+				);
+			} else if (existingResolution?.method === "manual") {
+				manual = existingResolution;
+			}
+			if (manual) {
+				effectiveResolution = manual;
+				effectiveProfiles = this.getCanonicalArtistProfiles(
+					manual.credits.map((credit) => credit.artistId),
+				);
+			} else if (existingResolution) {
+				if (
+					existingResolution.inputHash === resolution.inputHash &&
+					existingResolution.processorVersion === resolution.processorVersion
+				) {
+					effectiveResolution = existingResolution;
+					effectiveProfiles = this.getCanonicalArtistProfiles(
+						existingResolution.credits.map((credit) => credit.artistId),
+					);
+				} else {
+					effectiveResolution = {
+						...resolution,
+						id: existingResolution.id,
+						version: existingResolution.version + 1,
+					};
+				}
+			}
+		}
+		if (effectiveResolution.status !== "resolved" || effectiveResolution.credits.length === 0) {
+			return null;
+		}
+		const profileById = new Map(effectiveProfiles.map((profile) => [profile.id, profile]));
+		if (effectiveResolution.credits.some((credit) => !profileById.has(credit.artistId))) {
+			throw new Error("artist resolution is missing a canonical profile");
+		}
+		const setRows = this.sql
+			.exec(
+				"SELECT id FROM festival_sets WHERE festival_id = ? AND billing_key = ? ORDER BY id",
+				festivalId,
+				effectiveResolution.billingKey,
+			)
+			.toArray() as unknown as Array<{ id: string }>;
+		if (setRows.length === 0) return null;
+		const now = Math.floor(Date.now() / 1000);
+		this.ctx.storage.transactionSync(() => {
+			for (const profile of effectiveProfiles) {
+				const sourceKey = artistEnrichmentSourceKey(profile.name, profile.mbid);
+				this.sql.exec(
+					`INSERT OR REPLACE INTO canonical_artists
+					 (id, source_key, profile_json, updated_at) VALUES (?, ?, ?, ?)`,
+					profile.id,
+					sourceKey,
+					JSON.stringify(profile),
+					now,
+				);
+			}
+			this.sql.exec(
+				`INSERT OR REPLACE INTO artist_billing_resolutions
+				 (id, billing_key, source_billing, status, method, confidence, resolution_json,
+				  input_hash, processor_version, model, version, updated_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				effectiveResolution.id,
+				effectiveResolution.billingKey,
+				effectiveResolution.sourceBilling,
+				effectiveResolution.status,
+				effectiveResolution.method,
+				effectiveResolution.confidence,
+				JSON.stringify(effectiveResolution),
+				effectiveResolution.inputHash,
+				effectiveResolution.processorVersion,
+				effectiveResolution.model ?? null,
+				effectiveResolution.version,
+				now,
+			);
+			this.#applyResolutionToFestivalSets(festivalId, effectiveResolution);
+		});
+		return {
+			resolution: effectiveResolution,
+			profiles: effectiveProfiles,
+			setIds: setRows.map((row) => row.id),
+		};
+	}
+
+	putGlobalArtistBillingOverride(
+		festivalId: string,
+		input: ArtistOverrideInput,
+	): {
+		resolution: ArtistBillingResolution;
+		profiles: ArtistProfile[];
+		applications: Array<{ festivalId: string; setIds: string[] }>;
+	} {
+		if (!input.billingKey || input.billingKey.length > 500) {
+			throw new Error("artist override billing key is invalid");
+		}
+		if (input.credits.length === 0 || input.credits.length > 10) {
+			throw new Error("artist override must contain 1-10 credits");
+		}
+		const setRows = this.sql
+			.exec(
+				`SELECT source_billing FROM festival_sets
+				 WHERE festival_id = ? AND billing_key = ? ORDER BY id`,
+				festivalId,
+				input.billingKey,
+			)
+			.toArray() as unknown as Array<{ source_billing: string }>;
+		if (setRows.length === 0) throw new Error("artist override billing was not found");
+		const sourceBilling = setRows[0].source_billing;
+		const normalizedSource = normalizeArtistBilling(sourceBilling);
+		const artistIds = input.credits.map((credit) => credit.artistId);
+		if (new Set(artistIds).size !== artistIds.length) {
+			throw new Error("artist override contains duplicate credits");
+		}
+		for (const credit of input.credits) {
+			if (
+				!credit.artistId ||
+				credit.artistId.length > 200 ||
+				!credit.creditedAs ||
+				credit.creditedAs.length > 200 ||
+				!normalizedSource.includes(normalizeArtistBilling(credit.creditedAs)) ||
+				!(["performer", "presenter", "guest"] as const).includes(credit.role)
+			) {
+				throw new Error("artist override credit is invalid");
+			}
+		}
+		if (
+			input.presentedTitle &&
+			(input.presentedTitle.length > 200 ||
+				!normalizedSource.includes(normalizeArtistBilling(input.presentedTitle)))
+		) {
+			throw new Error("artist override presented title is invalid");
+		}
+		const allowedQualifiers: PerformanceQualifier[] = [
+			"dj_set",
+			"live",
+			"ambient_set",
+			"hybrid_set",
+		];
+		if (input.performanceQualifiers?.some((qualifier) => !allowedQualifiers.includes(qualifier))) {
+			throw new Error("artist override performance qualifier is invalid");
+		}
+		const profiles = this.getCanonicalArtistProfiles(artistIds);
+		if (profiles.length !== artistIds.length) {
+			throw new Error("artist override references an unknown canonical artist");
+		}
+		const profileById = new Map(profiles.map((profile) => [profile.id, profile]));
+		const credits: ArtistCredit[] = input.credits.map((credit) => ({
+			artistId: credit.artistId,
+			canonicalName: profileById.get(credit.artistId)?.name ?? credit.creditedAs,
+			creditedAs: credit.creditedAs,
+			role: credit.role,
+		}));
+		const current = this.getCachedArtistBillingResolution(input.billingKey);
+		const version = (current?.version ?? 0) + 1;
+		const parsed = parseArtistBilling(sourceBilling);
+		const resolution: ArtistBillingResolution = {
+			id: current?.id ?? stableResolutionId(input.billingKey),
+			sourceBilling,
+			billingKey: input.billingKey,
+			status: "resolved",
+			method: "manual",
+			confidence: 1,
+			credits,
+			...((input.presentedTitle ?? parsed.presentedTitle)
+				? { presentedTitle: input.presentedTitle ?? parsed.presentedTitle }
+				: {}),
+			performanceQualifiers: input.performanceQualifiers ?? parsed.performanceQualifiers,
+			evidence: [],
+			inputHash: `manual:${version}:${input.billingKey}`,
+			processorVersion: "manual-v1",
+			version,
+		};
+		this.sql.exec(
+			`INSERT OR REPLACE INTO artist_billing_overrides
+			 (scope, scope_id, billing_key, resolution_json, revision, updated_at)
+			 VALUES ('global', '*', ?, ?, ?, ?)`,
+			input.billingKey,
+			JSON.stringify(resolution),
+			version,
+			Math.floor(Date.now() / 1000),
+		);
+		const festivalRows = this.sql
+			.exec(
+				`SELECT DISTINCT festival_id FROM festival_sets
+				 WHERE billing_key = ? ORDER BY festival_id`,
+				input.billingKey,
+			)
+			.toArray() as unknown as Array<{ festival_id: string }>;
+		const applications: Array<{ festivalId: string; setIds: string[] }> = [];
+		for (const row of festivalRows) {
+			const applied = this.applyArtistBillingResolution(row.festival_id, resolution, profiles);
+			if (applied) applications.push({ festivalId: row.festival_id, setIds: applied.setIds });
+		}
+		if (applications.length === 0) throw new Error("artist override could not be applied");
+		return { resolution, profiles, applications };
+	}
+
+	listArtistBillingResolutions(festivalId: string): ArtistBillingResolution[] {
+		const rows = this.sql
+			.exec(
+				`SELECT DISTINCT r.resolution_json FROM artist_billing_resolutions r
+				 WHERE r.billing_key IN (
+				   SELECT billing_key FROM festival_sets WHERE festival_id = ?
+				 ) ORDER BY r.source_billing`,
+				festivalId,
+			)
+			.toArray() as unknown as Array<{ resolution_json: string }>;
+		return rows.map((row) =>
+			parseStoredJson<ArtistBillingResolution>(
+				row.resolution_json,
+				"festival artist billing resolution",
+			),
+		);
+	}
+
+	markArtistResolutionComplete(jobId: string, status: string) {
+		this.sql.exec(
+			`UPDATE artist_enrichment_jobs
+			 SET status = ?, attempts = attempts + 1, last_error = NULL, updated_at = ? WHERE id = ?`,
+			status.slice(0, 40),
+			Math.floor(Date.now() / 1000),
+			jobId,
+		);
+	}
+
+	markArtistResolutionApplied(
+		festivalId: string,
+		billingKey: string,
+		resolutionId: string,
+		resolutionVersion: number,
+	) {
+		const now = Math.floor(Date.now() / 1000);
+		this.sql.exec(
+			`UPDATE festival_resolution_applications
+			 SET applied_at = ?, updated_at = ?
+			 WHERE festival_id = ? AND billing_key = ? AND resolution_id = ?
+			   AND resolution_version = ?`,
+			now,
+			now,
+			festivalId,
+			billingKey,
+			resolutionId,
+			resolutionVersion,
+		);
+	}
+
 	markArtistEnrichmentFailure(jobId: string, error: string) {
 		this.sql.exec(
 			`UPDATE artist_enrichment_jobs
@@ -1030,6 +1917,13 @@ export class MainDO extends DurableObject {
 		if (method === "GET" && path === "/festivals") {
 			return Response.json(this.#getFestivals());
 		}
+		if (method === "POST" && path === "/artist-resolutions/backfill") {
+			const authResult = await this.#requireArtistResolutionAdmin(request);
+			if (authResult instanceof Response) return authResult;
+			return Response.json({
+				festivalIds: this.#getFestivals().map((festival) => String(festival.id)),
+			});
+		}
 
 		// GET /festivals/:id/lineup
 		const lineupMatch = path.match(/^\/festivals\/([^/]+)\/lineup$/);
@@ -1038,6 +1932,49 @@ export class MainDO extends DurableObject {
 			const lineup = this.#getLineup(id);
 			if (!lineup) return new Response("Festival not found", { status: 404 });
 			return Response.json(lineup);
+		}
+
+		// Admin review and durable global overrides for artist billing resolution.
+		const artistResolutionRetryMatch = path.match(
+			/^\/festivals\/([^/]+)\/artist-resolutions\/retry$/,
+		);
+		if (method === "POST" && artistResolutionRetryMatch) {
+			const authResult = await this.#requireArtistResolutionAdmin(request);
+			if (authResult instanceof Response) return authResult;
+			if (!this.#getFestival(artistResolutionRetryMatch[1])) {
+				return new Response("Festival not found", { status: 404 });
+			}
+			return Response.json({ ok: true });
+		}
+		const artistResolutionMatch = path.match(/^\/festivals\/([^/]+)\/artist-resolutions$/);
+		if (artistResolutionMatch && (method === "GET" || method === "PUT")) {
+			const authResult = await this.#requireArtistResolutionAdmin(request);
+			if (authResult instanceof Response) return authResult;
+			const festivalId = artistResolutionMatch[1];
+			if (!this.#getFestival(festivalId)) {
+				return new Response("Festival not found", { status: 404 });
+			}
+			if (method === "GET") {
+				return Response.json(this.listArtistBillingResolutions(festivalId));
+			}
+			const rawBody = await request.text();
+			if (new TextEncoder().encode(rawBody).byteLength > MAX_IMPORT_REQUEST_BYTES) {
+				return new Response("Artist override is too large", { status: 413 });
+			}
+			let input: ArtistOverrideInput;
+			try {
+				const candidate = parseStoredJson<Record<string, unknown>>(rawBody, "artist override");
+				if (!Array.isArray(candidate.credits)) throw new Error("credits are required");
+				input = candidate as unknown as ArtistOverrideInput;
+			} catch {
+				return new Response("Invalid artist override", { status: 400 });
+			}
+			try {
+				return Response.json(this.putGlobalArtistBillingOverride(festivalId, input));
+			} catch (error) {
+				console.error("Artist billing override rejected", error);
+				return new Response("Artist override was rejected", { status: 400 });
+			}
 		}
 
 		// GET /festivals/:id
@@ -1428,6 +2365,11 @@ export class MainDO extends DurableObject {
 
 			// Delete festival-owned data first (foreign key constraints).
 			this.sql.exec("DELETE FROM artist_enrichment_jobs WHERE festival_id = ?", id);
+			this.sql.exec("DELETE FROM festival_resolution_applications WHERE festival_id = ?", id);
+			this.sql.exec(
+				"DELETE FROM artist_billing_overrides WHERE scope = 'festival' AND scope_id = ?",
+				id,
+			);
 			this.sql.exec("DELETE FROM festival_artists WHERE festival_id = ?", id);
 			this.sql.exec("DELETE FROM festival_sets WHERE festival_id = ?", id);
 			this.sql.exec("DELETE FROM festival_days WHERE festival_id = ?", id);
