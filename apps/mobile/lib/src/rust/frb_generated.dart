@@ -3480,12 +3480,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ArtistProfileDto dco_decode_artist_profile_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 11)
-      throw Exception('unexpected arr length: expect 11 but see ${arr.length}');
+    if (arr.length != 12)
+      throw Exception('unexpected arr length: expect 12 but see ${arr.length}');
     return ArtistProfileDto(
       id: dco_decode_String(arr[0]),
       name: dco_decode_String(arr[1]),
-      mbid: dco_decode_String(arr[2]),
+      mbid: dco_decode_opt_String(arr[2]),
       wikidataId: dco_decode_opt_String(arr[3]),
       aliases: dco_decode_list_String(arr[4]),
       artistType: dco_decode_opt_String(arr[5]),
@@ -3493,7 +3493,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       genres: dco_decode_list_String(arr[7]),
       description: dco_decode_opt_String(arr[8]),
       links: dco_decode_list_artist_link_dto(arr[9]),
-      updatedAt: dco_decode_String(arr[10]),
+      relations: dco_decode_list_artist_relation_dto(arr[10]),
+      updatedAt: dco_decode_String(arr[11]),
+    );
+  }
+
+  @protected
+  ArtistRelationDto dco_decode_artist_relation_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2)
+      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return ArtistRelationDto(
+      kind: dco_decode_String(arr[0]),
+      artistId: dco_decode_String(arr[1]),
     );
   }
 
@@ -3851,6 +3864,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   List<ArtistProfileDto> dco_decode_list_artist_profile_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return (raw as List<dynamic>).map(dco_decode_artist_profile_dto).toList();
+  }
+
+  @protected
+  List<ArtistRelationDto> dco_decode_list_artist_relation_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_artist_relation_dto).toList();
   }
 
   @protected
@@ -4467,7 +4486,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_id = sse_decode_String(deserializer);
     var var_name = sse_decode_String(deserializer);
-    var var_mbid = sse_decode_String(deserializer);
+    var var_mbid = sse_decode_opt_String(deserializer);
     var var_wikidataId = sse_decode_opt_String(deserializer);
     var var_aliases = sse_decode_list_String(deserializer);
     var var_artistType = sse_decode_opt_String(deserializer);
@@ -4475,6 +4494,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_genres = sse_decode_list_String(deserializer);
     var var_description = sse_decode_opt_String(deserializer);
     var var_links = sse_decode_list_artist_link_dto(deserializer);
+    var var_relations = sse_decode_list_artist_relation_dto(deserializer);
     var var_updatedAt = sse_decode_String(deserializer);
     return ArtistProfileDto(
       id: var_id,
@@ -4487,8 +4507,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       genres: var_genres,
       description: var_description,
       links: var_links,
+      relations: var_relations,
       updatedAt: var_updatedAt,
     );
+  }
+
+  @protected
+  ArtistRelationDto sse_decode_artist_relation_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_kind = sse_decode_String(deserializer);
+    var var_artistId = sse_decode_String(deserializer);
+    return ArtistRelationDto(kind: var_kind, artistId: var_artistId);
   }
 
   @protected
@@ -4897,6 +4928,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var ans_ = <ArtistProfileDto>[];
     for (var idx_ = 0; idx_ < len_; ++idx_) {
       ans_.add(sse_decode_artist_profile_dto(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
+  List<ArtistRelationDto> sse_decode_list_artist_relation_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <ArtistRelationDto>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_artist_relation_dto(deserializer));
     }
     return ans_;
   }
@@ -5750,7 +5795,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.id, serializer);
     sse_encode_String(self.name, serializer);
-    sse_encode_String(self.mbid, serializer);
+    sse_encode_opt_String(self.mbid, serializer);
     sse_encode_opt_String(self.wikidataId, serializer);
     sse_encode_list_String(self.aliases, serializer);
     sse_encode_opt_String(self.artistType, serializer);
@@ -5758,7 +5803,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_list_String(self.genres, serializer);
     sse_encode_opt_String(self.description, serializer);
     sse_encode_list_artist_link_dto(self.links, serializer);
+    sse_encode_list_artist_relation_dto(self.relations, serializer);
     sse_encode_String(self.updatedAt, serializer);
+  }
+
+  @protected
+  void sse_encode_artist_relation_dto(
+    ArtistRelationDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.kind, serializer);
+    sse_encode_String(self.artistId, serializer);
   }
 
   @protected
@@ -6085,6 +6141,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_i_32(self.length, serializer);
     for (final item in self) {
       sse_encode_artist_profile_dto(item, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_list_artist_relation_dto(
+    List<ArtistRelationDto> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_artist_relation_dto(item, serializer);
     }
   }
 

@@ -13,8 +13,29 @@ export class ArtistEnrichmentLimiterDO extends DurableObject {
 			CREATE TABLE IF NOT EXISTS provider_rate_limit (
 				provider TEXT PRIMARY KEY,
 				next_allowed_at_ms INTEGER NOT NULL
+			);
+			CREATE TABLE IF NOT EXISTS provider_state (
+				key TEXT PRIMARY KEY,
+				value INTEGER NOT NULL
 			)
 		`);
+	}
+
+	nextArtistSearchProvider(braveAvailable: boolean, tavilyAvailable: boolean): "brave" | "tavily" {
+		if (!braveAvailable && !tavilyAvailable)
+			throw new Error("no artist search provider configured");
+		if (!braveAvailable) return "tavily";
+		if (!tavilyAvailable) return "brave";
+		const rows = this.sql
+			.exec("SELECT value FROM provider_state WHERE key = 'artist_search_next' LIMIT 1")
+			.toArray() as unknown as Array<{ value: number }>;
+		const provider = (rows[0]?.value ?? 0) % 2 === 0 ? "brave" : "tavily";
+		this.sql.exec(
+			`INSERT OR REPLACE INTO provider_state (key, value)
+			 VALUES ('artist_search_next', ?)`,
+			(rows[0]?.value ?? 0) + 1,
+		);
+		return provider;
 	}
 
 	reserveMusicBrainz(): number {

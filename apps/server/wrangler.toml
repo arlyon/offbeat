@@ -29,11 +29,11 @@ queue = "offbeat-artist-enrichment"
 
 [[queues.consumers]]
 queue = "offbeat-artist-enrichment"
-max_batch_size = 1
+max_batch_size = 5
 max_batch_timeout = 5
 max_retries = 5
 dead_letter_queue = "offbeat-artist-enrichment-dlq"
-max_concurrency = 4
+max_concurrency = 2
 retry_delay = 15
 
 [vars]
@@ -43,7 +43,7 @@ ARTIST_RESOLUTION_MODEL = "deepseek-v4-flash"
 AI_GATEWAY_BASE_URL = "https://gateway.ai.cloudflare.com/v1/050f47a87be246734396e92a3579604d/offbeat/deepseek"
 
 # Artist resolution is enabled only when AI_GATEWAY_BASE_URL is configured and
-# AI_GATEWAY_TOKEN, DEEPSEEK_API_KEY, and TAVILY_API_KEY are installed as secrets.
+# AI_GATEWAY_TOKEN, BRAVE_SEARCH_API_KEY, DEEPSEEK_API_KEY, and TAVILY_API_KEY are installed as secrets.
 # Clashfinder API credentials - set these with:
 #   wrangler secret put CLASHFINDER_USERNAME
 #   wrangler secret put CLASHFINDER_PRIVATE_KEY

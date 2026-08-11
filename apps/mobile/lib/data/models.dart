@@ -227,10 +227,17 @@ class ArtistLink {
   const ArtistLink({required this.kind, required this.url});
 }
 
+class ArtistRelation {
+  final String kind;
+  final String artistId;
+
+  const ArtistRelation({required this.kind, required this.artistId});
+}
+
 class ArtistProfile {
   final String id;
   final String name;
-  final String mbid;
+  final String? mbid;
   final String? wikidataId;
   final List<String> aliases;
   final String? artistType;
@@ -238,12 +245,13 @@ class ArtistProfile {
   final List<String> genres;
   final String? description;
   final List<ArtistLink> links;
+  final List<ArtistRelation> relations;
   final String updatedAt;
 
   const ArtistProfile({
     required this.id,
     required this.name,
-    required this.mbid,
+    this.mbid,
     this.wikidataId,
     this.aliases = const [],
     this.artistType,
@@ -251,6 +259,7 @@ class ArtistProfile {
     this.genres = const [],
     this.description,
     this.links = const [],
+    this.relations = const [],
     required this.updatedAt,
   });
 }

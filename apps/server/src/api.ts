@@ -49,7 +49,10 @@ function getMainDO(env: Env["Bindings"]) {
 }
 
 interface MainArtistEnrichmentRpc {
-	getArtistEnrichmentCandidates(festivalId: string): Promise<ArtistEnrichmentMessage[]>;
+	getArtistEnrichmentCandidates(
+		festivalId: string,
+		billingKeys?: string[],
+	): Promise<ArtistEnrichmentMessage[]>;
 	markArtistEnrichmentQueued(jobIds: string[]): Promise<void>;
 }
 
@@ -95,11 +98,12 @@ function artistEnrichmentBatches(
 export async function enqueueArtistEnrichment(
 	env: Env["Bindings"],
 	festivalId: string,
+	billingKeys?: string[],
 ): Promise<ArtistEnqueueResult> {
 	let candidates: ArtistEnrichmentMessage[];
 	const main = getMainDO(env) as unknown as MainArtistEnrichmentRpc;
 	try {
-		candidates = await main.getArtistEnrichmentCandidates(festivalId);
+		candidates = await main.getArtistEnrichmentCandidates(festivalId, billingKeys);
 	} catch (error) {
 		console.error("[artist-enrichment] failed to load candidates", error);
 		return { queuedJobs: 0, complete: false };
@@ -329,6 +333,12 @@ app.post("/festival-imports/:previewId/publish", async (c) => {
 	return Response.json(result, { status: response.status });
 });
 
+// GET /festivals/:id/artist-resolution-applications — signed-delivery status.
+app.get("/festivals/:id/artist-resolution-applications", (c) => {
+	const id = c.req.param("id");
+	return forwardToMainDO(c.env, `/festivals/${id}/artist-resolution-applications`, c.req.raw);
+});
+
 // POST /festivals/:id/artist-resolutions/retry — enqueue an idempotent backfill/retry.
 app.post("/festivals/:id/artist-resolutions/retry", async (c) => {
 	const id = c.req.param("id");
@@ -338,8 +348,37 @@ app.post("/festivals/:id/artist-resolutions/retry", async (c) => {
 		c.req.raw,
 	);
 	if (!response.ok) return response;
-	const queued = await enqueueArtistResolutionFestivals(c.env, [id]);
-	return Response.json(queued, { status: queued.failedFestivalIds.length > 0 ? 207 : 200 });
+	const result = (await response.json()) as { billingKeys?: string[] };
+	if (c.env.DISABLE_ARTIST_ENRICHMENT === "true") {
+		return Response.json({
+			queuedFestivals: 0,
+			queuedJobs: 0,
+			failedFestivalIds: [id],
+			disabled: true,
+		});
+	}
+	const queued = await enqueueArtistEnrichment(c.env, id, result.billingKeys);
+	return Response.json({
+		queuedFestivals: queued.complete ? 1 : 0,
+		queuedJobs: queued.queuedJobs,
+		failedFestivalIds: queued.complete ? [] : [id],
+		disabled: false,
+	});
+});
+
+// PUT /artist-identities — create or update a provider-neutral canonical identity.
+app.put("/artist-identities", (c) => {
+	return forwardToMainDOBounded(c.env, "/artist-identities", c.req.raw);
+});
+
+// POST /artist-identities/search — search the canonical profile index.
+app.post("/artist-identities/search", (c) => {
+	return forwardToMainDOBounded(c.env, "/artist-identities/search", c.req.raw);
+});
+
+// POST /artist-identities/merge — merge one canonical identity into another.
+app.post("/artist-identities/merge", (c) => {
+	return forwardToMainDOBounded(c.env, "/artist-identities/merge", c.req.raw);
 });
 
 // PUT /festivals/:id/artist-resolutions — durable global manual override.
@@ -352,17 +391,42 @@ app.put("/festivals/:id/artist-resolutions", async (c) => {
 	);
 	if (!response.ok) return response;
 	const application = (await response.json()) as {
-		resolution: unknown;
+		resolution: { billingKey: string };
 		profiles: unknown[];
 		applications: Array<{ festivalId: string; setIds: string[] }>;
 	};
-	const queued = await enqueueArtistResolutionFestivals(
-		c.env,
-		application.applications.map((target) => target.festivalId),
-	);
+	if (c.env.DISABLE_ARTIST_ENRICHMENT === "true") {
+		return Response.json(
+			{
+				...application,
+				queuedFestivals: 0,
+				queuedJobs: 0,
+				failedFestivalIds: application.applications.map((target) => target.festivalId),
+				disabled: true,
+			},
+			{ status: 202 },
+		);
+	}
+	let queuedFestivals = 0;
+	let queuedJobs = 0;
+	const failedFestivalIds: string[] = [];
+	for (const target of application.applications) {
+		const queued = await enqueueArtistEnrichment(c.env, target.festivalId, [
+			application.resolution.billingKey,
+		]);
+		queuedJobs += queued.queuedJobs;
+		if (queued.complete) queuedFestivals += 1;
+		else failedFestivalIds.push(target.festivalId);
+	}
 	return Response.json(
-		{ ...application, ...queued },
-		{ status: queued.failedFestivalIds.length > 0 ? 207 : 202 },
+		{
+			...application,
+			queuedFestivals,
+			queuedJobs,
+			failedFestivalIds,
+			disabled: false,
+		},
+		{ status: failedFestivalIds.length > 0 ? 207 : 202 },
 	);
 });
 

@@ -87,7 +87,7 @@ export function isAmbiguousArtistBilling(value: string): boolean {
 
 export function artistEnrichmentSourceKey(billing: string, mbid?: string): string {
 	if (mbid && MBID_PATTERN.test(mbid)) return `mbid:${mbid.toLowerCase()}`;
-	return `name:${normalizeArtistName(billing)}`;
+	return `name:v2:${normalizeArtistName(billing)}`;
 }
 
 export function artistEnrichmentJobId(
@@ -383,14 +383,18 @@ function collectLinks(relations: MusicBrainzRelation[]): ArtistLink[] {
 }
 
 function classifyLink(url: string, relationType: string): ArtistLinkKind {
-	let hostname: string;
+	let parsed: URL;
 	try {
-		hostname = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+		parsed = new URL(url);
 	} catch {
 		return "other";
 	}
+	const hostname = parsed.hostname.toLowerCase().replace(/^www\./, "");
 	if (hostname === "open.spotify.com") return "spotify";
 	if (hostname === "soundcloud.com") return "soundcloud";
+	if (hostname === "ra.co" && /^\/dj\/[^/]+\/?$/.test(parsed.pathname)) {
+		return "resident_advisor";
+	}
 	if (hostname === "youtube.com" || hostname === "youtu.be") return "youtube";
 	if (hostname === "instagram.com") return "instagram";
 	if (hostname === "facebook.com") return "facebook";
@@ -446,8 +450,7 @@ function safeExternalUrl(rawUrl: string): string | null {
 
 function normalizeArtistName(value: string): string {
 	return value
-		.normalize("NFKD")
-		.replace(/\p{Diacritic}/gu, "")
+		.normalize("NFKC")
 		.toLocaleLowerCase()
 		.replace(/[^\p{Letter}\p{Number}]+/gu, " ")
 		.trim();

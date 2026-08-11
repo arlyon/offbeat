@@ -178,6 +178,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ArtistProfileDto dco_decode_artist_profile_dto(dynamic raw);
 
   @protected
+  ArtistRelationDto dco_decode_artist_relation_dto(dynamic raw);
+
+  @protected
   AttestationDto dco_decode_attestation_dto(dynamic raw);
 
   @protected
@@ -277,6 +280,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<ArtistProfileDto> dco_decode_list_artist_profile_dto(dynamic raw);
+
+  @protected
+  List<ArtistRelationDto> dco_decode_list_artist_relation_dto(dynamic raw);
 
   @protected
   List<ChatMessageDto> dco_decode_list_chat_message_dto(dynamic raw);
@@ -543,6 +549,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ArtistProfileDto sse_decode_artist_profile_dto(SseDeserializer deserializer);
 
   @protected
+  ArtistRelationDto sse_decode_artist_relation_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   AttestationDto sse_decode_attestation_dto(SseDeserializer deserializer);
 
   @protected
@@ -660,6 +671,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<ArtistProfileDto> sse_decode_list_artist_profile_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<ArtistRelationDto> sse_decode_list_artist_relation_dto(
     SseDeserializer deserializer,
   );
 
@@ -989,6 +1005,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_artist_relation_dto(
+    ArtistRelationDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_attestation_dto(
     AttestationDto self,
     SseSerializer serializer,
@@ -1135,6 +1157,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_list_artist_profile_dto(
     List<ArtistProfileDto> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_artist_relation_dto(
+    List<ArtistRelationDto> self,
     SseSerializer serializer,
   );
 

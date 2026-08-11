@@ -18,9 +18,8 @@ void main() {
     year: 2027,
   );
   const profile = ArtistProfile(
-    id: 'artist-mbid',
+    id: 'ra:artistone',
     name: 'Artist One',
-    mbid: '00000000-0000-4000-8000-000000000000',
     country: 'GB',
     artistType: 'Group',
     genres: ['Electronic', 'Breakbeat'],
@@ -30,6 +29,7 @@ void main() {
         kind: 'spotify',
         url: 'https://open.spotify.com/artist/example',
       ),
+      ArtistLink(kind: 'resident_advisor', url: 'https://ra.co/dj/artistone'),
       ArtistLink(kind: 'soundcloud', url: 'http://soundcloud.com/insecure'),
       ArtistLink(kind: 'website', url: 'javascript:alert(1)'),
     ],
@@ -40,7 +40,7 @@ void main() {
     day: day.id,
     stage: stage.id,
     artist: profile.name,
-    artistIds: const ['artist-mbid'],
+    artistIds: const ['ra:artistone'],
     artistProfiles: const [profile],
     t: 720,
     dur: 60,
@@ -78,7 +78,88 @@ void main() {
     expect(find.text('ELECTRONIC'), findsOneWidget);
     expect(find.text('BREAKBEAT'), findsOneWidget);
     expect(find.text('SPOTIFY'), findsOneWidget);
+    expect(find.text('RA'), findsOneWidget);
     expect(find.text('SOUNDCLOUD'), findsNothing);
     expect(find.text('WEBSITE'), findsNothing);
+    expect(find.text('EXPAND CONNECTIONS'), findsNothing);
+  });
+
+  testWidgets('refreshes an open drawer when signed lineup models change', (
+    tester,
+  ) async {
+    final initialSet = FestSet(
+      id: 'live-set',
+      day: day.id,
+      stage: stage.id,
+      artist: profile.name,
+      t: 720,
+      dur: 60,
+      genre: '',
+    );
+    final liveLineup = ValueNotifier<SetDetailsLineup?>((
+      stages: const [stage],
+      days: const [day],
+      sets: [initialSet],
+    ));
+    addTearDown(liveLineup.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: TextButton(
+              onPressed: () => showSetDetailsSheet(
+                context,
+                set: initialSet,
+                stages: const [stage],
+                days: const [day],
+                allSets: [initialSet],
+                liveLineup: liveLineup,
+              ),
+              child: const Text('OPEN LIVE'),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('OPEN LIVE'));
+    await tester.pumpAndSettle();
+    expect(find.text('ABOUT'), findsNothing);
+    expect(find.textContaining('ONLY APPEARANCE'), findsOneWidget);
+
+    final refreshedSet = FestSet(
+      id: initialSet.id,
+      day: day.id,
+      stage: stage.id,
+      artist: profile.name,
+      artistIds: const ['ra:artistone'],
+      artistProfiles: const [profile],
+      t: 720,
+      dur: 60,
+      genre: '',
+    );
+    final secondSet = FestSet(
+      id: 'second-set',
+      day: day.id,
+      stage: stage.id,
+      artist: profile.name,
+      artistIds: const ['ra:artistone'],
+      artistProfiles: const [profile],
+      t: 840,
+      dur: 60,
+      genre: '',
+    );
+    liveLineup.value = (
+      stages: const [stage],
+      days: const [day],
+      sets: [refreshedSet, secondSet],
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('ABOUT'), findsOneWidget);
+    await tester.drag(find.byType(ListView), const Offset(0, -500));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('2 APPEARANCES'), findsOneWidget);
   });
 }

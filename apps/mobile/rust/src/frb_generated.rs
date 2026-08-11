@@ -4259,7 +4259,7 @@ impl SseDecode for crate::api::dto::ArtistProfileDto {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_id = <String>::sse_decode(deserializer);
         let mut var_name = <String>::sse_decode(deserializer);
-        let mut var_mbid = <String>::sse_decode(deserializer);
+        let mut var_mbid = <Option<String>>::sse_decode(deserializer);
         let mut var_wikidataId = <Option<String>>::sse_decode(deserializer);
         let mut var_aliases = <Vec<String>>::sse_decode(deserializer);
         let mut var_artistType = <Option<String>>::sse_decode(deserializer);
@@ -4267,6 +4267,7 @@ impl SseDecode for crate::api::dto::ArtistProfileDto {
         let mut var_genres = <Vec<String>>::sse_decode(deserializer);
         let mut var_description = <Option<String>>::sse_decode(deserializer);
         let mut var_links = <Vec<crate::api::dto::ArtistLinkDto>>::sse_decode(deserializer);
+        let mut var_relations = <Vec<crate::api::dto::ArtistRelationDto>>::sse_decode(deserializer);
         let mut var_updatedAt = <String>::sse_decode(deserializer);
         return crate::api::dto::ArtistProfileDto {
             id: var_id,
@@ -4279,7 +4280,20 @@ impl SseDecode for crate::api::dto::ArtistProfileDto {
             genres: var_genres,
             description: var_description,
             links: var_links,
+            relations: var_relations,
             updated_at: var_updatedAt,
+        };
+    }
+}
+
+impl SseDecode for crate::api::dto::ArtistRelationDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_kind = <String>::sse_decode(deserializer);
+        let mut var_artistId = <String>::sse_decode(deserializer);
+        return crate::api::dto::ArtistRelationDto {
+            kind: var_kind,
+            artist_id: var_artistId,
         };
     }
 }
@@ -4662,6 +4676,20 @@ impl SseDecode for Vec<crate::api::dto::ArtistProfileDto> {
         let mut ans_ = Vec::with_capacity(len_ as usize);
         for idx_ in 0..len_ {
             ans_.push(<crate::api::dto::ArtistProfileDto>::sse_decode(
+                deserializer,
+            ));
+        }
+        return ans_;
+    }
+}
+
+impl SseDecode for Vec<crate::api::dto::ArtistRelationDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(<crate::api::dto::ArtistRelationDto>::sse_decode(
                 deserializer,
             ));
         }
@@ -5416,6 +5444,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::dto::ArtistProfileDto {
             self.genres.into_into_dart().into_dart(),
             self.description.into_into_dart().into_dart(),
             self.links.into_into_dart().into_dart(),
+            self.relations.into_into_dart().into_dart(),
             self.updated_at.into_into_dart().into_dart(),
         ]
         .into_dart()
@@ -5429,6 +5458,27 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::dto::ArtistProfileDto>
     for crate::api::dto::ArtistProfileDto
 {
     fn into_into_dart(self) -> crate::api::dto::ArtistProfileDto {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::dto::ArtistRelationDto {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.kind.into_into_dart().into_dart(),
+            self.artist_id.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::dto::ArtistRelationDto
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::dto::ArtistRelationDto>
+    for crate::api::dto::ArtistRelationDto
+{
+    fn into_into_dart(self) -> crate::api::dto::ArtistRelationDto {
         self
     }
 }
@@ -6266,7 +6316,7 @@ impl SseEncode for crate::api::dto::ArtistProfileDto {
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.id, serializer);
         <String>::sse_encode(self.name, serializer);
-        <String>::sse_encode(self.mbid, serializer);
+        <Option<String>>::sse_encode(self.mbid, serializer);
         <Option<String>>::sse_encode(self.wikidata_id, serializer);
         <Vec<String>>::sse_encode(self.aliases, serializer);
         <Option<String>>::sse_encode(self.artist_type, serializer);
@@ -6274,7 +6324,16 @@ impl SseEncode for crate::api::dto::ArtistProfileDto {
         <Vec<String>>::sse_encode(self.genres, serializer);
         <Option<String>>::sse_encode(self.description, serializer);
         <Vec<crate::api::dto::ArtistLinkDto>>::sse_encode(self.links, serializer);
+        <Vec<crate::api::dto::ArtistRelationDto>>::sse_encode(self.relations, serializer);
         <String>::sse_encode(self.updated_at, serializer);
+    }
+}
+
+impl SseEncode for crate::api::dto::ArtistRelationDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.kind, serializer);
+        <String>::sse_encode(self.artist_id, serializer);
     }
 }
 
@@ -6531,6 +6590,16 @@ impl SseEncode for Vec<crate::api::dto::ArtistProfileDto> {
         <i32>::sse_encode(self.len() as _, serializer);
         for item in self {
             <crate::api::dto::ArtistProfileDto>::sse_encode(item, serializer);
+        }
+    }
+}
+
+impl SseEncode for Vec<crate::api::dto::ArtistRelationDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::api::dto::ArtistRelationDto>::sse_encode(item, serializer);
         }
     }
 }

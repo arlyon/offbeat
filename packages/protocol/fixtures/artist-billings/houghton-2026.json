@@ -1,70 +1,317 @@
 {
-  "festival": "Houghton Festival 2026",
-  "officialTimetableUrl": "https://www.houghtonfestival.co.uk/wp-content/uploads/2026/08/htn26-timetable-mobile-0805.pdf",
-  "retrievedAt": "2026-08-11",
-  "billings": [
-    {
-      "sourceBilling": "MIDLAND",
-      "expectedCanonicalNames": ["Midland"]
-    },
-    {
-      "sourceBilling": "MIDLAND (AMBIENT SET)",
-      "expectedCanonicalNames": ["Midland"],
-      "expectedQualifiers": ["ambient_set"]
-    },
-    {
-      "sourceBilling": "AL WOOTTON (DJ SET)",
-      "expectedCanonicalNames": ["Al Wootton"],
-      "expectedQualifiers": ["dj_set"]
-    },
-    {
-      "sourceBilling": "DEADBEAT (DJ SET)",
-      "expectedCanonicalNames": ["Deadbeat"],
-      "expectedQualifiers": ["dj_set"]
-    },
-    {
-      "sourceBilling": "THE GHOST",
-      "expectedCanonicalNames": ["The Ghost"]
-    },
-    {
-      "sourceBilling": "GENE ON EARTH",
-      "expectedCanonicalNames": ["Gene On Earth"]
-    },
-    {
-      "sourceBilling": "COAST 2 COAST (THE GHOST & GENE ON EARTH)",
-      "expectedCanonicalNames": ["The Ghost", "Gene On Earth"]
-    },
-    {
-      "sourceBilling": "DAN BEAUMONT",
-      "expectedCanonicalNames": ["Dan Beaumont"]
-    },
-    {
-      "sourceBilling": "HARRY & DAN TEA DANCE",
-      "expectedCanonicalNames": ["Midland", "Dan Beaumont"],
-      "expectedPresentedTitle": "Tea Dance"
-    },
-    {
-      "sourceBilling": "Harry & Dan Present Tea Dance",
-      "sourceKind": "user-reported-import-variant",
-      "expectedCanonicalNames": ["Midland", "Dan Beaumont"],
-      "expectedPresentedTitle": "Tea Dance"
-    },
-    {
-      "sourceBilling": "HAMISH & TOBY",
-      "expectedCanonicalNames": ["Hamish & Toby"]
-    },
-    {
-      "sourceBilling": "TRUTH & LIES",
-      "expectedCanonicalNames": ["Truth & Lies"]
-    },
-    {
-      "sourceBilling": "NÍDIA & VALENTINA (LIVE)",
-      "expectedCanonicalNames": ["Nídia", "Valentina"],
-      "expectedQualifiers": ["live"]
-    },
-    {
-      "sourceBilling": "UNDERGROUND RESISTANCE FEATURING SAUL WILLIAMS",
-      "expectedCanonicalNames": ["Underground Resistance", "Saul Williams"]
-    }
-  ]
+	"festival": "Houghton Festival 2026",
+	"officialTimetableUrl": "https://www.houghtonfestival.co.uk/wp-content/uploads/2026/08/htn26-timetable-mobile-0805.pdf",
+	"retrievedAt": "2026-08-11",
+	"billings": [
+		{
+			"sourceBilling": "MIDLAND",
+			"expectedCanonicalNames": [
+				"Midland"
+			]
+		},
+		{
+			"sourceBilling": "MIDLAND (AMBIENT SET)",
+			"expectedCanonicalNames": [
+				"Midland"
+			],
+			"expectedQualifiers": [
+				"ambient_set"
+			]
+		},
+		{
+			"sourceBilling": "AL WOOTTON (DJ SET)",
+			"expectedCanonicalNames": [
+				"Al Wootton"
+			],
+			"expectedQualifiers": [
+				"dj_set"
+			]
+		},
+		{
+			"sourceBilling": "DEADBEAT (DJ SET)",
+			"expectedCanonicalNames": [
+				"Deadbeat"
+			],
+			"expectedQualifiers": [
+				"dj_set"
+			]
+		},
+		{
+			"sourceBilling": "THE GHOST",
+			"expectedCanonicalNames": [
+				"The Ghost"
+			]
+		},
+		{
+			"sourceBilling": "GENE ON EARTH",
+			"expectedCanonicalNames": [
+				"Gene On Earth"
+			]
+		},
+		{
+			"sourceBilling": "COAST 2 COAST (THE GHOST & GENE ON EARTH)",
+			"expectedCanonicalNames": [
+				"The Ghost",
+				"Gene On Earth"
+			]
+		},
+		{
+			"sourceBilling": "DAN BEAUMONT",
+			"expectedCanonicalNames": [
+				"Dan Beaumont"
+			]
+		},
+		{
+			"sourceBilling": "HARRY & DAN TEA DANCE",
+			"expectedCanonicalNames": [
+				"Midland",
+				"Dan Beaumont"
+			],
+			"expectedPresentedTitle": "Tea Dance"
+		},
+		{
+			"sourceBilling": "Harry & Dan Present Tea Dance",
+			"sourceKind": "user-reported-import-variant",
+			"expectedCanonicalNames": [
+				"Midland",
+				"Dan Beaumont"
+			],
+			"expectedPresentedTitle": "Tea Dance"
+		},
+		{
+			"sourceBilling": "HAMISH & TOBY",
+			"expectedCanonicalNames": [
+				"Hamish & Toby"
+			]
+		},
+		{
+			"sourceBilling": "TRUTH & LIES",
+			"expectedCanonicalNames": [
+				"Truth & Lies"
+			]
+		},
+		{
+			"sourceBilling": "NÍDIA & VALENTINA (LIVE)",
+			"expectedCanonicalNames": [
+				"Nídia",
+				"Valentina"
+			],
+			"expectedQualifiers": [
+				"live"
+			]
+		},
+		{
+			"sourceBilling": "UNDERGROUND RESISTANCE FEATURING SAUL WILLIAMS",
+			"expectedCanonicalNames": [
+				"Underground Resistance",
+				"Saul Williams"
+			]
+		},
+		{
+			"sourceBilling": ".VRIL (Live)",
+			"sourceKind": "user-annotated-regression",
+			"expectedCanonicalNames": [
+				".VRIL"
+			],
+			"expectedQualifiers": [
+				"live"
+			],
+			"expectedRaUrl": "https://ra.co/dj/vril"
+		},
+		{
+			"sourceBilling": "Alex Downey",
+			"sourceKind": "user-annotated-regression",
+			"expectedCanonicalNames": [
+				"Alex Downey"
+			],
+			"expectedRaUrl": "https://ra.co/dj/alexdowney"
+		},
+		{
+			"sourceBilling": "Amit & Aneesh",
+			"sourceKind": "user-annotated-regression",
+			"expectedCanonicalNames": [
+				"Amit Patel",
+				"Aneesh Patel"
+			]
+		},
+		{
+			"sourceBilling": "Anna Wall",
+			"sourceKind": "user-annotated-regression",
+			"expectedCanonicalNames": [
+				"Anna Wall"
+			],
+			"expectedRaUrl": "https://ra.co/dj/annawall"
+		},
+		{
+			"sourceBilling": "Aoki Takamasa",
+			"sourceKind": "user-annotated-regression",
+			"expectedCanonicalNames": [
+				"Aoki Takamasa"
+			],
+			"expectedMbid": "ce30feb8-6664-4262-8bf3-4e30f4730fc9",
+			"expectedRaUrl": "https://ra.co/dj/aokitakamasa"
+		},
+		{
+			"sourceBilling": "Bobby.",
+			"sourceKind": "user-annotated-regression",
+			"expectedCanonicalNames": [
+				"Bobby."
+			],
+			"expectedRaUrl": "https://ra.co/dj/bobby"
+		},
+		{
+			"sourceBilling": "Brruno Schmidt",
+			"sourceKind": "user-annotated-regression",
+			"expectedCanonicalNames": [
+				"Bruno Schmidt"
+			],
+			"expectedRaUrl": "https://ra.co/dj/brunoschmidt"
+		},
+		{
+			"sourceBilling": "C.A.R (Live)",
+			"sourceKind": "user-annotated-regression",
+			"expectedCanonicalNames": [
+				"C.A.R"
+			],
+			"expectedQualifiers": [
+				"live"
+			],
+			"expectedRaUrl": "https://ra.co/dj/car-uk"
+		},
+		{
+			"sourceBilling": "Cameron Cullen",
+			"sourceKind": "user-annotated-regression",
+			"expectedCanonicalNames": [
+				"DJ Posture"
+			],
+			"expectedRaUrl": "https://ra.co/dj/djposture"
+		},
+		{
+			"sourceBilling": "Harry McCanna",
+			"sourceKind": "user-annotated-regression",
+			"expectedCanonicalNames": [
+				"Harry McCanna"
+			],
+			"expectedRaUrl": "https://ra.co/dj/harrymccanna"
+		},
+		{
+			"sourceBilling": "Itchy Rich",
+			"sourceKind": "user-annotated-regression",
+			"expectedCanonicalNames": [
+				"Itchy Rich"
+			],
+			"expectedRaUrl": "https://ra.co/dj/itchyrich"
+		},
+		{
+			"sourceBilling": "Lutz",
+			"sourceKind": "user-annotated-regression",
+			"expectedCanonicalNames": [
+				"Nicolas Lutz"
+			],
+			"expectedMbid": "e955e6bc-0ed9-4180-86ac-250894ca130f",
+			"expectedRaUrl": "https://ra.co/dj/nicolaslutz"
+		},
+		{
+			"sourceBilling": "Midland",
+			"sourceKind": "user-annotated-regression",
+			"expectedCanonicalNames": [
+				"Midland"
+			],
+			"expectedMbid": "35fddf9e-01f6-49af-8d03-b841dda89995",
+			"expectedRaUrl": "https://ra.co/dj/midland"
+		},
+		{
+			"sourceBilling": "Midland (Ambient Set)",
+			"sourceKind": "user-annotated-regression",
+			"expectedCanonicalNames": [
+				"Midland"
+			],
+			"expectedQualifiers": [
+				"ambient_set"
+			],
+			"expectedMbid": "35fddf9e-01f6-49af-8d03-b841dda89995",
+			"expectedRaUrl": "https://ra.co/dj/midland"
+		},
+		{
+			"sourceBilling": "Oli Silva",
+			"sourceKind": "user-annotated-regression",
+			"expectedCanonicalNames": [
+				"Oli Silva"
+			],
+			"expectedRaUrl": "https://ra.co/dj/olisilva"
+		},
+		{
+			"sourceBilling": "Saoirse",
+			"sourceKind": "user-annotated-regression",
+			"expectedCanonicalNames": [
+				"Saoirse"
+			],
+			"expectedMbid": "4dcb5fd1-53b9-4c2c-a3f8-53c11647daa4"
+		},
+		{
+			"sourceBilling": "Scientist (Live)",
+			"sourceKind": "user-annotated-regression",
+			"expectedCanonicalNames": [
+				"Scientist"
+			],
+			"expectedQualifiers": [
+				"live"
+			],
+			"expectedMbid": "90d63976-5e70-4c73-a500-eb67997d6ed2"
+		},
+		{
+			"sourceBilling": "Sugar Free",
+			"sourceKind": "user-annotated-regression",
+			"expectedCanonicalNames": [
+				"Sugar Free"
+			],
+			"expectedRaUrl": "https://ra.co/dj/sugarfree"
+		},
+		{
+			"sourceBilling": "Talk: RA 'Playing Favourites' with Jane Fitz",
+			"sourceKind": "user-annotated-regression",
+			"expectedCanonicalNames": [
+				"Jane Fitz"
+			],
+			"expectedPresentedTitle": "RA 'Playing Favourites'",
+			"expectedRoles": [
+				"presenter"
+			]
+		},
+		{
+			"sourceBilling": "Talk: Digging Deep: Trevinos x Inverted Audio with Sonja Moonear, Dr Banana & Tristan Da Cunha",
+			"sourceKind": "user-annotated-regression",
+			"expectedCanonicalNames": [
+				"Sonja Moonear",
+				"Dr Banana",
+				"Tristan Da Cunha"
+			],
+			"expectedPresentedTitle": "Digging Deep: Trevinos x Inverted Audio",
+			"expectedRoles": [
+				"presenter",
+				"presenter",
+				"presenter"
+			]
+		},
+		{
+			"sourceBilling": "Z@P (Live)",
+			"sourceKind": "user-annotated-regression",
+			"expectedCanonicalNames": [
+				"Z@p"
+			],
+			"expectedQualifiers": [
+				"live"
+			],
+			"expectedMbid": "a1110b58-d013-4d62-8776-75bd0b6e29a2",
+			"expectedRaUrl": "https://ra.co/dj/zap"
+		},
+		{
+			"sourceBilling": "Optimo",
+			"sourceKind": "user-annotated-regression",
+			"expectedCanonicalNames": [
+				"Optimo (Espacio)"
+			],
+			"expectedRaUrl": "https://ra.co/dj/optimo"
+		}
+	]
 }

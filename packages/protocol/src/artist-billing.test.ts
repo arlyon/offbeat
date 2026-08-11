@@ -12,6 +12,9 @@ interface BillingFixture {
 		expectedCanonicalNames: string[];
 		expectedPresentedTitle?: string;
 		expectedQualifiers?: string[];
+		expectedMbid?: string;
+		expectedRaUrl?: string;
+		expectedRoles?: string[];
 	}>;
 }
 
@@ -36,6 +39,39 @@ describe("artist billing parser", () => {
 			coreBilling: "Harry & Dan Present Tea Dance",
 			identityHint: "Harry & Dan",
 			presentedTitle: "Tea Dance",
+		});
+	});
+
+	it("extracts talk participants as presenters while preserving the talk title", () => {
+		expect(parseArtistBilling("Talk: RA 'Playing Favourites' with Jane Fitz")).toMatchObject({
+			identityHint: "Jane Fitz",
+			presentedTitle: "RA 'Playing Favourites'",
+		});
+		expect(
+			parseArtistBilling(
+				"Talk: Digging Deep: Trevinos x Inverted Audio with Sonja Moonear, Dr Banana & Tristan Da Cunha",
+			),
+		).toMatchObject({
+			identityHint: "Sonja Moonear, Dr Banana & Tristan Da Cunha",
+			presentedTitle: "Digging Deep: Trevinos x Inverted Audio",
+		});
+	});
+
+	it("recognizes abbreviated presentations and reviewed performance formats", () => {
+		expect(parseArtistBilling("Om Unit pres. Acid Dub Studies (Live)")).toMatchObject({
+			identityHint: "Om Unit",
+			presentedTitle: "Acid Dub Studies",
+			performanceQualifiers: ["live"],
+		});
+		expect(parseArtistBilling("Craig Richards (Reggae Set)").performanceQualifiers).toEqual([
+			"reggae_set",
+		]);
+		expect(parseArtistBilling("Nik Bärtsch (Solo Piano)").performanceQualifiers).toEqual([
+			"solo_piano",
+		]);
+		expect(parseArtistBilling("Greg Paulus Live (Live)")).toMatchObject({
+			identityHint: "Greg Paulus",
+			performanceQualifiers: ["live"],
 		});
 	});
 

@@ -1,13 +1,19 @@
 import { parseArtistBilling } from "@offbeat/protocol";
 import { describe, expect, it, vi } from "vitest";
+import houghtonBillingFixtures from "../../../packages/protocol/fixtures/artist-billings/houghton-2026.json";
 import {
 	ARTIST_RESOLUTION_MODEL,
 	artistResolutionCacheMaterial,
 	buildArtistResolutionQueries,
 	createArtistResolutionAiCacheKey,
+	canonicalMusicBrainzArtistId,
+	canonicalResidentAdvisorProfileUrl,
 	createArtistResolutionSearchCacheKey,
 	decodeArtistResolutionProposal,
+	discoverResidentAdvisorProfileUrl,
+	normalizeTavilyResults,
 	resolveArtistBilling,
+	searchArtistIdentityBatch,
 	type ArtistResolutionInput,
 	type TavilyArtistSearchResult,
 } from "./artist-resolution";
@@ -120,15 +126,164 @@ const HARRY_PROPOSAL = {
 };
 
 describe("artist billing resolution", () => {
+	it("normalizes one Brave request for a five-identity batch", async () => {
+		const names = ["Aoki Takamasa", "Midland", "Saoirse", "Scientist", "Z@P"];
+		const fetcher = vi.fn<typeof fetch>(async (request, init) => {
+			const url = new URL(String(request));
+			expect(url.origin + url.pathname).toBe("https://api.search.brave.com/res/v1/web/search");
+			expect(url.searchParams.get("count")).toBe("20");
+			for (const name of names) expect(url.searchParams.get("q")).toContain(`"${name}"`);
+			expect(new Headers(init?.headers).get("X-Subscription-Token")).toBe("brave-secret");
+			return jsonResponse({
+				web: {
+					results: [
+						{
+							title: "Aoki Takamasa · Artist Profile",
+							url: "https://ra.co/dj/aokitakamasa",
+							description: "Aoki Takamasa artist profile",
+							extra_snippets: ["Japanese electronic musician"],
+						},
+					],
+				},
+			});
+		});
+
+		const response = await searchArtistIdentityBatch(
+			names,
+			"brave",
+			{ braveApiKey: "brave-secret" },
+			{ fetch: fetcher },
+		);
+
+		expect(fetcher).toHaveBeenCalledOnce();
+		expect(normalizeTavilyResults([response])).toEqual([
+			expect.objectContaining({
+				title: "Aoki Takamasa · Artist Profile",
+				url: "https://ra.co/dj/aokitakamasa",
+				content: expect.stringContaining("Japanese electronic musician"),
+			}),
+		]);
+	});
+
+	it("freezes every user-annotated MBID and RA identity anchor", async () => {
+		const annotated = houghtonBillingFixtures.billings.filter(
+			(billing) => billing.sourceKind === "user-annotated-regression",
+		);
+		expect(annotated).toHaveLength(22);
+		for (const billing of annotated) {
+			if (billing.expectedMbid) {
+				expect(
+					canonicalMusicBrainzArtistId(
+						`https://musicbrainz.org/artist/${billing.expectedMbid}`,
+					),
+				).toBe(billing.expectedMbid);
+			}
+			if (billing.expectedRaUrl) {
+				expect(canonicalResidentAdvisorProfileUrl(billing.expectedRaUrl)).toBe(
+					billing.expectedRaUrl,
+				);
+				const canonicalName = billing.expectedCanonicalNames[0];
+				if (!canonicalName) throw new Error(`missing canonical name for ${billing.sourceBilling}`);
+				const fetcher = vi.fn<typeof fetch>(async () =>
+					jsonResponse({
+						results: [
+							{
+								title: `${canonicalName} · Artist Profile`,
+								url: billing.expectedRaUrl,
+								content: canonicalName,
+								score: 0.99,
+							},
+						],
+					}),
+				);
+				await expect(
+					discoverResidentAdvisorProfileUrl(canonicalName, {
+						tavilyApiKey: OPTIONS.tavilyApiKey,
+						fetch: fetcher,
+					}),
+				).resolves.toBe(billing.expectedRaUrl);
+			}
+		}
+	});
+
+	it("discovers one exact canonical Resident Advisor profile through Tavily", async () => {
+		const fetcher = vi.fn<typeof fetch>(async () =>
+			jsonResponse({
+				results: [
+					{
+						title: "Gene on Earth · Artist Profile",
+						url: "https://ra.co/dj/geneonearth",
+						content: "Gene on Earth",
+						score: 0.99,
+					},
+					{
+						title: "Gene on Earth event",
+						url: "https://ra.co/events/123",
+						content: "Event listing",
+						score: 0.98,
+					},
+				],
+			}),
+		);
+
+		await expect(
+			discoverResidentAdvisorProfileUrl("Gene on Earth", {
+				tavilyApiKey: OPTIONS.tavilyApiKey,
+				fetch: fetcher,
+			}),
+		).resolves.toBe("https://ra.co/dj/geneonearth");
+		expect(canonicalResidentAdvisorProfileUrl("https://es.ra.co/dj/zap")).toBe(
+			"https://ra.co/dj/zap",
+		);
+		expect(canonicalResidentAdvisorProfileUrl("https://ra.co/dj/saoirse/tour-dates")).toBe(
+			"https://ra.co/dj/saoirse",
+		);
+		expect(canonicalResidentAdvisorProfileUrl("https://ra.co/features/geneonearth")).toBeUndefined();
+		expect(canonicalResidentAdvisorProfileUrl("https://ra.co/dj/geneonearth/reviews")).toBeUndefined();
+		expect(canonicalResidentAdvisorProfileUrl("https://evil.example/dj/geneonearth")).toBeUndefined();
+		const body = parseRequestBody(fetcher.mock.calls[0]?.[1]?.body);
+		expect(body.query).toContain("site:ra.co/dj");
+		expect(body).toMatchObject({ include_answer: false, include_raw_content: false });
+	});
+
+	it("accepts a provider-qualified RA name without conflating accented artists", async () => {
+		const fetcher = vi.fn<typeof fetch>(async () =>
+			jsonResponse({
+				results: [
+					{
+						title: "Optimo (Espacio) · Artist Profile",
+						url: "https://ra.co/dj/optimo",
+						content: "Optimo (Espacio), Scottish electronic duo",
+						score: 0.99,
+					},
+					{
+						title: "Óptimo · Artist Profile",
+						url: "https://ra.co/dj/optimo-latin",
+						content: "Latin artist",
+						score: 0.98,
+					},
+				],
+			}),
+		);
+
+		await expect(
+			discoverResidentAdvisorProfileUrl("Optimo", {
+				tavilyApiKey: OPTIONS.tavilyApiKey,
+				fetch: fetcher,
+			}),
+		).resolves.toBe("https://ra.co/dj/optimo");
+	});
+
 	it("uses only bounded Tavily raw Search requests and the configured DeepSeek gateway", async () => {
 		const input = inputFor("Harry & Dan Present Tea Dance");
 		const fetcher = providerFetch(HARRY_RESULTS, HARRY_PROPOSAL);
 
 		const result = await resolveArtistBilling(input, { ...OPTIONS, fetch: fetcher });
+		const queryCount = buildArtistResolutionQueries(input).length;
 
 		expect(result.status).toBe("resolved");
-		expect(fetcher).toHaveBeenCalledTimes(4);
-		for (const [request, init] of fetcher.mock.calls.slice(0, 3)) {
+		expect(fetcher).toHaveBeenCalledTimes(queryCount + 1);
+		for (const [request, init] of fetcher.mock.calls.slice(0, queryCount)) {
 			expect(request).toBe("https://api.tavily.com/search");
 			expect(init).toMatchObject({
 				method: "POST",
@@ -143,7 +298,7 @@ describe("artist billing resolution", () => {
 				search_depth: "basic",
 				include_answer: false,
 				include_raw_content: false,
-				max_results: 5,
+				max_results: 20,
 			});
 			expect(Object.keys(body).sort()).toEqual([
 				"include_answer",
@@ -153,7 +308,7 @@ describe("artist billing resolution", () => {
 				"search_depth",
 			]);
 		}
-		const [gatewayRequest, gatewayInit] = fetcher.mock.calls[3];
+		const [gatewayRequest, gatewayInit] = fetcher.mock.calls[queryCount];
 		expect(gatewayRequest).toBe(`${OPTIONS.gatewayBaseUrl}/chat/completions`);
 		expect(gatewayInit?.headers).toMatchObject({
 			Authorization: `Bearer ${OPTIONS.deepSeekApiKey}`,
@@ -197,8 +352,14 @@ describe("artist billing resolution", () => {
 			fetch: secondFetcher,
 		});
 
-		const firstBody = parseRequestBody(firstFetcher.mock.calls[3]?.[1]?.body);
-		const secondBody = parseRequestBody(secondFetcher.mock.calls[3]?.[1]?.body);
+		const firstIndex = buildArtistResolutionQueries(
+			inputFor("Harry & Dan Present Tea Dance", contextBillings),
+		).length;
+		const secondIndex = buildArtistResolutionQueries(
+			inputFor("Harry & Dan Present Tea Dance (Live)", contextBillings),
+		).length;
+		const firstBody = parseRequestBody(firstFetcher.mock.calls[firstIndex]?.[1]?.body);
+		const secondBody = parseRequestBody(secondFetcher.mock.calls[secondIndex]?.[1]?.body);
 		if (!Array.isArray(firstBody.messages) || !Array.isArray(secondBody.messages)) {
 			throw new Error("expected gateway messages");
 		}
@@ -210,13 +371,11 @@ describe("artist billing resolution", () => {
 		const contextBillings = Array.from({ length: 250 }, (_, index) => `Artist ${index}`);
 		const fetcher = providerFetch(HARRY_RESULTS, HARRY_PROPOSAL);
 
-		const result = await resolveArtistBilling(
-			inputFor("Harry & Dan Present Tea Dance", contextBillings),
-			{ ...OPTIONS, fetch: fetcher },
-		);
+		const input = inputFor("Harry & Dan Present Tea Dance", contextBillings);
+		const result = await resolveArtistBilling(input, { ...OPTIONS, fetch: fetcher });
 
 		expect(result.status).toBe("resolved");
-		expect(fetcher).toHaveBeenCalledTimes(4);
+		expect(fetcher).toHaveBeenCalledTimes(buildArtistResolutionQueries(input).length + 1);
 	});
 
 	it("rejects lineup context beyond its count and character budgets", async () => {
@@ -393,7 +552,7 @@ describe("artist billing resolution", () => {
 		const firstFetch = providerFetch(HARRY_RESULTS, HARRY_PROPOSAL);
 		const first = await resolveArtistBilling(input, { ...OPTIONS, cache, fetch: firstFetch });
 		expect(first.status).toBe("resolved");
-		expect(firstFetch).toHaveBeenCalledTimes(4);
+		expect(firstFetch).toHaveBeenCalledTimes(buildArtistResolutionQueries(input).length + 1);
 
 		const secondFetch = vi.fn<typeof fetch>(() => {
 			throw new Error("provider should not be called when cached");
@@ -695,9 +854,13 @@ describe("artist billing resolution", () => {
 		}
 	});
 
-	it("constructs no more than three deterministic search queries", () => {
+	it("constructs bounded deterministic search queries for each explicit credit", () => {
 		const input = inputFor("Harry & Dan Present Tea Dance", ["Zulu", "Alpha", "Beta"]);
-		expect(buildArtistResolutionQueries(input)).toEqual(buildArtistResolutionQueries(input));
-		expect(buildArtistResolutionQueries(input)).toHaveLength(3);
+		const queries = buildArtistResolutionQueries(input);
+		expect(queries).toEqual(buildArtistResolutionQueries(input));
+		expect(queries).toHaveLength(1);
+		expect(queries[0]).toContain('"Harry"');
+		expect(queries[0]).toContain('"Dan"');
+		expect(queries[0]).toContain("Resident Advisor MusicBrainz");
 	});
 });

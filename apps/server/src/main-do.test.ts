@@ -259,6 +259,78 @@ describe("MainDO API", () => {
 			expect(substituted.status).toBe(401);
 		});
 
+		it("creates a provider-neutral identity with a verified membership", async () => {
+			const path = "/artist-identities";
+			const groupBody = JSON.stringify({
+				name: "Test Group",
+				residentAdvisorUrl: "https://ra.co/dj/testgroup",
+			});
+			const group = await worker.fetch(path, {
+				method: "PUT",
+				headers: await artistAdminHeaders("PUT", path, groupBody),
+				body: groupBody,
+			});
+			expect(group.status).toBe(200);
+			const groupProfile = (await group.json()) as { id: string };
+			expect(groupProfile.id).toBe("ra:testgroup");
+
+			const memberBody = JSON.stringify({
+				name: "Test Member",
+				aliases: ["Member T"],
+				relations: [{ kind: "member_of", artistId: groupProfile.id }],
+			});
+			const member = await worker.fetch(path, {
+				method: "PUT",
+				headers: await artistAdminHeaders("PUT", path, memberBody),
+				body: memberBody,
+			});
+			expect(member.status).toBe(200);
+			const memberProfile = (await member.json()) as { id: string };
+			expect(memberProfile).toMatchObject({
+				name: "Test Member",
+				aliases: ["Member T"],
+				relations: [{ kind: "member_of", artistId: "ra:testgroup" }],
+			});
+
+			const searchPath = "/artist-identities/search";
+			const searchBody = JSON.stringify({ query: "Member" });
+			const search = await worker.fetch(searchPath, {
+				method: "POST",
+				headers: await artistAdminHeaders("POST", searchPath, searchBody),
+				body: searchBody,
+			});
+			expect(search.status).toBe(200);
+			await expect(search.json()).resolves.toEqual(
+				expect.arrayContaining([expect.objectContaining({ id: memberProfile.id })]),
+			);
+
+			const duplicateBody = JSON.stringify({
+				name: "Test Member Duplicate",
+				residentAdvisorUrl: "https://ra.co/dj/testmemberduplicate",
+			});
+			const duplicate = await worker.fetch(path, {
+				method: "PUT",
+				headers: await artistAdminHeaders("PUT", path, duplicateBody),
+				body: duplicateBody,
+			});
+			const duplicateProfile = (await duplicate.json()) as { id: string };
+			const mergePath = "/artist-identities/merge";
+			const mergeBody = JSON.stringify({
+				fromArtistId: duplicateProfile.id,
+				toArtistId: memberProfile.id,
+			});
+			const merge = await worker.fetch(mergePath, {
+				method: "POST",
+				headers: await artistAdminHeaders("POST", mergePath, mergeBody),
+				body: mergeBody,
+			});
+			expect(merge.status).toBe(200);
+			await expect(merge.json()).resolves.toMatchObject({
+				id: memberProfile.id,
+				aliases: expect.arrayContaining(["Member T", "Test Member Duplicate"]),
+			});
+		});
+
 		it("PUT /admins rejects second admin without auth headers", async () => {
 			// Ensure at least one admin exists first
 			const listResp = await worker.fetch("/admins");

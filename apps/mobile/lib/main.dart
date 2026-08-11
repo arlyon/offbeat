@@ -113,6 +113,7 @@ class _OffbeatShellState extends State<_OffbeatShell>
   StreamSubscription<LineupDto?>? _lineupSub;
   LineupDto? _lineup;
   bool _lineupLoading = true;
+  final ValueNotifier<SetDetailsLineup?> _setDetailsLineup = ValueNotifier(null);
 
   // Starred set IDs (loaded from Rust SQLite)
   Set<String> _starredSetIds = {};
@@ -193,6 +194,7 @@ class _OffbeatShellState extends State<_OffbeatShell>
     _relayRetryTimer?.cancel();
     _deepLinkSub?.cancel();
     _festivalService.dispose();
+    _setDetailsLineup.dispose();
     _navController.dispose();
     super.dispose();
   }
@@ -377,6 +379,7 @@ class _OffbeatShellState extends State<_OffbeatShell>
       _selectedFestival = null;
       _lineup = null;
       _lineupLoading = true;
+      _setDetailsLineup.value = null;
       _weather = null;
       _starredSetIds = {};
     });
@@ -619,6 +622,7 @@ class _OffbeatShellState extends State<_OffbeatShell>
       _activeTab = AppTab.schedule;
       _lineup = null;
       _lineupLoading = true;
+      _setDetailsLineup.value = null;
       _weather = null;
       _starredSetIds = {};
       _relayConnected = false;
@@ -657,6 +661,7 @@ class _OffbeatShellState extends State<_OffbeatShell>
       _selectedFestival = fest;
       _lineup = null;
       _lineupLoading = true;
+      _setDetailsLineup.value = null;
       _weather = null;
       _starredSetIds = {};
       _groupScheduleOverlay = GroupScheduleOverlay.empty;
@@ -686,6 +691,7 @@ class _OffbeatShellState extends State<_OffbeatShell>
           _lineup = lineup;
           _lineupLoading = false;
         });
+        _setDetailsLineup.value = _lineupModels();
       }
     });
 
@@ -1386,6 +1392,14 @@ class _OffbeatShellState extends State<_OffbeatShell>
           links: profile.links
               .map((link) => ArtistLink(kind: link.kind, url: link.url))
               .toList(),
+          relations: profile.relations
+              .map(
+                (relation) => ArtistRelation(
+                  kind: relation.kind,
+                  artistId: relation.artistId,
+                ),
+              )
+              .toList(),
           updatedAt: profile.updatedAt,
         ),
     };
@@ -1451,6 +1465,7 @@ class _OffbeatShellState extends State<_OffbeatShell>
       stages: data.stages,
       days: data.days,
       allSets: data.sets,
+      liveLineup: _setDetailsLineup,
       onStar: _handleStarToggle,
       onStageChat: (stage) =>
           _openPublicChat(channelId: stage.id, title: '${stage.name} chat'),

@@ -85,6 +85,7 @@ describe("artist enrichment", () => {
 					relations: [
 						{ type: "streaming music", url: { resource: "https://open.spotify.com/artist/abc" } },
 						{ type: "soundcloud", url: { resource: "https://soundcloud.com/example" } },
+						{ type: "social network", url: { resource: "https://ra.co/dj/exampleartist" } },
 						{ type: "official homepage", url: { resource: "https://example.com/" } },
 						{ type: "wikidata", url: { resource: "https://www.wikidata.org/wiki/Q42" } },
 						{ type: "bad", url: { resource: "javascript:alert(1)" } },
@@ -119,6 +120,7 @@ describe("artist enrichment", () => {
 		});
 		if (outcome.status !== "enriched") throw new Error("expected enriched profile");
 		expect(outcome.profile.links).toEqual([
+			{ kind: "resident_advisor", url: "https://ra.co/dj/exampleartist" },
 			{ kind: "soundcloud", url: "https://soundcloud.com/example" },
 			{ kind: "spotify", url: "https://open.spotify.com/artist/abc" },
 			{ kind: "website", url: "https://example.com/" },
@@ -162,6 +164,28 @@ describe("artist enrichment", () => {
 		expect(outcome).toMatchObject({ status: "enriched", profile: { mbid: MBID } });
 		expect(fetcher).toHaveBeenCalledTimes(2);
 		expect(beforeMusicBrainzRequest).toHaveBeenCalledTimes(2);
+	});
+
+	it("does not treat a diacritic-folded name as an exact identity", async () => {
+		const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(
+			jsonResponse({
+				artists: [
+					{
+						id: "39ca6961-d184-4f7b-be25-2bdab0767bc4",
+						name: "Óptimo",
+						score: 100,
+					},
+				],
+			}),
+		);
+
+		await expect(
+			enrichArtist(
+				{ festivalId: "houghton2026", setIds: ["set-1"], billing: "Optimo" },
+				{ userAgent: "Offbeat/Test", fetch: fetcher },
+			),
+		).resolves.toEqual({ status: "unresolved", reason: "no_unique_match" });
+		expect(fetcher).toHaveBeenCalledOnce();
 	});
 
 	it("allows an AI-confirmed legitimate separator act to use exact provider matching", async () => {

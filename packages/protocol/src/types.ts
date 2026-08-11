@@ -35,6 +35,7 @@ export type ArtistLinkKind =
 	| "website"
 	| "spotify"
 	| "soundcloud"
+	| "resident_advisor"
 	| "youtube"
 	| "instagram"
 	| "facebook"
@@ -48,16 +49,21 @@ export interface ArtistLink {
 
 export interface ArtistFieldProvenance {
 	field: string;
-	provider: "musicbrainz" | "wikidata" | "festival";
+	provider: "musicbrainz" | "wikidata" | "resident_advisor" | "festival" | "admin";
 	sourceUrl: string;
 	license: string;
 	retrievedAt: string;
 }
 
+export interface ArtistRelation {
+	kind: "member_of";
+	artistId: string;
+}
+
 export interface ArtistProfile {
 	id: string;
 	name: string;
-	mbid: string;
+	mbid?: string;
 	wikidataId?: string;
 	aliases: string[];
 	artistType?: string;
@@ -65,13 +71,24 @@ export interface ArtistProfile {
 	genres: string[];
 	description?: string;
 	links: ArtistLink[];
+	relations?: ArtistRelation[];
 	provenance: ArtistFieldProvenance[];
 	updatedAt: string;
 }
 
 export type ArtistCreditRole = "performer" | "presenter" | "guest";
 
-export type PerformanceQualifier = "dj_set" | "live" | "ambient_set" | "hybrid_set";
+export type PerformanceQualifier =
+	| "dj_set"
+	| "live"
+	| "ambient_set"
+	| "hybrid_set"
+	| "reggae_set"
+	| "balearic_set"
+	| "electro_set"
+	| "r_and_b_set"
+	| "solo_piano"
+	| "live_keyboard";
 
 export interface ArtistCredit {
 	artistId: string;

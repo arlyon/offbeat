@@ -2115,9 +2115,15 @@ export class FestivalDO extends DurableObject {
 			);
 		});
 		const currentArtists = this.#publicStateDoc?.getMap("artists");
-		const allProfilesApplied = profiles.every(
-			(profile) => currentArtists?.get(profile.id) instanceof Y.Map,
-		);
+		const allProfilesApplied = profiles.every((profile) => {
+			const current = currentArtists?.get(profile.id);
+			return (
+				current instanceof Y.Map &&
+				current.get("links") === JSON.stringify(profile.links) &&
+				current.get("relations") === JSON.stringify(profile.relations ?? []) &&
+				current.get("updatedAt") === profile.updatedAt
+			);
+		});
 		if (currentResolutionMatches && allTargetsApplied && allProfilesApplied) {
 			return "already_applied";
 		}
@@ -2427,7 +2433,8 @@ interface WeatherData {
 
 function writeArtistProfile(map: Y.Map<unknown>, profile: ArtistProfile) {
 	map.set("name", profile.name);
-	map.set("mbid", profile.mbid);
+	if (profile.mbid) map.set("mbid", profile.mbid);
+	else map.delete("mbid");
 	if (profile.wikidataId) map.set("wikidataId", profile.wikidataId);
 	else map.delete("wikidataId");
 	map.set("aliases", JSON.stringify(profile.aliases));
@@ -2439,6 +2446,7 @@ function writeArtistProfile(map: Y.Map<unknown>, profile: ArtistProfile) {
 	if (profile.description) map.set("description", profile.description);
 	else map.delete("description");
 	map.set("links", JSON.stringify(profile.links));
+	map.set("relations", JSON.stringify(profile.relations ?? []));
 	map.set("provenance", JSON.stringify(profile.provenance));
 	map.set("updatedAt", profile.updatedAt);
 }

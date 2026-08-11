@@ -4,16 +4,17 @@ _Research date: 2026-08-10. Primary official sources only. Pricing and policies 
 
 ## Recommendation
 
-Use **Tavily Search** for the server-side evidence step, initially on the recurring free Researcher tier:
+Alternate **Brave Web Search** and **Tavily Basic Search** for server-side evidence discovery:
 
-- call `POST https://api.tavily.com/search` from the Cloudflare Worker with one `TAVILY_API_KEY` secret;
-- use `search_depth: "basic"`, `include_answer: false`, `include_raw_content: false`, and approximately five results;
-- pass Tavily's ranked `title`, `url`, `content` (source snippets), and score to the existing DeepSeek resolution step;
-- search only ambiguous billing names, persist bounded search and validated resolution responses for reuse across shows, and respect `429 Retry-After`.
+- batch up to five exact artist names into one query and request up to 20 results;
+- alternate providers globally per uncached batch, without making both requests for the same attempt;
+- map exact RA profile URLs and MusicBrainz IDs back to requested names before DeepSeek resolution;
+- retain Tavily evidence in the versioned global cache, but treat Brave results as transient and delete the raw batch after processing; persist only validated identities, links, provider provenance, AI output, and billing resolutions;
+- never request generated answers or raw page extraction from either provider.
 
-**Project decision:** OFFBEAT is non-commercial and will retain bounded Tavily evidence, validated DeepSeek output, enrichment profiles, and billing resolutions to minimize repeat provider calls. Caches are versioned by inputs, model, prompt, schema, and search settings; manual invalidation remains available.
+**Project decision:** deterministic identifiers, canonical profiles, aliases, qualifiers, and lineup context run before paid search. One provider request covers up to five remaining identities. Brave costs **$5/1,000 requests** and includes $5 monthly credit; Tavily PAYG costs **$8/1,000 basic searches**. A 300-identity uncached import therefore needs at most about 60 search requests before retries, split across the two providers, rather than hundreds of per-identity calls. [Brave pricing][brave-pricing] [Brave API][brave-api] [Tavily pricing][tavily-pricing]
 
-This is the lowest-friction fit. Basic search costs one credit; the free tier supplies **1,000 credits every month with no card**, enough for about 1,000 ambiguous artists/month. PAYG is **$0.008/credit** ($8/1,000 basic searches); advanced search costs two credits ($16/1,000 at PAYG). Development keys permit **100 requests/minute**. Production keys permit 1,000/minute but require a paid plan or PAYG. [Tavily pricing][tavily-pricing] [Tavily rate limits][tavily-rates]
+Tavily Basic remains useful because its `content` field is richer for alias evidence. Brave's title, URL, description, and optional extra snippets are sufficient for exact RA and MusicBrainz discovery, but its storage terms require transient handling of raw results. The Cloudflare Worker uses `BRAVE_SEARCH_API_KEY` and `TAVILY_API_KEY` secrets and keeps provider calls off mobile clients.
 
 Do **not** request Tavily's optional LLM answer. `include_answer` is explicitly LLM-generated; OFFBEAT already pays DeepSeek to compare candidates and make the constrained decision. Raw Tavily results supply evidence without paying for or trusting a second answer-generation step. [Tavily Search API][tavily-search]
 
@@ -82,7 +83,7 @@ If Tavily quality is inadequate, benchmark **Perplexity Search API** next—not 
 
 ## Decision and remaining uncertainty
 
-**Decision:** start with Tavily Basic raw Search plus DeepSeek, and use Wikidata as a free structured corroborator. This needs one new secret, remains free at likely import volume, has an explicit 100 RPM development limit, and returns the evidence fields OFFBEAT needs. Run a small quality benchmark against ambiguous festival billings before enabling PAYG. Set a dashboard spend ceiling if PAYG is enabled.
+**Decision:** batch up to five identities per request and alternate Brave Web Search with Tavily Basic Search. Use the same bounded result envelope for DeepSeek, retain Brave payloads only during queue processing, and cache Tavily payloads plus validated derived records globally. Use Wikidata as a free structured corroborator. Benchmark provider hit rates separately and set dashboard spend ceilings before enabling another production backfill.
 
 **Re-check before production:** Tavily pricing is live web pricing rather than a fixed order form; the public contract does not specify a fixed Search-query retention period, standard-plan ZDR, unambiguous output ownership, or an explicit persistent-snippet licence. Ask Tavily to confirm those points if OFFBEAT will store snippets rather than only source links and reviewed resolution records. Perplexity did not publish a verifiable recurring free Search tier on the reviewed official page. Wikidata publishes etiquette and dynamic throttling rather than a predictable numeric SLA.
 

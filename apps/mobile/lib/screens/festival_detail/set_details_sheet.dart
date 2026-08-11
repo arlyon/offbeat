@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -6,12 +7,16 @@ import '../../data/models.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/dotted_border.dart';
 
+typedef SetDetailsLineup =
+    ({List<Stage> stages, List<Day> days, List<FestSet> sets});
+
 void showSetDetailsSheet(
   BuildContext context, {
   required FestSet set,
   required List<Stage> stages,
   required List<Day> days,
   required List<FestSet> allSets,
+  ValueListenable<SetDetailsLineup?>? liveLineup,
   void Function(String setId)? onStar,
   void Function(Stage stage)? onStageChat,
 }) {
@@ -24,6 +29,7 @@ void showSetDetailsSheet(
       stages: stages,
       days: days,
       allSets: allSets,
+      liveLineup: liveLineup,
       onStar: onStar,
       onStageChat: onStageChat,
     ),
@@ -35,6 +41,7 @@ class _SetDetailsSheet extends StatefulWidget {
   final List<Stage> stages;
   final List<Day> days;
   final List<FestSet> allSets;
+  final ValueListenable<SetDetailsLineup?>? liveLineup;
   final void Function(String setId)? onStar;
   final void Function(Stage stage)? onStageChat;
 
@@ -43,6 +50,7 @@ class _SetDetailsSheet extends StatefulWidget {
     required this.stages,
     required this.days,
     required this.allSets,
+    this.liveLineup,
     this.onStar,
     this.onStageChat,
   });
@@ -56,33 +64,70 @@ class _SetDetailsSheetState extends State<_SetDetailsSheet> {
   final _history = <FestSet>[];
   final _starredOverrides = <String, bool>{};
   bool _connectionsExpanded = false;
+  SetDetailsLineup? _liveData;
+
+  List<Stage> get _stages => _liveData?.stages ?? widget.stages;
+  List<Day> get _days => _liveData?.days ?? widget.days;
+  List<FestSet> get _allSets => _liveData?.sets ?? widget.allSets;
 
   Map<String, Stage> get _stageById => {
-    for (final stage in widget.stages) stage.id: stage,
+    for (final stage in _stages) stage.id: stage,
   };
 
-  Map<String, Day> get _dayById => {for (final day in widget.days) day.id: day};
+  Map<String, Day> get _dayById => {for (final day in _days) day.id: day};
 
   Map<String, int> get _dayOrder => {
-    for (var index = 0; index < widget.days.length; index++)
-      widget.days[index].id: index,
+    for (var index = 0; index < _days.length; index++) _days[index].id: index,
   };
 
   @override
   void initState() {
     super.initState();
     _selectedSet = widget.set;
+    _liveData = widget.liveLineup?.value;
+    widget.liveLineup?.addListener(_handleLineupUpdate);
+  }
+
+  @override
+  void dispose() {
+    widget.liveLineup?.removeListener(_handleLineupUpdate);
+    super.dispose();
+  }
+
+  void _handleLineupUpdate() {
+    final data = widget.liveLineup?.value;
+    if (!mounted || data == null) return;
+    FestSet refreshed(FestSet current) => data.sets.firstWhere(
+      (set) => set.id == current.id,
+      orElse: () => current,
+    );
+    setState(() {
+      _liveData = data;
+      _selectedSet = refreshed(_selectedSet);
+      for (var index = 0; index < _history.length; index++) {
+        _history[index] = refreshed(_history[index]);
+      }
+    });
   }
 
   bool get _starred =>
       _starredOverrides[_selectedSet.id] ?? _selectedSet.starred;
 
+  Set<String> _artistConnectionIds(FestSet set) {
+    return {
+      ...set.artistIds,
+      for (final profile in set.artistProfiles)
+        for (final relation in profile.relations)
+          if (relation.kind == 'member_of') relation.artistId,
+    };
+  }
+
   List<FestSet> get _artistSets {
-    final artistIds = _selectedSet.artistIds.toSet();
+    final artistIds = _artistConnectionIds(_selectedSet);
     final artist = _normalizeArtist(_selectedSet.artist);
-    final sets = widget.allSets.where((set) {
+    final sets = _allSets.where((set) {
       if (artistIds.isNotEmpty) {
-        return set.artistIds.any(artistIds.contains);
+        return _artistConnectionIds(set).any(artistIds.contains);
       }
       return _normalizeArtist(set.artist) == artist;
     }).toList();
@@ -183,6 +228,8 @@ class _SetDetailsSheetState extends State<_SetDetailsSheet> {
     final artistSets = _artistSets;
     final clashes = _clashes;
     final friendOverlap = _friendOverlap;
+    final hasExpandableConnections =
+        artistSets.length > 3 || friendOverlap.isNotEmpty || clashes.isNotEmpty;
 
     return DraggableScrollableSheet(
       initialChildSize: 0.68,
@@ -269,13 +316,15 @@ class _SetDetailsSheetState extends State<_SetDetailsSheet> {
                         onSetTap: _selectSet,
                       ),
                     ],
-                    const SizedBox(height: 8),
-                    _ExpandConnections(
-                      expanded: _connectionsExpanded,
-                      onTap: () => setState(
-                        () => _connectionsExpanded = !_connectionsExpanded,
+                    if (hasExpandableConnections) ...[
+                      const SizedBox(height: 8),
+                      _ExpandConnections(
+                        expanded: _connectionsExpanded,
+                        onTap: () => setState(
+                          () => _connectionsExpanded = !_connectionsExpanded,
+                        ),
                       ),
-                    ),
+                    ],
                   ],
                 ),
               ),
@@ -400,7 +449,12 @@ class _ArtistProfileSection extends StatelessWidget {
   }
 
   static List<ArtistLink> _visibleLinks(ArtistProfile profile) {
-    const supportedKinds = {'spotify', 'soundcloud', 'website'};
+    const supportedKinds = {
+      'spotify',
+      'soundcloud',
+      'resident_advisor',
+      'website',
+    };
     final byKind = <String, ArtistLink>{};
     for (final link in profile.links) {
       final kind = link.kind.toLowerCase();
@@ -409,7 +463,12 @@ class _ArtistProfileSection extends StatelessWidget {
       }
     }
     return [
-      for (final kind in const ['spotify', 'soundcloud', 'website'])
+      for (final kind in const [
+        'spotify',
+        'soundcloud',
+        'resident_advisor',
+        'website',
+      ])
         ?byKind[kind],
     ];
   }
@@ -604,11 +663,13 @@ class _ArtistLinkAction extends StatelessWidget {
     final icon = switch (kind) {
       'spotify' => Icons.play_circle_outline,
       'soundcloud' => Icons.cloud_outlined,
+      'resident_advisor' => Icons.event_outlined,
       _ => Icons.language,
     };
     final label = switch (kind) {
       'spotify' => 'SPOTIFY',
       'soundcloud' => 'SOUNDCLOUD',
+      'resident_advisor' => 'RA',
       _ => 'WEBSITE',
     };
 

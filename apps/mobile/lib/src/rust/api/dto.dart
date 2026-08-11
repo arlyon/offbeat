@@ -6,7 +6,7 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `chat_trust_label`, `month_number`, `parse_artist_links`, `parse_json_string_list`, `sort_lineup_days`
+// These functions are ignored because they are not marked as `pub`: `chat_trust_label`, `month_number`, `parse_artist_links`, `parse_artist_relations`, `parse_json_string_list`, `sort_lineup_days`
 
 /// Read lineup from a doc manager (used by watch_lineup).
 ///
@@ -80,7 +80,7 @@ class ArtistLinkDto {
 class ArtistProfileDto {
   final String id;
   final String name;
-  final String mbid;
+  final String? mbid;
   final String? wikidataId;
   final List<String> aliases;
   final String? artistType;
@@ -88,12 +88,13 @@ class ArtistProfileDto {
   final List<String> genres;
   final String? description;
   final List<ArtistLinkDto> links;
+  final List<ArtistRelationDto> relations;
   final String updatedAt;
 
   const ArtistProfileDto({
     required this.id,
     required this.name,
-    required this.mbid,
+    this.mbid,
     this.wikidataId,
     required this.aliases,
     this.artistType,
@@ -101,6 +102,7 @@ class ArtistProfileDto {
     required this.genres,
     this.description,
     required this.links,
+    required this.relations,
     required this.updatedAt,
   });
 
@@ -116,6 +118,7 @@ class ArtistProfileDto {
       genres.hashCode ^
       description.hashCode ^
       links.hashCode ^
+      relations.hashCode ^
       updatedAt.hashCode;
 
   @override
@@ -133,7 +136,26 @@ class ArtistProfileDto {
           genres == other.genres &&
           description == other.description &&
           links == other.links &&
+          relations == other.relations &&
           updatedAt == other.updatedAt;
+}
+
+class ArtistRelationDto {
+  final String kind;
+  final String artistId;
+
+  const ArtistRelationDto({required this.kind, required this.artistId});
+
+  @override
+  int get hashCode => kind.hashCode ^ artistId.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ArtistRelationDto &&
+          runtimeType == other.runtimeType &&
+          kind == other.kind &&
+          artistId == other.artistId;
 }
 
 class AttestationDto {

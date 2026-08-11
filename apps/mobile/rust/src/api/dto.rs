@@ -123,10 +123,15 @@ pub struct ArtistLinkDto {
     pub url: String,
 }
 
+pub struct ArtistRelationDto {
+    pub kind: String,
+    pub artist_id: String,
+}
+
 pub struct ArtistProfileDto {
     pub id: String,
     pub name: String,
-    pub mbid: String,
+    pub mbid: Option<String>,
     pub wikidata_id: Option<String>,
     pub aliases: Vec<String>,
     pub artist_type: Option<String>,
@@ -134,6 +139,7 @@ pub struct ArtistProfileDto {
     pub genres: Vec<String>,
     pub description: Option<String>,
     pub links: Vec<ArtistLinkDto>,
+    pub relations: Vec<ArtistRelationDto>,
     pub updated_at: String,
 }
 
@@ -311,6 +317,21 @@ fn parse_json_string_list(value: Option<String>) -> Vec<String> {
         .unwrap_or_default()
 }
 
+fn parse_artist_relations(value: Option<String>) -> Vec<ArtistRelationDto> {
+    let values = value
+        .and_then(|json| serde_json::from_str::<Vec<serde_json::Value>>(&json).ok())
+        .unwrap_or_default();
+    values
+        .into_iter()
+        .filter_map(|value| {
+            Some(ArtistRelationDto {
+                kind: value.get("kind")?.as_str()?.to_string(),
+                artist_id: value.get("artistId")?.as_str()?.to_string(),
+            })
+        })
+        .collect()
+}
+
 fn parse_artist_links(value: Option<String>) -> Vec<ArtistLinkDto> {
     let values = value
         .and_then(|json| serde_json::from_str::<Vec<serde_json::Value>>(&json).ok())
@@ -399,7 +420,7 @@ pub fn read_lineup_from_doc(dm: &DocManager, doc_id: &str) -> Option<LineupDto> 
             Some(ArtistProfileDto {
                 id,
                 name: any_str(&f, "name")?,
-                mbid: any_str(&f, "mbid")?,
+                mbid: any_str(&f, "mbid"),
                 wikidata_id: any_str(&f, "wikidataId"),
                 aliases: parse_json_string_list(any_str(&f, "aliases")),
                 artist_type: any_str(&f, "artistType"),
@@ -407,6 +428,7 @@ pub fn read_lineup_from_doc(dm: &DocManager, doc_id: &str) -> Option<LineupDto> 
                 genres: parse_json_string_list(any_str(&f, "genres")),
                 description: any_str(&f, "description"),
                 links: parse_artist_links(any_str(&f, "links")),
+                relations: parse_artist_relations(any_str(&f, "relations")),
                 updated_at: any_str(&f, "updatedAt")?,
             })
         })

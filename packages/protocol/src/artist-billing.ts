@@ -9,8 +9,18 @@ const TRAILING_QUALIFIERS: ReadonlyArray<{
 	{ pattern: /\s*\(\s*dj\s+set\s*\)\s*$/i, qualifier: "dj_set" },
 	{ pattern: /\s+dj\s+set\s*$/i, qualifier: "dj_set" },
 	{ pattern: /\s*\(\s*live\s*\)\s*$/i, qualifier: "live" },
+	{ pattern: /\s+live\s*$/i, qualifier: "live" },
 	{ pattern: /\s*\(\s*ambient\s+set\s*\)\s*$/i, qualifier: "ambient_set" },
 	{ pattern: /\s*\(\s*hybride?\s+set\s*\)\s*$/i, qualifier: "hybrid_set" },
+	{ pattern: /\s*\(\s*reggae\s+set\s*\)\s*$/i, qualifier: "reggae_set" },
+	{ pattern: /\s*\(\s*balearic\s+set\s*\)\s*$/i, qualifier: "balearic_set" },
+	{ pattern: /\s*\(\s*electro\s+set\s*\)\s*$/i, qualifier: "electro_set" },
+	{ pattern: /\s*\(\s*r\s*&\s*b\s+set\s*\)\s*$/i, qualifier: "r_and_b_set" },
+	{ pattern: /\s*\(\s*(?:live\s+)?solo\s+piano\s*\)\s*$/i, qualifier: "solo_piano" },
+	{
+		pattern: /\s*\(\s*live\s+keyboard(?:\s+sound)?\s*\)\s*$/i,
+		qualifier: "live_keyboard",
+	},
 ];
 
 export interface ParsedArtistBilling {
@@ -57,9 +67,10 @@ export function parseArtistBilling(value: string, sourceMbid?: string): ParsedAr
 		}
 	}
 
-	const presentation = coreBilling.match(/^(.+?)\s+present(?:s|ing)?\s+(.+)$/i);
-	const identityHint = presentation?.[1]?.trim() || coreBilling;
-	const presentedTitle = presentation?.[2]?.trim();
+	const talk = coreBilling.match(/^talk:\s*(.+)\s+with\s+(.+)$/i);
+	const presentation = coreBilling.match(/^(.+?)\s+(?:pres\.?|present(?:s|ing)?)\s+(.+)$/i);
+	const identityHint = talk?.[2]?.trim() || presentation?.[1]?.trim() || coreBilling;
+	const presentedTitle = talk?.[1]?.trim() || presentation?.[2]?.trim();
 	const normalizedMbid = sourceMbid?.trim().toLowerCase();
 	const normalizedBilling = normalizeArtistBilling(value);
 	const billingKey =

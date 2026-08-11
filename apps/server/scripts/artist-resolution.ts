@@ -10,7 +10,15 @@ declare const process: {
 	exitCode?: number;
 };
 
-type Command = "backfill" | "list" | "override" | "retry";
+type Command =
+	| "applications"
+	| "backfill"
+	| "identity"
+	| "list"
+	| "merge"
+	| "override"
+	| "retry"
+	| "search";
 
 interface RequestSpec {
 	path: string;
@@ -19,9 +27,17 @@ interface RequestSpec {
 }
 
 const USAGE = `Usage:
+  pnpm -F @offbeat/server artist:resolution -- applications <festival-id> [--api-url URL]
   pnpm -F @offbeat/server artist:resolution -- backfill [--api-url URL]
   pnpm -F @offbeat/server artist:resolution -- list <festival-id> [--api-url URL]
-  pnpm -F @offbeat/server artist:resolution -- retry <festival-id> [--api-url URL]
+  pnpm -F @offbeat/server artist:resolution -- retry <festival-id>
+    [--billing-key '<billing-key>'] [--api-url URL]
+  pnpm -F @offbeat/server artist:resolution -- identity <canonical-name>
+    [--mbid UUID] [--ra-url URL] [--alias NAME] [--remove-link URL]
+    [--member-of ARTIST_ID] [--api-url URL]
+  pnpm -F @offbeat/server artist:resolution -- search <name-or-identifier> [--api-url URL]
+  pnpm -F @offbeat/server artist:resolution -- merge <from-artist-id> <to-artist-id>
+    [--api-url URL]
   pnpm -F @offbeat/server artist:resolution -- override <festival-id> <billing-key>
     --credit '<artist-id>|<credited-as>|<performer|presenter|guest>' [--credit ...]
     [--title 'Presented title'] [--qualifier dj_set|live|ambient_set|hybrid_set]
@@ -59,7 +75,16 @@ function usage(): never {
 }
 
 function parseCommand(value: string | undefined): Command {
-	if (value === "backfill" || value === "list" || value === "override" || value === "retry") {
+	if (
+		value === "applications" ||
+		value === "backfill" ||
+		value === "identity" ||
+		value === "list" ||
+		value === "merge" ||
+		value === "override" ||
+		value === "retry" ||
+		value === "search"
+	) {
 		return value;
 	}
 	return usage();
@@ -99,10 +124,58 @@ function buildRequest(command: Command, args: string[]): RequestSpec {
 	if (command === "backfill") {
 		return { path: "/artist-resolutions/backfill", method: "POST" };
 	}
+	if (command === "search") {
+		if (!args[1]) return usage();
+		return {
+			path: "/artist-identities/search",
+			method: "POST",
+			body: JSON.stringify({ query: args[1] }),
+		};
+	}
+	if (command === "merge") {
+		if (!args[1] || !args[2]) return usage();
+		return {
+			path: "/artist-identities/merge",
+			method: "POST",
+			body: JSON.stringify({ fromArtistId: args[1], toArtistId: args[2] }),
+		};
+	}
+	if (command === "identity") {
+		const name = args[1]?.normalize("NFKC").trim();
+		if (!name) return usage();
+		return {
+			path: "/artist-identities",
+			method: "PUT",
+			body: JSON.stringify({
+				name,
+				...(option(args, "--mbid") ? { mbid: option(args, "--mbid") } : {}),
+				...(option(args, "--ra-url") ? { residentAdvisorUrl: option(args, "--ra-url") } : {}),
+				aliases: repeatedOption(args, "--alias"),
+				removeLinkUrls: repeatedOption(args, "--remove-link"),
+				relations: repeatedOption(args, "--member-of").map((artistId) => ({
+					kind: "member_of",
+					artistId,
+				})),
+			}),
+		};
+	}
 	const festivalId = parseFestivalId(args[1]);
+	if (command === "applications") {
+		return {
+			path: `/festivals/${festivalId}/artist-resolution-applications`,
+			method: "GET",
+		};
+	}
 	const basePath = `/festivals/${festivalId}/artist-resolutions`;
 	if (command === "list") return { path: basePath, method: "GET" };
-	if (command === "retry") return { path: `${basePath}/retry`, method: "POST" };
+	if (command === "retry") {
+		const billingKeys = repeatedOption(args, "--billing-key");
+		return {
+			path: `${basePath}/retry`,
+			method: "POST",
+			...(billingKeys.length > 0 ? { body: JSON.stringify({ billingKeys }) } : {}),
+		};
+	}
 	return { path: basePath, method: "PUT", body: parseOverrideBody(args) };
 }
 
