@@ -20,8 +20,21 @@ impl TaskScope {
         Self::default()
     }
 
-    /// Spawn a task unless shutdown has begun.
+    /// Spawn on the current Tokio runtime unless shutdown has begun.
+    ///
+    /// Returns `false` instead of panicking when called outside a runtime.
     pub fn spawn<F>(&self, future: F) -> bool
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return false;
+        };
+        self.spawn_on(&handle, future)
+    }
+
+    /// Spawn on an explicit Tokio runtime unless shutdown has begun.
+    pub fn spawn_on<F>(&self, handle: &tokio::runtime::Handle, future: F) -> bool
     where
         F: Future<Output = ()> + Send + 'static,
     {
@@ -30,7 +43,7 @@ impl TaskScope {
             return false;
         }
         state.handles.retain(|handle| !handle.is_finished());
-        state.handles.push(tokio::spawn(future));
+        state.handles.push(handle.spawn(future));
         true
     }
 
@@ -61,6 +74,27 @@ mod tests {
         fn drop(&mut self) {
             self.0.store(true, Ordering::SeqCst);
         }
+    }
+
+    #[test]
+    fn explicit_runtime_spawn_works_after_safe_outside_runtime_failure() {
+        let scope = TaskScope::new();
+        assert!(!scope.spawn(async {}));
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let ran = Arc::new(AtomicBool::new(false));
+        let task_ran = Arc::clone(&ran);
+        assert!(scope.spawn_on(runtime.handle(), async move {
+            task_ran.store(true, Ordering::SeqCst);
+        }));
+        runtime.block_on(async {
+            tokio::task::yield_now().await;
+        });
+
+        assert!(ran.load(Ordering::SeqCst));
     }
 
     #[tokio::test]

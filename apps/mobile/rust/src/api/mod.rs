@@ -472,7 +472,7 @@ impl AppNode {
     where
         F: std::future::Future<Output = ()> + Send + 'static,
     {
-        self.background_tasks.spawn(future);
+        self.background_tasks.spawn_on(RUNTIME.handle(), future);
     }
 
     /// Return the set IDs that are starred for the given festival.
@@ -2907,6 +2907,23 @@ impl AppNode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bridge_background_tasks_spawn_from_plain_threads() {
+        let node = AppNode::create_in_memory().unwrap();
+        let (sent, received) = std::sync::mpsc::channel();
+
+        node.spawn_background_task(async move {
+            let _ = sent.send(());
+        });
+
+        assert!(
+            received
+                .recv_timeout(std::time::Duration::from_secs(1))
+                .is_ok(),
+            "bridge task should run on the explicit global runtime"
+        );
+    }
 
     #[test]
     fn logout_replaces_private_runtime_state_and_keeps_public_documents() {
