@@ -1,7 +1,6 @@
 // OFFBEAT Mobile App — Entry point
 
 import 'dart:async';
-import 'dart:io';
 import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -116,7 +115,7 @@ class _OffbeatShellState extends State<_OffbeatShell>
 
   // Starred set IDs (loaded from Rust SQLite)
   Set<String> _starredSetIds = {};
-  final SerialKeyedQueue _starToggleQueue = SerialKeyedQueue();
+  SerialKeyedQueue _starToggleQueue = SerialKeyedQueue();
   GroupScheduleOverlayController? _groupScheduleController;
   GroupScheduleOverlay _groupScheduleOverlay = GroupScheduleOverlay.empty;
   CheckInController? _checkInController;
@@ -290,9 +289,10 @@ class _OffbeatShellState extends State<_OffbeatShell>
     }
 
     final authState = await node.getAuthState();
-    final identity = await node.getIdentity();
+    IdentityDto? identity;
     String pubKeyHex = '';
     if (authState.state != 'unregistered') {
+      identity = await node.getIdentity();
       pubKeyHex = await node.getPublicKeyHex();
     }
 
@@ -314,8 +314,8 @@ class _OffbeatShellState extends State<_OffbeatShell>
     setState(() {
       _authState = authState.state;
       _authExpiresAt = authState.expiresAt;
-      _userId = identity.userId;
-      _displayName = identity.displayName;
+      _userId = identity?.userId ?? '';
+      _displayName = identity?.displayName;
       _publicKeyHex = pubKeyHex;
       _adminKeys = admins;
       _isAdmin = isAdmin;
@@ -538,30 +538,73 @@ class _OffbeatShellState extends State<_OffbeatShell>
     }
   }
 
+  Future<void> _handleOfflineUnlock() async {
+    final node = _node;
+    if (node == null) throw StateError('Local identity store is unavailable');
+    final publicKeyHex = await _authService.unlockOffline(
+      onPrfOutput: (prfBytes) =>
+          node.unlockIdentityFromPrf(prfOutput: prfBytes.toList()),
+    );
+    final authState = await node.getAuthState();
+    final identity = await node.getIdentity();
+    if (!mounted || _node != node) return;
+    setState(() {
+      _authState = authState.state;
+      _authExpiresAt = authState.expiresAt;
+      _publicKeyHex = publicKeyHex;
+      _userId = identity.userId;
+      _displayName = identity.displayName;
+      _isAdmin = false;
+      _adminKeys = [];
+      _pendingRequests = [];
+      _adminRequestStatus = '';
+    });
+  }
+
   Future<void> _handleLogout() async {
+    final node = _node;
+    if (node == null) throw StateError('Local identity store is unavailable');
     _relayConnectionGeneration++;
-    await _node?.disconnectRelay();
-    // Delete the database and recreate the node
     final dir = await getApplicationDocumentsDirectory();
     final dbPath = '${dir.path}/offbeat.db';
-    final dbFile = File(dbPath);
-    if (await dbFile.exists()) {
-      await dbFile.delete();
+    await _starToggleQueue.closeAndDrain();
+    try {
+      await node.logoutPreservingPublicData();
+    } catch (error, stack) {
+      _starToggleQueue = SerialKeyedQueue();
+      // The purge is transactional. Rebuild networking around the unchanged
+      // database if the transaction failed, then leave the account active.
+      _transportSub?.cancel();
+      _transportSub = null;
+      try {
+        await _initNode(dbPath: dbPath);
+      } catch (restartError) {
+        debugPrint('Failed to restart node after logout error: $restartError');
+      }
+      Error.throwWithStackTrace(error, stack);
     }
-
-    // Recreate a fresh node
-    final node = await AppNode.create(dbPath: dbPath);
 
     _lineupSub?.cancel();
     _lineupSub = null;
     _weatherSub?.cancel();
     _weatherSub = null;
+    _groupScheduleController?.dispose();
+    _groupScheduleController = null;
+    _groupScheduleOverlay = GroupScheduleOverlay.empty;
+    _checkInController?.dispose();
+    _checkInController = null;
+    _transportSub?.cancel();
+    _transportSub = null;
     _relayRetryTimer?.cancel();
     _relayRetryTimer = null;
     _relayRetryDelay = const Duration(seconds: 1);
     _relayFestivalId = null;
+    _starToggleQueue = SerialKeyedQueue();
+    _navController.value = 0;
+    if (!mounted) return;
     setState(() {
-      _node = node;
+      _node = null;
+      _nodeReady = false;
       _authState = 'unregistered';
       _authExpiresAt = null;
       _userId = '';
@@ -577,7 +620,18 @@ class _OffbeatShellState extends State<_OffbeatShell>
       _lineupLoading = true;
       _weather = null;
       _starredSetIds = {};
+      _relayConnected = false;
+      _blePeerCount = -1;
+      _transportStatusNotifier.value = null;
+      _syncStatusNotifier.value = null;
     });
+
+    try {
+      await _initNode(dbPath: dbPath);
+    } catch (error) {
+      debugPrint('Logged out, but failed to restart local networking: $error');
+      if (mounted) setState(() => _nodeReady = true);
+    }
   }
 
   Future<void> _onFestivalTap(Festival fest) async {
@@ -718,18 +772,27 @@ class _OffbeatShellState extends State<_OffbeatShell>
         if (!isCurrent()) return;
       }
 
-      // Connect WS relay to the Festival DO
+      // Register local gossip resources before attempting the WebSocket.
+      // BLE peers must still exchange festival and group state when the relay
+      // is unavailable or running an incompatible protocol version.
+      await node.disconnectRelay();
+      if (!isCurrent()) return;
+      await node.subscribeFestival(festivalId: festivalId);
+      if (!isCurrent()) return;
+      await node.subscribeGroups(festivalId: festivalId);
+      if (!isCurrent()) return;
+
+      // Connect WS relay to the Festival DO.
       final wsScheme = mainDoBaseUrl.startsWith('https') ? 'wss' : 'ws';
       final authority = mainDoBaseUrl.replaceFirst(RegExp(r'^https?://'), '');
       final wsUrl = '$wsScheme://$authority/festivals/$festivalId/ws';
       await node.connectRelay(url: wsUrl, festivalId: festivalId);
       if (!isCurrent()) return;
 
-      // Subscribe to the state topic and request catchup from seq 0
+      // Repeat after connecting to perform relay catch-up for the resources
+      // that are already active on the local P2P mesh.
       await node.subscribeFestival(festivalId: festivalId);
       if (!isCurrent()) return;
-
-      // Subscribe to all group topics for this festival
       await node.subscribeGroups(festivalId: festivalId);
       if (!isCurrent()) return;
       _relayRetryTimer?.cancel();
@@ -895,7 +958,10 @@ class _OffbeatShellState extends State<_OffbeatShell>
 
   Widget _buildYouContent() {
     if (_authState == 'unregistered') {
-      return RegistrationScreen(onRegister: _handleRegister);
+      return RegistrationScreen(
+        onUnlock: _handleOfflineUnlock,
+        onRegister: _handleRegister,
+      );
     }
     return YouScreen(
       userId: _userId,
@@ -913,12 +979,9 @@ class _OffbeatShellState extends State<_OffbeatShell>
         setState(() => _displayName = name);
       },
       onRequestAdmin: _handleRequestAdmin,
-      onLogout: () async {
-        // Close the settings sheet if open, then log out
-        if (Navigator.of(context).canPop()) {
-          Navigator.of(context).pop();
-        }
-        await _handleLogout();
+      onLogout: _handleLogout,
+      onLogoutCompleted: () {
+        if (mounted) unawaited(Navigator.of(context).maybePop());
       },
     );
   }
@@ -1193,7 +1256,10 @@ class _OffbeatShellState extends State<_OffbeatShell>
         return _buildNowTab();
       case AppTab.social:
         if (_authState == 'unregistered') {
-          return RegistrationScreen(onRegister: _handleRegister);
+          return RegistrationScreen(
+            onUnlock: _handleOfflineUnlock,
+            onRegister: _handleRegister,
+          );
         }
         return SocialScreen(
           node: _node!,

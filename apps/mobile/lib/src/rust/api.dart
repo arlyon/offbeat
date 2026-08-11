@@ -7,7 +7,7 @@ import 'api/dto.dart';
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `deregister_group_resources`, `ensure_group_chat_access`, `flush_pending_group_updates`, `flush_pending_public_chats`, `group_id_from_chat_topic`, `group_publish_lock`, `publish_group_state_update`, `reconcile_shared_stars`, `register_group_resources`, `relay_matches_festival`, `schedule_pending_group_retry`, `send_group_state_update`, `send_pending_group_update`
+// These functions are ignored because they are not marked as `pub`: `deregister_group_resources`, `ensure_group_chat_access`, `flush_pending_group_updates`, `flush_pending_public_chats`, `group_id_from_chat_topic`, `group_publish_lock`, `publish_group_state_update`, `reconcile_shared_stars`, `register_group_resources`, `relay_matches_festival`, `schedule_pending_group_retry`, `send_group_state_update`, `send_pending_group_update`, `spawn_background_task`
 
 Future<List<MeshtasticDebugDeviceDto>> meshtasticDebugScan({
   required int scanMs,
@@ -156,6 +156,13 @@ abstract class AppNode implements RustOpaqueInterface {
   /// Leave a group.
   Future<void> leaveGroup({required String groupId});
 
+  /// Stop networking and atomically remove account/private state.
+  ///
+  /// Public festival state and attributed public chat remain in SQLite. The
+  /// non-networked replacement drops every in-memory group document and key
+  /// cache before this method returns.
+  Future<void> logoutPreservingPublicData();
+
   /// Listen for Meshtastic group chat frames and apply matching local groups.
   Future<MeshtasticDebugReportDto> meshtasticListenApplyGroupChats({
     required String deviceId,
@@ -242,7 +249,7 @@ abstract class AppNode implements RustOpaqueInterface {
   /// subscribing to festival/group topics.
   Future<void> startBleSync();
 
-  /// Stop the BLE background tasks.
+  /// Stop the BLE background tasks and wait until their captured state drops.
   Future<void> stopBleSync();
 
   /// Store an attestation received from the MainDO.
@@ -274,6 +281,9 @@ abstract class AppNode implements RustOpaqueInterface {
   /// Toggle a personal star and reconcile the resulting schedule into every
   /// encrypted group for this festival.
   Future<bool> toggleStar({required String festivalId, required String setId});
+
+  /// Re-derive and activate an identity using a locally available passkey.
+  Future<String> unlockIdentityFromPrf({required List<int> prfOutput});
 
   /// Update the shared stars for the current user in a group.
   Future<void> updateSharedStars({

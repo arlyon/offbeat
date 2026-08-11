@@ -12,11 +12,8 @@ use crate::signing;
 /// Generate a new identity signing key, or load the existing one from the
 /// credentials table.
 pub fn generate_or_load_identity(db: &Database) -> anyhow::Result<SigningKey> {
-    if let Some(bytes) = db.get_credential("identity_secret_key")? {
-        let arr: [u8; 32] = bytes
-            .try_into()
-            .map_err(|_| anyhow::anyhow!("stored identity key has wrong length"))?;
-        return Ok(SigningKey::from_bytes(&arr));
+    if let Some(key) = load_identity(db)? {
+        return Ok(key);
     }
 
     // Generate a fresh key (fallback when PRF is not available).
@@ -28,6 +25,17 @@ pub fn generate_or_load_identity(db: &Database) -> anyhow::Result<SigningKey> {
     Ok(key)
 }
 
+/// Load the active identity without creating one.
+pub fn load_identity(db: &Database) -> anyhow::Result<Option<SigningKey>> {
+    let Some(bytes) = db.get_credential("identity_secret_key")? else {
+        return Ok(None);
+    };
+    let seed: [u8; 32] = bytes
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("stored identity key has wrong length"))?;
+    Ok(Some(SigningKey::from_bytes(&seed)))
+}
+
 /// Derive an Ed25519 signing key from a WebAuthn PRF output.
 ///
 /// Uses HKDF-SHA256 to derive a 32-byte Ed25519 seed from the PRF output.
@@ -37,14 +45,89 @@ pub fn derive_identity_from_prf(
     db: &Database,
     prf_output: &[u8; 32],
 ) -> anyhow::Result<SigningKey> {
+    let seed = identity_seed_from_prf(prf_output)?;
+    let key = SigningKey::from_bytes(&seed);
+    db.set_credential("identity_secret_key", &seed)?;
+    Ok(key)
+}
+
+/// Ensure logout will retain enough public evidence for offline passkey unlock.
+pub fn ensure_offline_unlock_ready(db: &Database) -> anyhow::Result<()> {
+    let identity =
+        load_identity(db)?.ok_or_else(|| anyhow::anyhow!("no registered identity is active"))?;
+    let writer_key = identity.verifying_key().to_bytes();
+    if verified_historical_attestation(db, &writer_key).is_ok() {
+        return Ok(());
+    }
+
+    // Replace absent or corrupt public evidence from the still-active,
+    // MainDO-signed credential before deleting that credential.
+    let attestation =
+        load_attestation(db)?.ok_or_else(|| anyhow::anyhow!("no registered identity is active"))?;
+    cache_attestation_proof(db, &attestation)?;
+    verified_historical_attestation(db, &writer_key).map(|_| ())
+}
+
+/// Recover the registered identity using only a locally available passkey PRF.
+///
+/// The historical attestation is public evidence, not an active server session.
+/// We re-verify it against the pinned MainDO root before restoring credentials.
+/// An expired proof may establish local identity but remains expired for any
+/// operation that requires fresh server authorization.
+pub fn unlock_identity_from_prf(
+    db: &Database,
+    prf_output: &[u8; 32],
+) -> anyhow::Result<SigningKey> {
+    let seed = identity_seed_from_prf(prf_output)?;
+    let key = SigningKey::from_bytes(&seed);
+    let writer_key = key.verifying_key().to_bytes();
+    let attestation = verified_historical_attestation(db, &writer_key)?;
+
+    db.activate_offline_identity(
+        &seed,
+        &attestation.message,
+        &attestation.signature,
+        &attestation.issuer,
+    )?;
+    Ok(key)
+}
+
+fn verified_historical_attestation(
+    db: &Database,
+    writer_key: &[u8; 32],
+) -> anyhow::Result<Attestation> {
+    let proof = db
+        .get_historical_chat_author_proof(writer_key)?
+        .ok_or_else(|| anyhow::anyhow!("no cached registration proof for this passkey"))?;
+    let root = db
+        .load_main_do_public_key()?
+        .ok_or_else(|| anyhow::anyhow!("MainDO trust root is not pinned"))?;
+    let issuer: [u8; 32] = proof
+        .issuer
+        .as_slice()
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("cached attestation issuer has wrong length"))?;
+    let attestation = Attestation {
+        message: proof.attestation_message,
+        signature: encode_hex(&proof.attestation_signature),
+        issuer: encode_hex(&proof.issuer),
+    };
+    let parts: Vec<&str> = attestation.message.split(':').collect();
+    if parts.len() != 5 || parts[2] != encode_hex(writer_key) {
+        anyhow::bail!("cached registration proof does not bind this passkey identity");
+    }
+    if issuer != root || !verify_attestation(&attestation, &root) {
+        anyhow::bail!("cached registration proof is not trusted");
+    }
+    Ok(attestation)
+}
+
+fn identity_seed_from_prf(prf_output: &[u8; 32]) -> anyhow::Result<[u8; 32]> {
     let hk = Hkdf::<Sha256>::new(Some(b"offbeat"), prf_output);
     let mut seed = [0u8; 32];
     hk.expand(b"ed25519-identity", &mut seed)
         .map_err(|e| anyhow::anyhow!("HKDF expand failed: {e}"))?;
-
-    let key = SigningKey::from_bytes(&seed);
-    db.set_credential("identity_secret_key", &seed)?;
-    Ok(key)
+    Ok(seed)
 }
 
 /// Get or generate a persistent device ID (UUID v4).
@@ -238,6 +321,10 @@ fn hex_to_bytes(hex: &str) -> Option<Vec<u8>> {
         .collect()
 }
 
+fn encode_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 // ---------------------------------------------------------------------------
 // Unit tests
 // ---------------------------------------------------------------------------
@@ -326,6 +413,49 @@ mod tests {
         let key = generate_or_load_identity(&db).unwrap();
         let hex = get_public_key_hex(&key);
         assert_eq!(hex.len(), 64);
+    }
+
+    #[test]
+    fn offline_passkey_unlock_restores_the_attested_identity() {
+        let db = test_db();
+        let prf_output = [42u8; 32];
+        let identity = derive_identity_from_prf(&db, &prf_output).unwrap();
+        let public_key_hex = get_public_key_hex(&identity);
+        let issuer = crate::signing::generate_signing_key();
+        let issuer_key = issuer.verifying_key().to_bytes();
+        pin_main_do_public_key(&db, &encode_hex(&issuer_key)).unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let message = format!("attestation:v1:{public_key_hex}:{now}:{}", now + 30 * 86400);
+        let attestation = Attestation {
+            signature: encode_hex(&crate::signing::sign(&issuer, message.as_bytes())),
+            issuer: encode_hex(&issuer_key),
+            message,
+        };
+        store_attestation(&db, &attestation).unwrap();
+        set_display_name(&db, "Before logout").unwrap();
+
+        db.purge_private_state_for_logout().unwrap();
+        assert!(db.get_credential("identity_secret_key").unwrap().is_none());
+        assert_eq!(get_display_name(&db).unwrap(), None);
+
+        // A real signed-out node recreates its non-account transport key before
+        // the user chooses offline unlock. That must not look like active account state.
+        db.save_iroh_secret_key(&iroh::SecretKey::generate()).unwrap();
+        let recovered = unlock_identity_from_prf(&db, &prf_output).unwrap();
+        assert_eq!(get_public_key_hex(&recovered), public_key_hex);
+        assert_eq!(
+            load_attestation(&db).unwrap().unwrap().message,
+            attestation.message
+        );
+        assert_eq!(attestation_state(&db).unwrap(), AuthState::Valid);
+        assert!(unlock_identity_from_prf(&db, &prf_output).is_err());
+
+        db.purge_private_state_for_logout().unwrap();
+        assert!(unlock_identity_from_prf(&db, &[7u8; 32]).is_err());
+        assert!(db.get_credential("identity_secret_key").unwrap().is_none());
     }
 
     #[test]

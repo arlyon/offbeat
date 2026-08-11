@@ -420,6 +420,8 @@ pub struct AppNode {
         Arc<std::sync::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
     /// Join handles for BLE connection background tasks.
     ble_task_handles: Vec<tokio::task::JoinHandle<()>>,
+    /// Bridge-owned retries, acknowledgements, and stream watcher tasks.
+    background_tasks: offbeat_core::task_scope::TaskScope,
 }
 
 impl AppNode {
@@ -442,6 +444,7 @@ impl AppNode {
             relay_task_handle: Arc::new(std::sync::Mutex::new(None)),
             group_publish_locks: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             ble_task_handles: Vec::new(),
+            background_tasks: offbeat_core::task_scope::TaskScope::new(),
         })
     }
 
@@ -461,7 +464,15 @@ impl AppNode {
             relay_task_handle: Arc::new(std::sync::Mutex::new(None)),
             group_publish_locks: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             ble_task_handles: Vec::new(),
+            background_tasks: offbeat_core::task_scope::TaskScope::new(),
         })
+    }
+
+    fn spawn_background_task<F>(&self, future: F)
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        self.background_tasks.spawn(future);
     }
 
     /// Return the set IDs that are starred for the given festival.
@@ -685,7 +696,7 @@ impl AppNode {
                 }
                 let db = Arc::clone(&self.inner.db);
                 let message_id = msg.id.clone();
-                RUNTIME.spawn(async move {
+                self.spawn_background_task(async move {
                     if ws.send_gossip_confirmed(&topic_str, &envelope).await.is_ok()
                         && let Err(error) = db.delete_pending_public_chat(&message_id)
                     {
@@ -1283,6 +1294,42 @@ impl AppNode {
         }
     }
 
+    /// Stop networking and atomically remove account/private state.
+    ///
+    /// Public festival state and attributed public chat remain in SQLite. The
+    /// non-networked replacement drops every in-memory group document and key
+    /// cache before this method returns.
+    pub async fn logout_preserving_public_data(&mut self) -> anyhow::Result<()> {
+        // Never complete a logout that would strand this passkey offline.
+        offbeat_core::auth::ensure_offline_unlock_ready(&self.inner.db)?;
+        self.disconnect_relay().await;
+        self.pending_group_retries.lock().unwrap().clear();
+        self.group_retry_generations.lock().unwrap().clear();
+        self.group_publish_locks.lock().unwrap().clear();
+        self.stop_ble_sync().await;
+        self.inner.ble_child_tasks.shutdown().await;
+        self.background_tasks.shutdown().await;
+
+        if let Some(router) = self.inner.router.take()
+            && let Err(error) = router.shutdown().await
+        {
+            tracing::warn!(%error, "iroh router shutdown failed during logout");
+        }
+        if let Some(endpoint) = self.inner.endpoint.take() {
+            endpoint.close().await;
+        }
+        self.inner.gossip_manager = None;
+        self.inner.gossip = None;
+        self.inner.ble_transport = None;
+        self.inner.connection_manager = None;
+
+        let db = Arc::clone(&self.inner.db);
+        db.purge_private_state_for_logout()?;
+        self.inner = OffbeatNode::new_empty_with_database(db);
+        self.background_tasks = offbeat_core::task_scope::TaskScope::new();
+        Ok(())
+    }
+
     /// Subscribe to the gossip topic for a festival and perform a state vector
     /// exchange with the DO so we only receive updates we don't already have.
     ///
@@ -1468,6 +1515,15 @@ impl AppNode {
         Ok(offbeat_core::auth::get_public_key_hex(&key))
     }
 
+    /// Re-derive and activate an identity using a locally available passkey.
+    pub fn unlock_identity_from_prf(&self, prf_output: Vec<u8>) -> anyhow::Result<String> {
+        let arr: [u8; 32] = prf_output
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("PRF output must be exactly 32 bytes"))?;
+        let key = offbeat_core::auth::unlock_identity_from_prf(&self.inner.db, &arr)?;
+        Ok(offbeat_core::auth::get_public_key_hex(&key))
+    }
+
     /// Get the hex-encoded Ed25519 public key of the local identity.
     pub fn get_public_key_hex(&self) -> anyhow::Result<String> {
         let key = offbeat_core::auth::generate_or_load_identity(&self.inner.db)?;
@@ -1514,7 +1570,7 @@ impl AppNode {
         if let Some(relay) = self.inner.ws_relay.read().clone() {
             let signing_key = offbeat_core::auth::generate_or_load_identity(&self.inner.db)?;
             let public_key_hex = offbeat_core::auth::get_public_key_hex(&signing_key);
-            RUNTIME.spawn(async move {
+            self.spawn_background_task(async move {
                 if let Err(error) = relay
                     .authenticate(&public_key_hex, &att, &signing_key)
                     .await
@@ -1744,7 +1800,7 @@ impl AppNode {
         let pending_group_retries = Arc::clone(&self.pending_group_retries);
         let group_retry_generations = Arc::clone(&self.group_retry_generations);
         let publish_lock = self.group_publish_lock(&pending.group_id);
-        RUNTIME.spawn(async move {
+        self.spawn_background_task(async move {
             let Ok(envelope) = offbeat_core::proto::decode_envelope(&pending.envelope) else {
                 let _ = db.delete_pending_group_update(pending.id);
                 pending_group_retries.lock().unwrap().remove(&pending.id);
@@ -2260,7 +2316,7 @@ impl AppNode {
         let doc_manager_clone = Arc::clone(&doc_manager);
         let doc_id_clone = doc_id.clone();
 
-        RUNTIME.spawn(async move {
+        self.spawn_background_task(async move {
             // Emit initial state (subscribe happened before this, so no race)
             {
                 let lineup = read_lineup_from_doc(&doc_manager_clone, &doc_id_clone);
@@ -2314,7 +2370,7 @@ impl AppNode {
         let doc_manager_clone = Arc::clone(&doc_manager);
         let doc_id_clone = doc_id.clone();
 
-        RUNTIME.spawn(async move {
+        self.spawn_background_task(async move {
             // Emit initial state
             {
                 let weather = read_weather_from_doc(&doc_manager_clone, &doc_id_clone);
@@ -2367,7 +2423,7 @@ impl AppNode {
         let sink_clone = Arc::clone(&sink);
         let group_id_clone = group_id.clone();
 
-        RUNTIME.spawn(async move {
+        self.spawn_background_task(async move {
             // Emit initial state
             if let Ok(state) = group_manager.get_group_state(&group_id_clone).await {
                 let dto = GroupStateDto {
@@ -2467,7 +2523,7 @@ impl AppNode {
         let sink_clone = Arc::clone(&sink);
         let topic_clone = topic.clone();
 
-        RUNTIME.spawn(async move {
+        self.spawn_background_task(async move {
             // Emit initial messages
             if let Ok(msgs) = db.get_recent_chat_messages(&topic_clone, last_n, 0) {
                 let dtos: Vec<ChatMessageDto> = msgs
@@ -2565,15 +2621,20 @@ impl AppNode {
             so,
             endpoint,
             doc_manager,
+            self.inner.ble_child_tasks.clone(),
         ));
         self.ble_task_handles = handles;
         tracing::info!("subscription manager + BLE auto-connection tasks started");
     }
 
-    /// Stop the BLE background tasks.
-    pub fn stop_ble_sync(&mut self) {
-        for handle in self.ble_task_handles.drain(..) {
+    /// Stop the BLE background tasks and wait until their captured state drops.
+    pub async fn stop_ble_sync(&mut self) {
+        let handles = self.ble_task_handles.drain(..).collect::<Vec<_>>();
+        for handle in &handles {
             handle.abort();
+        }
+        for handle in handles {
+            let _ = handle.await;
         }
         tracing::info!("BLE auto-connection tasks stopped");
     }
@@ -2619,7 +2680,7 @@ impl AppNode {
 
     /// Cycle the BLE transport (stop then start).
     pub async fn restart_ble(&mut self) -> anyhow::Result<()> {
-        self.stop_ble_sync();
+        self.stop_ble_sync().await;
         // Sleep on the runtime to ensure reactor is present
         RUNTIME
             .spawn(async move {
@@ -2666,7 +2727,7 @@ impl AppNode {
         let cm = self.inner.connection_manager.clone();
         let sink = Arc::new(Mutex::new(sink));
 
-        RUNTIME.spawn(async move {
+        self.spawn_background_task(async move {
             let mut prev_snapshot: Vec<String> = vec![];
 
             loop {
@@ -2714,7 +2775,7 @@ impl AppNode {
         let ws = self.inner.ws_relay.clone();
         let sink = Arc::new(Mutex::new(sink));
 
-        RUNTIME.spawn(async move {
+        self.spawn_background_task(async move {
             let mut prev_relay_tx: u64 = 0;
             let mut prev_relay_rx: u64 = 0;
             let mut prev_ble_tx: u64 = 0;
@@ -2816,7 +2877,7 @@ impl AppNode {
         let sink = Arc::new(Mutex::new(sink));
         let sink_clone = Arc::clone(&sink);
 
-        RUNTIME.spawn(async move {
+        self.spawn_background_task(async move {
             // Emit initial status
             {
                 let status = rx.borrow().clone();
@@ -2846,6 +2907,108 @@ impl AppNode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn logout_replaces_private_runtime_state_and_keeps_public_documents() {
+        RUNTIME.block_on(async {
+            let mut node = AppNode::create_in_memory().unwrap();
+            node.inner
+                .db
+                .save_doc("festival/f1/state", "festival", b"public")
+                .unwrap();
+            node.inner
+                .db
+                .save_doc("group/g1/state", "group", b"private")
+                .unwrap();
+            node.inner
+                .db
+                .save_group("g1", "f1", "Friends", &[3; 32])
+                .unwrap();
+            let identity =
+                offbeat_core::auth::derive_identity_from_prf(&node.inner.db, &[4; 32]).unwrap();
+            let issuer = offbeat_core::signing::generate_signing_key();
+            let issuer_key = issuer.verifying_key().to_bytes();
+            let issuer_hex = issuer_key
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
+            offbeat_core::auth::pin_main_do_public_key(&node.inner.db, &issuer_hex).unwrap();
+            let public_key = offbeat_core::auth::get_public_key_hex(&identity);
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            let message = format!(
+                "attestation:v1:{public_key}:{now}:{}",
+                now + 30 * 86400
+            );
+            let signature = offbeat_core::signing::sign(&issuer, message.as_bytes())
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect();
+            offbeat_core::auth::store_attestation(
+                &node.inner.db,
+                &offbeat_core::auth::Attestation {
+                    message,
+                    signature,
+                    issuer: issuer_hex,
+                },
+            )
+            .unwrap();
+            node.register_group_resources("g1", [3; 32]).unwrap();
+            let group_resource_id = offbeat_core::resource::Resource::group_state([3; 32]).id();
+            assert!(node
+                .inner
+                .resource_registry
+                .read()
+                .unwrap()
+                .get(&group_resource_id)
+                .is_some());
+
+            node.logout_preserving_public_data().await.unwrap();
+
+            assert_eq!(
+                node.inner.db.load_doc("festival/f1/state").unwrap(),
+                Some(b"public".to_vec())
+            );
+            assert!(node
+                .inner
+                .db
+                .load_doc("group/g1/state")
+                .unwrap()
+                .is_none());
+            assert!(node
+                .inner
+                .db
+                .get_credential("identity_secret_key")
+                .unwrap()
+                .is_none());
+            assert!(node
+                .inner
+                .resource_registry
+                .read()
+                .unwrap()
+                .get(&group_resource_id)
+                .is_none());
+            assert!(node.inner.db.load_all_group_keys().unwrap().is_empty());
+        });
+    }
+
+    #[test]
+    fn logout_without_offline_recovery_proof_keeps_the_account_active() {
+        RUNTIME.block_on(async {
+            let mut node = AppNode::create_in_memory().unwrap();
+            offbeat_core::auth::derive_identity_from_prf(&node.inner.db, &[9; 32]).unwrap();
+
+            assert!(node.logout_preserving_public_data().await.is_err());
+            assert!(node
+                .inner
+                .db
+                .get_credential("identity_secret_key")
+                .unwrap()
+                .is_some());
+        });
+    }
 
     #[test]
     fn festival_registry_bridge_persists_normalized_snapshot_without_networking() {
@@ -2898,6 +3061,29 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("db-shm"));
         let _ = std::fs::remove_file(path.with_extension("db-wal"));
+    }
+
+    #[test]
+    fn festival_subscription_registers_resource_without_relay() {
+        RUNTIME.block_on(async {
+            let mut node = AppNode::create_in_memory().unwrap();
+            node.set_festival_public_key("fest-1".to_string(), "11".repeat(32))
+                .unwrap();
+
+            node.subscribe_festival("fest-1".to_string())
+                .await
+                .unwrap();
+
+            let registry = node.inner.resource_registry.read().unwrap();
+            let resource = offbeat_core::resource::Resource::festival_state(
+                "fest-1",
+                [0x11; 32],
+            );
+            assert!(
+                registry.get(&resource.id()).is_some(),
+                "festival state must be registered before any relay connects"
+            );
+        });
     }
 
     #[test]

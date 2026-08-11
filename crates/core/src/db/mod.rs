@@ -1722,16 +1722,36 @@ impl Database {
         &self,
         writer_key: &[u8; 32],
     ) -> Result<Option<StoredChatAuthorProof>> {
+        self.query_chat_author_proof(writer_key, Some(current_unix_seconds()?))
+    }
+
+    /// Load historical public identity evidence for offline passkey unlock.
+    ///
+    /// Unlike the publishing path, this deliberately ignores proof expiry. The
+    /// caller must verify the MainDO signature and may only use an expired proof
+    /// to recover local identity, never to authorize a server operation.
+    pub fn get_historical_chat_author_proof(
+        &self,
+        writer_key: &[u8; 32],
+    ) -> Result<Option<StoredChatAuthorProof>> {
+        self.query_chat_author_proof(writer_key, None)
+    }
+
+    fn query_chat_author_proof(
+        &self,
+        writer_key: &[u8; 32],
+        valid_at: Option<i64>,
+    ) -> Result<Option<StoredChatAuthorProof>> {
         let writer_id = encode_hex(writer_key);
-        let now = current_unix_seconds()?;
         self.conn
             .lock()
             .unwrap()
             .query_row(
                 "SELECT writer_key, attestation_message, attestation_signature, issuer
                  FROM chat_author_proofs
-                 WHERE writer_id = ?1 AND expires_at + ?3 >= ?2",
-                params![writer_id, now, ATTESTATION_GRACE_SECONDS],
+                 WHERE writer_id = ?1
+                   AND (?2 IS NULL OR expires_at + ?3 >= ?2)",
+                params![writer_id, valid_at, ATTESTATION_GRACE_SECONDS],
                 |row| {
                     Ok(StoredChatAuthorProof {
                         writer_key: row.get(0)?,
@@ -1804,6 +1824,91 @@ impl Database {
             "INSERT OR REPLACE INTO credentials (key, value) VALUES (?1, ?2)",
             params![key, value],
         )?;
+        Ok(())
+    }
+
+    /// Atomically activate an identity recovered from a local passkey PRF.
+    pub fn activate_offline_identity(
+        &self,
+        identity_seed: &[u8; 32],
+        attestation_message: &str,
+        attestation_signature: &str,
+        attestation_issuer: &str,
+    ) -> Result<()> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let private_state_exists: i64 = tx.query_row(
+            "SELECT
+                 EXISTS(
+                     SELECT 1 FROM credentials
+                     WHERE key NOT IN ('main_do_public_key', 'iroh_secret_key')
+                 )
+              OR EXISTS(SELECT 1 FROM groups)
+              OR EXISTS(SELECT 1 FROM starred_sets)
+              OR EXISTS(SELECT 1 FROM festival_checkins)
+              OR EXISTS(SELECT 1 FROM pending_group_updates)
+              OR EXISTS(SELECT 1 FROM pending_public_chat)
+              OR EXISTS(SELECT 1 FROM docs WHERE doc_type = 'group' OR id LIKE 'group/%')
+              OR EXISTS(SELECT 1 FROM chat_messages WHERE topic LIKE 'group/%')",
+            [],
+            |row| row.get(0),
+        )?;
+        if private_state_exists != 0 {
+            bail!("offline identity activation requires a logged-out private state");
+        }
+        for (key, value) in [
+            ("identity_secret_key", identity_seed.as_slice()),
+            ("attestation_message", attestation_message.as_bytes()),
+            ("attestation_signature", attestation_signature.as_bytes()),
+            ("attestation_issuer", attestation_issuer.as_bytes()),
+        ] {
+            tx.execute(
+                "INSERT OR REPLACE INTO credentials (key, value) VALUES (?1, ?2)",
+                params![key, value],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Remove account and private state while retaining the offline public cache.
+    ///
+    /// Public festival documents, verified checkpoints, registry metadata,
+    /// public chat (including attribution proofs), and festival peers survive.
+    pub fn purge_private_state_for_logout(&self) -> Result<()> {
+        let mut conn = self.conn.lock().unwrap();
+        // Checkpoint any historical WAL frames before deletion, then use a
+        // rollback journal so committed zeroed pages land in the main file.
+        // secure_delete overwrites deleted payloads rather than leaving them in
+        // SQLite freelist pages recoverable from a copied post-logout database.
+        conn.pragma_update(None, "journal_mode", "DELETE")?;
+        conn.pragma_update(None, "secure_delete", "ON")?;
+        let tx = conn.transaction()?;
+        tx.execute_batch(
+            "DELETE FROM doc_updates
+                 WHERE doc_id LIKE 'group/%'
+                    OR doc_id IN (SELECT id FROM docs WHERE doc_type = 'group');
+             DELETE FROM docs WHERE id LIKE 'group/%' OR doc_type = 'group';
+             DELETE FROM chat_messages WHERE topic LIKE 'group/%';
+             DELETE FROM chat_topic_clocks WHERE topic LIKE 'group/%';
+             DELETE FROM chat_writer_sequences WHERE topic LIKE 'group/%';
+             DELETE FROM chat_sequence_conflicts WHERE topic LIKE 'group/%';
+             DELETE FROM pending_group_updates;
+             DELETE FROM groups;
+             DELETE FROM starred_sets;
+             DELETE FROM festival_checkins;
+             DELETE FROM pending_public_chat;
+             DELETE FROM festival_peers;
+             DELETE FROM credentials WHERE key != 'main_do_public_key';",
+        )?;
+        tx.commit()?;
+
+        // The security boundary is committed at this point. Compaction and
+        // restoring WAL are best-effort maintenance and must not turn a
+        // completed logout into a false rollback report.
+        if let Err(error) = conn.execute_batch("VACUUM; PRAGMA journal_mode = WAL;") {
+            tracing::warn!(%error, "post-logout SQLite compaction failed");
+        }
         Ok(())
     }
 
@@ -2488,6 +2593,243 @@ mod tests {
         }
         let reopened = Database::new(&path).unwrap();
         assert_eq!(reopened.get_stars("f1").unwrap(), vec!["s1"]);
+    }
+
+    #[test]
+    fn logout_purge_survives_restart_with_only_public_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("logout.db");
+        let public_topic = "festival/f1/chat/campsite";
+        let private_topic = "group/g1/chat";
+        let private_text = "OFFBEAT_LOGOUT_PRIVATE_MESSAGE_CANARY_7F4A19";
+        let private_peer = "OFFBEAT_LOGOUT_PRIVATE_PEER_CANARY_91C2E8";
+        let private_key = [0xA5u8; 32];
+        let identity_seed = [0xB6u8; 32];
+        {
+            let db = Database::new(&path).unwrap();
+            db.replace_festival_registry_cache(
+                &[cached_festival("f1", "2026-06-01")],
+                "2026-06-01T00:00:00Z",
+                "00000000000000000001",
+            )
+            .unwrap();
+            db.save_doc("festival/f1/state", "festival", b"public-doc")
+                .unwrap();
+            db.append_doc_update("festival/f1/state", b"public-update")
+                .unwrap();
+            db.save_verified_festival_update(&VerifiedFestivalUpdate {
+                doc_id: "festival/f1/state".to_string(),
+                authority_seq: 7,
+                kind: 1,
+                signed_update: SignedUpdate {
+                    update: b"checkpoint".to_vec(),
+                    author: "authority".to_string(),
+                    signature: vec![2; 64],
+                },
+            })
+            .unwrap();
+            db.upsert_festival_peer("f1", private_peer, None, 1, "private-group")
+                .unwrap();
+
+            db.save_doc("group/g1/state", "group", b"private-doc")
+                .unwrap();
+            db.append_doc_update("group/g1/state", b"private-update")
+                .unwrap();
+            db.save_group("g1", "f1", "Friends", &private_key).unwrap();
+            db.enqueue_group_update("f1", "g1", b"private-envelope")
+                .unwrap();
+            db.toggle_star("f1", "set-1").unwrap();
+            db.save_festival_checkin(&FestivalCheckIn {
+                festival_id: "f1".to_string(),
+                kind: "stage".to_string(),
+                value: Some("main".to_string()),
+                checked_at: 1,
+                expires_at: 2,
+                revision: 1,
+            })
+            .unwrap();
+
+            for (id, topic, text) in [
+                ("public-message", public_topic, "public"),
+                ("private-message", private_topic, private_text),
+            ] {
+                db.save_chat_message(&ChatMessage {
+                    id: id.to_string(),
+                    user_id: "user".to_string(),
+                    display_name: "User".to_string(),
+                    text: text.to_string(),
+                    topic: topic.to_string(),
+                    stage_id: None,
+                    timestamp: "2026-06-01T00:00:00Z".to_string(),
+                    writer_seq: 1,
+                    logical_time: 1,
+                    writer_key: Vec::new(),
+                    signature: Vec::new(),
+                    trust: ChatTrust::Unverified,
+                })
+                .unwrap();
+            }
+
+            db.set_credential("main_do_public_key", &[4; 32]).unwrap();
+            db.set_credential("identity_secret_key", &identity_seed).unwrap();
+            db.set_credential("device_id", b"device").unwrap();
+            db.set_credential("display_name", b"User").unwrap();
+            db.set_credential("attestation_message", b"message").unwrap();
+            db.set_credential("attestation_signature", b"signature")
+                .unwrap();
+            db.set_credential("attestation_issuer", b"issuer").unwrap();
+            db.set_credential("iroh_secret_key", &[6; 32]).unwrap();
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "INSERT INTO chat_author_proofs
+                 (writer_id, writer_key, attestation_message, attestation_signature,
+                  issuer, issued_at, expires_at)
+                 VALUES (?1, ?2, 'proof', ?3, ?4, 1, 2)",
+                params![
+                    encode_hex(&[7u8; 32]),
+                    vec![7u8; 32],
+                    vec![8u8; 64],
+                    vec![4u8; 32]
+                ],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO pending_public_chat(message_id, topic, message_json)
+                 VALUES ('draft', ?1, X'00')",
+                [public_topic],
+            )
+            .unwrap();
+            for topic in [public_topic, private_topic] {
+                conn.execute(
+                    "INSERT INTO chat_sequence_conflicts(topic, user_id, writer_seq)
+                     VALUES (?1, 'user', 99)",
+                    [topic],
+                )
+                .unwrap();
+            }
+            drop(conn);
+
+            db.purge_private_state_for_logout().unwrap();
+        }
+
+        let db = Database::new(&path).unwrap();
+        assert!(db.load_festival_registry_cache().unwrap().is_some());
+        assert_eq!(
+            db.load_doc("festival/f1/state").unwrap(),
+            Some(b"public-doc".to_vec())
+        );
+        assert_eq!(db.load_doc_updates("festival/f1/state").unwrap().len(), 1);
+        assert_eq!(db.highest_verified_festival_seq("festival/f1/state").unwrap(), 7);
+        assert!(db.load_festival_peers("f1", 10).unwrap().is_empty());
+        assert_eq!(db.get_chat_messages(public_topic, 10, 0).unwrap().len(), 1);
+        assert_eq!(
+            db.get_historical_chat_author_proof(&[7; 32])
+                .unwrap()
+                .unwrap()
+                .attestation_message,
+            "proof"
+        );
+        assert_eq!(
+            db.get_credential("main_do_public_key").unwrap(),
+            Some(vec![4; 32])
+        );
+
+        assert!(db.load_doc("group/g1/state").unwrap().is_none());
+        assert!(db.load_doc_updates("group/g1/state").unwrap().is_empty());
+        assert!(db.load_groups("f1").unwrap().is_empty());
+        assert!(db.load_pending_group_updates("f1").unwrap().is_empty());
+        assert!(db.get_stars("f1").unwrap().is_empty());
+        assert!(db.load_festival_checkin("f1").unwrap().is_none());
+        assert!(db.get_chat_messages(private_topic, 10, 0).unwrap().is_empty());
+        for key in [
+            "identity_secret_key",
+            "device_id",
+            "display_name",
+            "attestation_message",
+            "attestation_signature",
+            "attestation_issuer",
+            "iroh_secret_key",
+        ] {
+            assert!(db.get_credential(key).unwrap().is_none(), "retained {key}");
+        }
+        let conn = db.conn.lock().unwrap();
+        let pending_public: i64 = conn
+            .query_row("SELECT COUNT(*) FROM pending_public_chat", [], |row| row.get(0))
+            .unwrap();
+        let private_clocks: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM chat_topic_clocks WHERE topic LIKE 'group/%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let public_clocks: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM chat_topic_clocks WHERE topic = ?1",
+                [public_topic],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let private_sequences: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM chat_writer_sequences WHERE topic LIKE 'group/%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let public_sequences: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM chat_writer_sequences WHERE topic = ?1",
+                [public_topic],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let private_conflicts: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM chat_sequence_conflicts WHERE topic LIKE 'group/%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let public_conflicts: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM chat_sequence_conflicts WHERE topic = ?1",
+                [public_topic],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(pending_public, 0);
+        assert_eq!(private_clocks, 0);
+        assert_eq!(public_clocks, 1);
+        assert_eq!(private_sequences, 0);
+        assert_eq!(public_sequences, 1);
+        assert_eq!(private_conflicts, 0);
+        assert_eq!(public_conflicts, 1);
+        drop(conn);
+        drop(db);
+
+        for candidate in [
+            path.clone(),
+            path.with_extension("db-wal"),
+            path.with_extension("db-journal"),
+        ] {
+            if !candidate.exists() {
+                continue;
+            }
+            let bytes = std::fs::read(&candidate).unwrap();
+            assert!(!bytes.windows(private_text.len()).any(|window| {
+                window == private_text.as_bytes()
+            }));
+            assert!(!bytes
+                .windows(private_peer.len())
+                .any(|window| window == private_peer.as_bytes()));
+            assert!(!bytes
+                .windows(private_key.len())
+                .any(|window| window == private_key));
+            assert!(!bytes
+                .windows(identity_seed.len())
+                .any(|window| window == identity_seed));
+        }
     }
 
     #[test]

@@ -19,7 +19,8 @@ class YouScreen extends StatelessWidget {
   final List<String> adminKeys;
   final ValueChanged<String> onDisplayNameChanged;
   final VoidCallback? onRequestAdmin;
-  final VoidCallback? onLogout;
+  final Future<void> Function()? onLogout;
+  final VoidCallback? onLogoutCompleted;
   final AppNode? node;
   final String? currentFestivalId;
 
@@ -36,6 +37,7 @@ class YouScreen extends StatelessWidget {
     required this.onDisplayNameChanged,
     this.onRequestAdmin,
     this.onLogout,
+    this.onLogoutCompleted,
     this.node,
     this.currentFestivalId,
   });
@@ -269,7 +271,7 @@ class YouScreen extends StatelessWidget {
                 child: Material(
                   color: Colors.transparent,
                   child: InkWell(
-                    onTap: onLogout,
+                    onTap: () => _showLogoutConfirmation(context),
                     child: const Center(
                       child: Text(
                         'LOG OUT',
@@ -298,6 +300,19 @@ class YouScreen extends StatelessWidget {
       context: context,
       builder: (_) => _IdQrDialog(userId: userId, publicKeyHex: publicKeyHex),
     );
+  }
+
+  Future<void> _showLogoutConfirmation(BuildContext context) async {
+    final logout = onLogout;
+    if (logout == null) return;
+    final completed = await showModalBottomSheet<bool>(
+      context: context,
+      backgroundColor: colorBg,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (_) => _LogoutConfirmationSheet(onConfirm: logout),
+    );
+    if (completed == true) onLogoutCompleted?.call();
   }
 
   void _showMeshtasticDebug(BuildContext context) {
@@ -336,6 +351,224 @@ class YouScreen extends StatelessWidget {
     }
   }
 }
+
+class _LogoutConfirmationSheet extends StatefulWidget {
+  final Future<void> Function() onConfirm;
+
+  const _LogoutConfirmationSheet({required this.onConfirm});
+
+  @override
+  State<_LogoutConfirmationSheet> createState() =>
+      _LogoutConfirmationSheetState();
+}
+
+class _LogoutConfirmationSheetState extends State<_LogoutConfirmationSheet> {
+  bool _busy = false;
+  bool _failed = false;
+
+  Future<void> _confirm() async {
+    if (_busy) return;
+    setState(() {
+      _busy = true;
+      _failed = false;
+    });
+    try {
+      await widget.onConfirm();
+      if (mounted) Navigator.of(context).pop(true);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _failed = true;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'LOG OUT?',
+            style: TextStyle(
+              fontFamily: 'JetBrainsMono',
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.1 * 13,
+              color: colorFg,
+              height: 1,
+            ),
+          ),
+          const SizedBox(height: 16),
+          const _LogoutSummary(
+            label: 'REMOVED FROM THIS DEVICE',
+            text:
+                'Account credentials, personal schedule, check-ins, groups, and private chat.',
+            color: colorErr,
+          ),
+          const SizedBox(height: 14),
+          const _LogoutSummary(
+            label: 'KEPT OFFLINE',
+            text:
+                'Downloaded festivals, signed lineups, announcements, public chat, and your OS passkey.',
+            color: colorOk,
+          ),
+          const SizedBox(height: 12),
+          const Text(
+            'YOU CAN USE THIS PASSKEY TO LOG BACK IN WITHOUT INTERNET.',
+            style: TextStyle(
+              fontFamily: 'JetBrainsMono',
+              fontSize: 8,
+              letterSpacing: 0.06 * 8,
+              color: colorFg3,
+              height: 1.4,
+            ),
+          ),
+          if (_failed) ...[
+            const SizedBox(height: 14),
+            const Text(
+              "COULDN'T LOG OUT. YOUR ACCOUNT IS STILL ON THIS DEVICE.",
+              style: TextStyle(
+                fontFamily: 'JetBrainsMono',
+                fontSize: 9,
+                fontWeight: FontWeight.w700,
+                color: colorErr,
+                height: 1.4,
+              ),
+            ),
+          ],
+          const SizedBox(height: 24),
+          Row(
+            children: [
+              Expanded(
+                child: SizedBox(
+                  height: 48,
+                  child: DottedBorder(
+                    child: Material(
+                      color: colorSurface2,
+                      child: InkWell(
+                        onTap: _busy
+                            ? null
+                            : () => Navigator.of(context).pop(false),
+                        child: const Center(
+                          child: Text('CANCEL', style: _logoutButtonStyle),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: SizedBox(
+                  height: 48,
+                  child: DottedBorder(
+                    color: colorErr,
+                    child: Material(
+                      color: _busy ? colorSurface2 : colorErr,
+                      child: InkWell(
+                        onTap: _busy ? null : _confirm,
+                        child: Center(
+                          child: _busy
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 1.5,
+                                    color: colorFg,
+                                  ),
+                                )
+                              : const Text(
+                                  'LOG OUT',
+                                  style: TextStyle(
+                                    fontFamily: 'JetBrainsMono',
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.w700,
+                                    letterSpacing: 0.08 * 9,
+                                    color: colorBg,
+                                    height: 1,
+                                  ),
+                                ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LogoutSummary extends StatelessWidget {
+  final String label;
+  final String text;
+  final Color color;
+
+  const _LogoutSummary({
+    required this.label,
+    required this.text,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(top: 2),
+          child: Icon(Icons.square, size: 7, color: color),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label,
+                style: TextStyle(
+                  fontFamily: 'JetBrainsMono',
+                  fontSize: 8,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.08 * 8,
+                  color: color,
+                  height: 1,
+                ),
+              ),
+              const SizedBox(height: 5),
+              Text(
+                text,
+                style: const TextStyle(
+                  fontFamily: 'JetBrainsMono',
+                  fontSize: 9,
+                  color: colorFg2,
+                  height: 1.45,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+const _logoutButtonStyle = TextStyle(
+  fontFamily: 'JetBrainsMono',
+  fontSize: 9,
+  fontWeight: FontWeight.w700,
+  letterSpacing: 0.08 * 9,
+  color: colorFg2,
+  height: 1,
+);
 
 class _InfoRow extends StatelessWidget {
   final String label;

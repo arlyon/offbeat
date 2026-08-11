@@ -17,6 +17,7 @@ pub mod resource;
 pub mod signing;
 pub mod sync;
 pub mod sync_protocol;
+pub mod task_scope;
 pub mod topics;
 pub mod transport;
 pub mod types;
@@ -72,6 +73,8 @@ pub struct OffbeatNode {
     pub ble_transport: Option<Arc<BleTransport>>,
     /// Connection manager for multi-path peer tracking.
     pub connection_manager: Option<Arc<ConnectionManager>>,
+    /// Nested BLE receiver and anti-entropy tasks owned by this node.
+    pub ble_child_tasks: task_scope::TaskScope,
     /// WS relay sink — populated after `connect_relay`.
     /// Behind a lock so background watchers (transport status) see updates.
     pub ws_relay: Arc<parking_lot::RwLock<Option<Arc<WsRelaySink>>>>,
@@ -84,42 +87,26 @@ impl OffbeatNode {
     /// **without** networking.  Used by tests and the bridge when networking
     /// is not yet needed.
     pub fn new(db_path: &Path) -> anyhow::Result<Self> {
-        let db = Arc::new(Database::new(db_path)?);
-        let doc_manager = Arc::new(DocManager::new(db.clone()));
-        let group_manager = Arc::new(GroupManager::new(db.clone(), doc_manager.clone()));
-        let chat_manager = Arc::new(ChatManager::new(db.clone(), doc_manager.clone()));
-        let resource_registry = Arc::new(RwLock::new(ResourceRegistry::new()));
-        let notifier = ResourceNotifier::new_arc();
-        let sync_orchestrator = Arc::new(SyncOrchestrator::new(
-            resource_registry.clone(),
-            doc_manager.clone(),
-            chat_manager.clone(),
-            db.clone(),
-            notifier.clone(),
-        ));
-        sync_orchestrator.hydrate_persisted_groups()?;
-        Ok(Self {
-            doc_manager,
-            db,
-            group_manager,
-            chat_manager,
-            resource_registry,
-            sync_orchestrator,
-            notifier,
-            gossip_manager: None,
-            gossip: None,
-            endpoint: None,
-            router: None,
-            ble_transport: None,
-            connection_manager: None,
-            ws_relay: Arc::new(parking_lot::RwLock::new(None)),
-            festival_public_keys: HashMap::new(),
-        })
+        Self::new_with_database(Arc::new(Database::new(db_path)?))
     }
 
     /// Create an in-memory node (useful for tests).
     pub fn new_in_memory() -> anyhow::Result<Self> {
-        let db = Arc::new(Database::new_in_memory()?);
+        Self::new_with_database(Arc::new(Database::new_in_memory()?))
+    }
+
+    /// Build a non-networked node around an existing database handle.
+    pub fn new_with_database(db: Arc<Database>) -> anyhow::Result<Self> {
+        let node = Self::new_empty_with_database(db);
+        node.sync_orchestrator.hydrate_persisted_groups()?;
+        Ok(node)
+    }
+
+    /// Build a non-networked node without hydrating persisted private resources.
+    ///
+    /// Logout uses this after the private-state transaction commits, making the
+    /// in-memory replacement infallible and ensuring no deleted group is cached.
+    pub fn new_empty_with_database(db: Arc<Database>) -> Self {
         let doc_manager = Arc::new(DocManager::new(db.clone()));
         let group_manager = Arc::new(GroupManager::new(db.clone(), doc_manager.clone()));
         let chat_manager = Arc::new(ChatManager::new(db.clone(), doc_manager.clone()));
@@ -132,8 +119,7 @@ impl OffbeatNode {
             db.clone(),
             notifier.clone(),
         ));
-        sync_orchestrator.hydrate_persisted_groups()?;
-        Ok(Self {
+        Self {
             doc_manager,
             db,
             group_manager,
@@ -147,9 +133,10 @@ impl OffbeatNode {
             router: None,
             ble_transport: None,
             connection_manager: None,
+            ble_child_tasks: task_scope::TaskScope::new(),
             ws_relay: Arc::new(parking_lot::RwLock::new(None)),
             festival_public_keys: HashMap::new(),
-        })
+        }
     }
 
     /// Create a node with a full iroh networking stack.
@@ -284,6 +271,7 @@ impl OffbeatNode {
             router: Some(router),
             ble_transport,
             connection_manager: Some(connection_manager),
+            ble_child_tasks: task_scope::TaskScope::new(),
             ws_relay: Arc::new(parking_lot::RwLock::new(None)),
             festival_public_keys: HashMap::new(),
         })
@@ -309,7 +297,13 @@ impl OffbeatNode {
         let endpoint = self.endpoint.clone();
         let dm = self.doc_manager.clone();
         handles.extend(ble_sync::spawn_ble_connection_tasks(
-            ble, gm, cm, so, endpoint, dm,
+            ble,
+            gm,
+            cm,
+            so,
+            endpoint,
+            dm,
+            self.ble_child_tasks.clone(),
         ));
 
         handles

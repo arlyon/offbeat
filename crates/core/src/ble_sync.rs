@@ -20,6 +20,7 @@ use crate::doc_manager::DocManager;
 use crate::gossip_manager::{GossipManager, GossipReceiver};
 use crate::sync::SyncOrchestrator;
 use crate::sync_protocol::IrohSyncPeer;
+use crate::task_scope::TaskScope;
 
 /// Minimum interval between join nudges for a single peer (discovery tick).
 const DISCOVERY_NUDGE_MIN_INTERVAL: Duration = Duration::from_secs(5);
@@ -47,6 +48,7 @@ pub fn spawn_ble_connection_tasks(
     sync_orchestrator: Arc<SyncOrchestrator>,
     endpoint: Option<iroh::Endpoint>,
     doc_manager: Arc<DocManager>,
+    child_tasks: TaskScope,
 ) -> Vec<JoinHandle<()>> {
     vec![
         // Task A: BLE discovery tick — poll BLE peers and nudge gossip join
@@ -54,6 +56,7 @@ pub fn spawn_ble_connection_tasks(
             ble_transport.clone(),
             gossip_manager.clone(),
             connection_manager.clone(),
+            child_tasks.clone(),
         )),
         // Task B: BLE reconnect tick — periodically retry non-active peers
         tokio::spawn(ble_reconnect_tick(
@@ -69,6 +72,7 @@ pub fn spawn_ble_connection_tasks(
             sync_orchestrator,
             endpoint,
             doc_manager,
+            child_tasks,
         )),
     ]
 }
@@ -81,6 +85,7 @@ async fn ble_discovery_tick(
     ble_transport: Arc<BleTransport>,
     gossip_manager: Arc<Mutex<GossipManager>>,
     connection_manager: Arc<ConnectionManager>,
+    child_tasks: TaskScope,
 ) {
     // Track which peers we've seen and their last known phase, to detect transitions.
     let mut known_phases: HashMap<String, iroh_ble_transport::BlePeerPhase> = HashMap::new();
@@ -102,7 +107,7 @@ async fn ble_discovery_tick(
             if info.verified_endpoint.is_none() {
                 let ble = ble_transport.clone();
                 let device_id = info.device_id.clone();
-                tokio::spawn(async move {
+                child_tasks.spawn(async move {
                     tracing::debug!(device = %device_id, "triggering proactive connection for verification");
                     ble.connect(device_id.clone());
 
@@ -243,6 +248,7 @@ struct GossipPumpContext {
     sync_orchestrator: Arc<SyncOrchestrator>,
     endpoint: Option<iroh::Endpoint>,
     doc_manager: Arc<DocManager>,
+    child_tasks: TaskScope,
 }
 
 async fn gossip_event_pump(
@@ -251,12 +257,14 @@ async fn gossip_event_pump(
     sync_orchestrator: Arc<SyncOrchestrator>,
     endpoint: Option<iroh::Endpoint>,
     doc_manager: Arc<DocManager>,
+    child_tasks: TaskScope,
 ) {
     let context = GossipPumpContext {
         connection_manager,
         sync_orchestrator,
         endpoint,
         doc_manager,
+        child_tasks,
     };
     // Wait briefly to let subscriptions get established before draining
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -270,21 +278,20 @@ async fn gossip_event_pump(
         tracing::debug!("gossip_event_pump: no receivers to drain, will poll periodically");
     }
 
-    // Spawn a task per receiver, resolving each topic's festival so NeighborUp
-    // peers can be harvested into the festival-scoped directory.
-    let mut handles: Vec<JoinHandle<()>> = Vec::new();
+    // Spawn a tracked task per receiver, resolving each topic's festival so
+    // NeighborUp peers can be harvested into the festival-scoped directory.
     {
         let gm = gossip_manager.lock().await;
         for (topic_id, receiver) in receivers {
             let festival_id = gm.festival_for_topic(&topic_id);
             let is_group = gm.is_group_topic(&topic_id);
-            handles.push(tokio::spawn(pump_single_receiver(
+            context.child_tasks.spawn(pump_single_receiver(
                 receiver,
                 festival_id,
                 is_group,
                 topic_id,
                 context.clone(),
-            )));
+            ));
         }
     }
 
@@ -297,13 +304,13 @@ async fn gossip_event_pump(
         for (topic_id, receiver) in new_receivers {
             let festival_id = gm.festival_for_topic(&topic_id);
             let is_group = gm.is_group_topic(&topic_id);
-            handles.push(tokio::spawn(pump_single_receiver(
+            context.child_tasks.spawn(pump_single_receiver(
                 receiver,
                 festival_id,
                 is_group,
                 topic_id,
                 context.clone(),
-            )));
+            ));
         }
     }
 }
@@ -324,6 +331,7 @@ async fn pump_single_receiver(
         sync_orchestrator,
         endpoint,
         doc_manager,
+        child_tasks,
     } = context;
     let topic_label = topic_id.to_string();
     use iroh_gossip::api::Event;
@@ -372,7 +380,7 @@ async fn pump_single_receiver(
                         );
                         let so = sync_orchestrator.clone();
                         let cm = connection_manager.clone();
-                        tokio::spawn(async move {
+                        child_tasks.spawn(async move {
                             let _permit = permit; // held for the dial's lifetime
                             let ok = match so.sync_with_peer(&peer).await {
                                 Ok(_) => true,
