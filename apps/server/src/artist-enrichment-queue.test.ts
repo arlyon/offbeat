@@ -324,6 +324,7 @@ describe("artist enrichment queue", () => {
 			}),
 		});
 		const message = queueMessage(messageBody);
+		const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
 		await handleArtistEnrichmentQueue(
 			queueBatch(message),
@@ -334,6 +335,10 @@ describe("artist enrichment queue", () => {
 			messageBody.jobId,
 			"temporary storage failure",
 		);
+		expect(consoleError).toHaveBeenCalledWith(
+			"[artist-enrichment] retrying job job-1 in 30s: temporary storage failure",
+		);
+		consoleError.mockRestore();
 		expect(message.retry).toHaveBeenCalledWith({ delaySeconds: 30 });
 		expect(message.ack).not.toHaveBeenCalled();
 	});

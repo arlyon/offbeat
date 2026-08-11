@@ -180,6 +180,7 @@ export async function handleArtistEnrichmentQueue(
 				(error instanceof ArtistProviderError && !error.retryable) ||
 				(error instanceof ArtistResolutionProviderError && !error.retryable);
 			if (nonRetryableProviderError) {
+				console.error(`[artist-enrichment] provider rejected job ${body.jobId}: ${detail}`);
 				const input = resolutionInput(body);
 				const unresolved = await unresolvedArtistResolution(body, input);
 				await main.recordArtistBillingResolution(unresolved);
@@ -189,6 +190,9 @@ export async function handleArtistEnrichmentQueue(
 			}
 			await main.markArtistEnrichmentFailure(body.jobId, detail);
 			const delaySeconds = Math.min(900, 15 * 2 ** Math.min(message.attempts, 6));
+			console.error(
+				`[artist-enrichment] retrying job ${body.jobId} in ${delaySeconds}s: ${detail}`,
+			);
 			message.retry({ delaySeconds });
 		}
 	}
