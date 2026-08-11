@@ -283,6 +283,10 @@ pub struct ChatCatchupRequest {
         ::prost::alloc::string::String,
         ::prost::alloc::string::String,
     >,
+    /// Encrypted fixed-purpose token proving possession of a private group key.
+    /// Empty for public chat topics.
+    #[prost(bytes = "vec", tag = "5")]
+    pub encrypted_group_proof: ::prost::alloc::vec::Vec<u8>,
 }
 /// Server -> Client
 #[derive(Clone, PartialEq, ::prost::Message)]

@@ -43,6 +43,17 @@ fn group_id_from_state_doc(doc_id: &str) -> Option<&str> {
     (!group_id.is_empty() && !group_id.contains('/')).then_some(group_id)
 }
 
+const GROUP_CHAT_CATCHUP_PROOF_PREFIX: &str = "offbeat/group-chat-catchup/v1/";
+
+fn group_id_from_chat_topic(topic: &str) -> Option<&str> {
+    let group_id = topic.strip_prefix("group/")?.strip_suffix("/chat")?;
+    (!group_id.is_empty() && !group_id.contains('/')).then_some(group_id)
+}
+
+pub(crate) fn group_chat_catchup_proof(topic: &str) -> Vec<u8> {
+    format!("{GROUP_CHAT_CATCHUP_PROOF_PREFIX}{topic}").into_bytes()
+}
+
 impl ChatStateVector {
     pub fn new() -> Self {
         Self::default()
@@ -201,6 +212,7 @@ pub trait PeerConnection: Send + Sync {
         topic: &str,
         sv: &ChatStateVector,
         limit: u32,
+        encrypted_group_proof: &[u8],
     ) -> impl Future<Output = anyhow::Result<Vec<proto::GossipEnvelope>>> + Send;
 
     /// Broadcast data on a topic.
@@ -423,6 +435,27 @@ impl SyncOrchestrator {
     pub(crate) fn group_key_for_doc(&self, doc_id: &str) -> anyhow::Result<[u8; 32]> {
         let group_id = group_id_from_state_doc(doc_id)
             .ok_or_else(|| anyhow::anyhow!("invalid group state document ID {doc_id}"))?;
+        self.group_key(group_id)
+    }
+
+    pub(crate) fn group_key_for_chat_topic(
+        &self,
+        topic: &str,
+    ) -> anyhow::Result<[u8; 32]> {
+        let group_id = group_id_from_chat_topic(topic)
+            .ok_or_else(|| anyhow::anyhow!("invalid group chat topic {topic}"))?;
+        self.group_key(group_id)
+    }
+
+    pub(crate) fn encrypted_group_chat_catchup_proof(
+        &self,
+        topic: &str,
+    ) -> anyhow::Result<Vec<u8>> {
+        let group_key = self.group_key_for_chat_topic(topic)?;
+        crate::crypto::encrypt(&group_key, &group_chat_catchup_proof(topic))
+    }
+
+    fn group_key(&self, group_id: &str) -> anyhow::Result<[u8; 32]> {
         self.key_cache
             .get_or_load(group_id, &self.db)?
             .ok_or_else(|| anyhow::anyhow!("unknown group key {group_id}"))
@@ -629,8 +662,18 @@ impl SyncOrchestrator {
                 }
 
                 let csv = ChatStateVector::from_heads(self.db.get_chat_writer_heads(topic)?);
+                let encrypted_group_proof = if topic.starts_with("group/") {
+                    self.encrypted_group_chat_catchup_proof(topic)?
+                } else {
+                    Vec::new()
+                };
                 let envelopes = peer
-                    .chat_catchup(topic, &csv, profile.chat_catchup_limit())
+                    .chat_catchup(
+                        topic,
+                        &csv,
+                        profile.chat_catchup_limit(),
+                        &encrypted_group_proof,
+                    )
                     .await?;
                 // Validate and persist the complete page against one clock floor
                 // so a malicious peer cannot ratchet Lamport time per envelope.
@@ -1279,6 +1322,7 @@ mod tests {
             _topic: &str,
             _sv: &ChatStateVector,
             _limit: u32,
+            _encrypted_group_proof: &[u8],
         ) -> anyhow::Result<Vec<proto::GossipEnvelope>> {
             Ok(vec![])
         }
@@ -1317,6 +1361,7 @@ mod tests {
             _topic: &str,
             _sv: &ChatStateVector,
             _limit: u32,
+            _encrypted_group_proof: &[u8],
         ) -> anyhow::Result<Vec<proto::GossipEnvelope>> {
             panic!("constrained transports must not perform append-log catch-up")
         }
@@ -1344,6 +1389,7 @@ mod tests {
             _topic: &str,
             _sv: &ChatStateVector,
             _limit: u32,
+            _encrypted_group_proof: &[u8],
         ) -> anyhow::Result<Vec<proto::GossipEnvelope>> {
             Ok(vec![])
         }

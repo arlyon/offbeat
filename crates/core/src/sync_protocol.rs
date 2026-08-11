@@ -34,6 +34,11 @@ const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_CHAT_RESPONSE_BYTES: usize = 512 * 1024;
 const MAX_CHAT_CATCHUP_MESSAGES: u32 = 500;
 
+fn group_id_from_chat_topic(topic: &str) -> Option<&str> {
+    let group_id = topic.strip_prefix("group/")?.strip_suffix("/chat")?;
+    (!group_id.is_empty() && !group_id.contains('/')).then_some(group_id)
+}
+
 /// Server side: answers a catch-up request on a bi-stream. The request is a
 /// [`proto::RelayClientMessage`] carrying either an `SvExchange` (CRDT diff) or
 /// a `ChatCatchup` (append-log history). One request → one response per stream:
@@ -94,50 +99,83 @@ impl SyncProtocol {
         crate::crypto::encrypt(&group_key, &diff).unwrap_or_default()
     }
 
-    /// Serve public chat history. Encrypted group-chat catch-up needs a
-    /// possession-proof request and is intentionally disabled until that
-    /// protocol is wired; endpoint identity alone is not group membership.
+    /// Serve public chat history or private group history after proving
+    /// possession of the matching group key. Group messages remain encrypted
+    /// in the response and are decrypted by the receiving orchestrator.
     fn build_chat_diff(&self, req: &proto::ChatCatchupRequest) -> proto::ChatDiffResponse {
-        if req.topic.starts_with("group/") {
-            return proto::ChatDiffResponse {
-                topic: req.topic.clone(),
-                messages: Vec::new(),
+        let empty_response = || proto::ChatDiffResponse {
+            topic: req.topic.clone(),
+            messages: Vec::new(),
+        };
+        let group_key = if req.topic.starts_with("group/") {
+            let Some(group_id) = group_id_from_chat_topic(&req.topic) else {
+                return empty_response();
             };
-        }
+            let Ok(Some(group_key)) = self.db.load_group_key(group_id) else {
+                return empty_response();
+            };
+            if crate::crypto::group_id_from_key(&group_key) != group_id {
+                return empty_response();
+            }
+            let Ok(proof) = crate::crypto::decrypt(&group_key, &req.encrypted_group_proof) else {
+                return empty_response();
+            };
+            if proof != crate::sync::group_chat_catchup_proof(&req.topic) {
+                return empty_response();
+            }
+            Some(group_key)
+        } else {
+            None
+        };
+
         let limit = req.limit.clamp(1, 1000);
         let messages = self
             .db
             .get_messages_since_heads(&req.topic, &req.sv, &req.head_ids, limit)
             .unwrap_or_default();
-        let mut response = proto::ChatDiffResponse {
-            topic: req.topic.clone(),
-            messages: Vec::new(),
-        };
+        let mut response = empty_response();
         let mut included_proofs = std::collections::HashSet::new();
         for message in messages {
             let page_start = response.messages.len();
-            if let Ok(writer_key) = <[u8; 32]>::try_from(message.writer_key.as_slice()) {
-                let writer_id = message.writer_id();
-                if included_proofs.insert(writer_id)
-                    && let Ok(Some(proof)) = self.db.get_chat_author_proof(&writer_key)
-                {
-                    response
-                        .messages
-                        .push(proto::GossipEnvelope::from_gossip_message(
-                            &GossipMessage::ChatAuthorProof {
-                                writer_key: proof.writer_key,
-                                attestation_message: proof.attestation_message,
-                                attestation_signature: proof.attestation_signature,
-                                issuer: proof.issuer,
-                            },
-                        ));
+            if let Some(group_key) = group_key {
+                let Ok(plaintext) = serde_json::to_vec(&message) else {
+                    continue;
+                };
+                let Ok(encrypted) = crate::crypto::encrypt(&group_key, &plaintext) else {
+                    continue;
+                };
+                response
+                    .messages
+                    .push(proto::GossipEnvelope::from_gossip_message(
+                        &GossipMessage::EncryptedChat {
+                            group_key,
+                            encrypted,
+                        },
+                    ));
+            } else {
+                if let Ok(writer_key) = <[u8; 32]>::try_from(message.writer_key.as_slice()) {
+                    let writer_id = message.writer_id();
+                    if included_proofs.insert(writer_id)
+                        && let Ok(Some(proof)) = self.db.get_chat_author_proof(&writer_key)
+                    {
+                        response
+                            .messages
+                            .push(proto::GossipEnvelope::from_gossip_message(
+                                &GossipMessage::ChatAuthorProof {
+                                    writer_key: proof.writer_key,
+                                    attestation_message: proof.attestation_message,
+                                    attestation_signature: proof.attestation_signature,
+                                    issuer: proof.issuer,
+                                },
+                            ));
+                    }
                 }
+                response
+                    .messages
+                    .push(proto::GossipEnvelope::from_gossip_message(
+                        &GossipMessage::Chat(message),
+                    ));
             }
-            response
-                .messages
-                .push(proto::GossipEnvelope::from_gossip_message(
-                    &GossipMessage::Chat(message),
-                ));
             if response.encoded_len() > MAX_CHAT_RESPONSE_BYTES {
                 response.messages.truncate(page_start);
                 break;
@@ -275,10 +313,16 @@ impl crate::sync::PeerConnection for IrohSyncPeer {
         topic: &str,
         sv: &crate::sync::ChatStateVector,
         limit: u32,
+        encrypted_group_proof: &[u8],
     ) -> anyhow::Result<Vec<proto::GossipEnvelope>> {
-        if topic.starts_with("group/") {
-            return Ok(Vec::new());
-        }
+        let request_proof = if topic.starts_with("group/") {
+            if encrypted_group_proof.is_empty() {
+                anyhow::bail!("group chat catch-up requires a possession proof");
+            }
+            encrypted_group_proof.to_vec()
+        } else {
+            Vec::new()
+        };
         let effective_limit = limit.clamp(1, MAX_CHAT_CATCHUP_MESSAGES);
         let conn = self.endpoint.connect(self.peer.clone(), SYNC_ALPN).await?;
         let (mut send, mut recv) = conn.open_bi().await?;
@@ -290,6 +334,7 @@ impl crate::sync::PeerConnection for IrohSyncPeer {
                     sv: sv.sequences(),
                     limit: effective_limit,
                     head_ids: sv.head_ids(),
+                    encrypted_group_proof: request_proof,
                 },
             )),
         };
@@ -312,6 +357,7 @@ impl crate::sync::PeerConnection for IrohSyncPeer {
                 matches!(
                     envelope.payload.as_ref(),
                     Some(proto::gossip_envelope::Payload::Chat(_))
+                        | Some(proto::gossip_envelope::Payload::EncryptedChat(_))
                 )
             })
             .count();
@@ -416,6 +462,28 @@ mod tests {
         }
         crate::signing::sign_public_chat_message(&signing_key, &mut message).unwrap();
         message
+    }
+
+    fn save_public_chat_proof(db: &Database, user: &str) {
+        let writer_seed = *blake3::hash(user.as_bytes()).as_bytes();
+        let writer = ed25519_dalek::SigningKey::from_bytes(&writer_seed);
+        let root = ed25519_dalek::SigningKey::from_bytes(&[42; 32]);
+        let root_key = root.verifying_key().to_bytes();
+        db.pin_main_do_public_key(&root_key).unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let writer_key = writer.verifying_key().to_bytes();
+        let message = format!(
+            "attestation:v1:{}:{}:{}",
+            hex::encode(writer_key),
+            now.saturating_sub(60),
+            now + 3600,
+        );
+        let signature = crate::signing::sign(&root, message.as_bytes());
+        db.save_chat_author_proof(&writer_key, &message, &signature, &root_key)
+            .unwrap();
     }
 
     /// End-to-end over the real wire: two iroh endpoints on loopback, the server
@@ -596,6 +664,8 @@ mod tests {
         server_db
             .save_chat_message(&signed_chat_msg("m3", "bob", "hi all", topic, 1))
             .unwrap();
+        save_public_chat_proof(&server_db, "alice");
+        save_public_chat_proof(&server_db, "bob");
 
         let server_ep = local_endpoint(vec![SYNC_ALPN.to_vec()]).await;
         let _router = iroh::protocol::Router::builder(server_ep.clone())
@@ -612,9 +682,15 @@ mod tests {
         // Catch up from an empty state vector — we are missing everything.
         let sv = crate::sync::ChatStateVector::new();
         let peer = IrohSyncPeer::new(client_ep.clone(), server_addr, client_doc, None);
-        let envelopes = peer.chat_catchup(topic, &sv, 100).await.unwrap();
+        let envelopes = peer.chat_catchup(topic, &sv, 100, &[]).await.unwrap();
         assert_eq!(
-            envelopes.len(),
+            envelopes
+                .iter()
+                .filter(|envelope| matches!(
+                    envelope.payload,
+                    Some(proto::gossip_envelope::Payload::Chat(_))
+                ))
+                .count(),
             3,
             "server should serve all 3 history messages"
         );
@@ -639,6 +715,65 @@ mod tests {
         server_ep.close().await;
     }
 
+    #[tokio::test]
+    async fn two_node_group_chat_catchup_proves_possession_and_backfills_history() {
+        let group_key = crate::crypto::generate_group_key();
+        let group_id = crate::crypto::group_id_from_key(&group_key);
+        let topic = format!("group/{group_id}/chat");
+
+        let server_db = Arc::new(Database::new_in_memory().unwrap());
+        server_db
+            .save_group(&group_id, "fest-1", "The Crew", &group_key)
+            .unwrap();
+        server_db
+            .save_chat_message(&chat_msg("m1", "alice", "private hello", &topic, 1))
+            .unwrap();
+        let server_doc = Arc::new(DocManager::new(server_db.clone()));
+        let server_ep = local_endpoint(vec![SYNC_ALPN.to_vec()]).await;
+        let _router = iroh::protocol::Router::builder(server_ep.clone())
+            .accept(SYNC_ALPN, SyncProtocol::new(server_doc, server_db))
+            .spawn();
+        let server_addr = server_ep.addr();
+
+        let client_db = Arc::new(Database::new_in_memory().unwrap());
+        client_db
+            .save_group(&group_id, "fest-1", "The Crew", &group_key)
+            .unwrap();
+        let client_doc = Arc::new(DocManager::new(client_db.clone()));
+        let registry = Arc::new(RwLock::new(ResourceRegistry::new()));
+        registry
+            .write()
+            .unwrap()
+            .register(crate::resource::Resource::group_chat(group_key));
+        let orchestrator = Arc::new(SyncOrchestrator::new(
+            registry,
+            client_doc.clone(),
+            Arc::new(crate::chat::ChatManager::new(
+                client_db.clone(),
+                client_doc.clone(),
+            )),
+            client_db.clone(),
+            Arc::new(ResourceNotifier::new()),
+        ));
+        orchestrator.cache_group_key(&group_id, group_key);
+        let client_ep = local_endpoint(vec![]).await;
+        let peer = IrohSyncPeer::new(
+            client_ep.clone(),
+            server_addr,
+            client_doc,
+            Some(orchestrator.clone()),
+        );
+
+        orchestrator.sync_resource(&topic, &peer).await.unwrap();
+
+        let history = client_db.get_chat_messages(&topic, 100, 0).unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].text, "private hello");
+
+        client_ep.close().await;
+        server_ep.close().await;
+    }
+
     #[test]
     fn equal_hwm_with_different_head_returns_conflicting_variant() {
         let topic = "festival/fest-1/chat/main";
@@ -654,6 +789,7 @@ mod tests {
                 "alice".to_string(),
                 "other-variant".to_string(),
             )]),
+            encrypted_group_proof: Vec::new(),
         });
 
         assert_eq!(response.messages.len(), 1);
@@ -685,6 +821,7 @@ mod tests {
             sv: Default::default(),
             limit: 1000,
             head_ids: Default::default(),
+            encrypted_group_proof: Vec::new(),
         });
 
         assert!(response.encoded_len() <= MAX_CHAT_RESPONSE_BYTES);
@@ -693,19 +830,69 @@ mod tests {
     }
 
     #[test]
-    fn group_chat_history_is_not_served_without_possession_proof() {
-        let topic = "group/secret/chat";
+    fn group_chat_history_requires_a_topic_bound_matching_key_proof() {
+        let group_key = crate::crypto::generate_group_key();
+        let group_id = crate::crypto::group_id_from_key(&group_key);
+        let topic = format!("group/{group_id}/chat");
         let db = Arc::new(Database::new_in_memory().unwrap());
-        db.save_chat_message(&chat_msg("m1", "alice", "private", topic, 1))
+        db.save_group(&group_id, "fest-1", "The Crew", &group_key)
+            .unwrap();
+        db.save_chat_message(&chat_msg("m1", "alice", "private", &topic, 1))
             .unwrap();
         let protocol = SyncProtocol::new(Arc::new(DocManager::new(db.clone())), db);
-        let response = protocol.build_chat_diff(&proto::ChatCatchupRequest {
-            topic: topic.to_string(),
+        let request = |encrypted_group_proof| proto::ChatCatchupRequest {
+            topic: topic.clone(),
             sv: Default::default(),
             limit: 50,
             head_ids: Default::default(),
-        });
+            encrypted_group_proof,
+        };
 
-        assert!(response.messages.is_empty());
+        assert!(protocol.build_chat_diff(&request(Vec::new())).messages.is_empty());
+
+        let wrong_key = crate::crypto::generate_group_key();
+        let wrong_key_proof = crate::crypto::encrypt(
+            &wrong_key,
+            &crate::sync::group_chat_catchup_proof(&topic),
+        )
+        .unwrap();
+        assert!(
+            protocol
+                .build_chat_diff(&request(wrong_key_proof))
+                .messages
+                .is_empty()
+        );
+
+        let cross_topic_proof = crate::crypto::encrypt(
+            &group_key,
+            &crate::sync::group_chat_catchup_proof(&format!(
+                "group/{group_id}/chat/other"
+            )),
+        )
+        .unwrap();
+        assert!(
+            protocol
+                .build_chat_diff(&request(cross_topic_proof))
+                .messages
+                .is_empty()
+        );
+
+        let valid_proof = crate::crypto::encrypt(
+            &group_key,
+            &crate::sync::group_chat_catchup_proof(&topic),
+        )
+        .unwrap();
+        let response = protocol.build_chat_diff(&request(valid_proof));
+        assert_eq!(response.messages.len(), 1);
+        let Some(proto::gossip_envelope::Payload::EncryptedChat(encrypted)) =
+            response.messages[0].payload.as_ref()
+        else {
+            panic!("expected encrypted group chat");
+        };
+        assert_eq!(encrypted.group_key_id, group_id);
+        let plaintext = crate::crypto::decrypt(&group_key, &encrypted.encrypted).unwrap();
+        let message: crate::types::ChatMessage = serde_json::from_slice(&plaintext).unwrap();
+        assert_eq!(message.text, "private");
+        assert_eq!(message.topic, topic);
     }
 }

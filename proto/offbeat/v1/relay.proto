@@ -55,6 +55,9 @@ message ChatCatchupRequest {
   // ID-plus-Lamport commitment at each writer's advertised sequence. Additive
   // for compatibility with older peers that only understand the sequence map.
   map<string, string> head_ids = 4;
+  // Encrypted fixed-purpose token proving possession of a private group key.
+  // Empty for public chat topics.
+  bytes encrypted_group_proof = 5;
 }
 
 // Server -> Client

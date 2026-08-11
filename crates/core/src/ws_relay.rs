@@ -399,14 +399,23 @@ impl WsRelaySink {
         topic: &str,
         sv: &crate::sync::ChatStateVector,
         limit: u32,
+        encrypted_group_proof: &[u8],
     ) -> anyhow::Result<()> {
+        // The relay is a blind mailbox for private groups and cannot filter
+        // ciphertext by writer heads. Do not expose decrypted writer IDs to it.
+        let (sequences, head_ids) = if topic.starts_with("group/") {
+            (Default::default(), Default::default())
+        } else {
+            (sv.sequences(), sv.head_ids())
+        };
         self.send_client_msg(&proto::RelayClientMessage {
             msg: Some(proto::relay_client_message::Msg::ChatCatchup(
                 proto::ChatCatchupRequest {
                     topic: topic.to_string(),
-                    sv: sv.sequences(),
+                    sv: sequences,
                     limit,
-                    head_ids: sv.head_ids(),
+                    head_ids,
+                    encrypted_group_proof: encrypted_group_proof.to_vec(),
                 },
             )),
         })
@@ -444,10 +453,11 @@ impl crate::sync::PeerConnection for WsRelaySink {
         topic: &str,
         sv: &crate::sync::ChatStateVector,
         limit: u32,
+        encrypted_group_proof: &[u8],
     ) -> anyhow::Result<Vec<crate::proto::GossipEnvelope>> {
         // The relay answers asynchronously with a `ChatDiff` server message that
         // the receive loop dispatches; nothing to return inline.
-        WsRelaySink::chat_catchup(self, topic, sv, limit).await?;
+        WsRelaySink::chat_catchup(self, topic, sv, limit, encrypted_group_proof).await?;
         Ok(vec![])
     }
 
@@ -681,7 +691,7 @@ async fn run_receive_loop_with_reconnect(
                     for topic in topics {
                         let result = if is_public_chat_topic(&topic) {
                             match sync_orchestrator.chat_state_vector(&topic) {
-                                Ok(sv) => sink.chat_catchup(&topic, &sv, 50).await,
+                                Ok(sv) => sink.chat_catchup(&topic, &sv, 50, &[]).await,
                                 Err(error) => Err(error),
                             }
                         } else if let Some(seq) = seqs.get(&topic) {

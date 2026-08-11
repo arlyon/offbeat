@@ -487,6 +487,7 @@ async fn send_chat_catchup(
                     sv,
                     limit: 50,
                     head_ids,
+                    encrypted_group_proof: Vec::new(),
                 },
             )),
         },
