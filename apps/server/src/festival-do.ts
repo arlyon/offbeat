@@ -1,11 +1,13 @@
 import { DurableObject } from "cloudflare:workers";
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
 import {
+	type ArtistBillingResolution,
 	type ArtistProfile,
 	ErrorCode,
 	FestivalUpdateKind,
 	GossipEnvelopeSchema,
 	type Lineup,
+	parseArtistBilling,
 	type RelayClientMessage,
 	RelayClientMessageSchema,
 	RelayServerMessageSchema,
@@ -1845,8 +1847,13 @@ export class FestivalDO extends DurableObject {
 			m.set("day", set.day);
 			m.set("stage", set.stage);
 			m.set("artist", set.artist);
+			m.set("sourceBilling", set.sourceBilling ?? set.artist);
 			if (set.artistMbid) m.set("artistMbid", set.artistMbid);
 			m.set("artistIds", JSON.stringify(set.artistIds ?? []));
+			if (set.billingResolutionId) m.set("billingResolutionId", set.billingResolutionId);
+			m.set("artistCredits", JSON.stringify(set.artistCredits ?? []));
+			if (set.presentedTitle) m.set("presentedTitle", set.presentedTitle);
+			m.set("performanceQualifiers", JSON.stringify(set.performanceQualifiers ?? []));
 			m.set("startMin", set.startMin);
 			m.set("durationMin", set.durationMin);
 			m.set("genre", set.genre);
@@ -1858,6 +1865,10 @@ export class FestivalDO extends DurableObject {
 			const m = new Y.Map();
 			writeArtistProfile(m, artist);
 			artistsMap.set(artist.id, m);
+		}
+		const resolutionsMap = doc.getMap("billingResolutions");
+		for (const resolution of lineup.billingResolutions ?? []) {
+			resolutionsMap.set(resolution.id, JSON.stringify(resolution));
 		}
 
 		// Persist a signed canonical checkpoint before marking the Yrs document as
@@ -1910,6 +1921,7 @@ export class FestivalDO extends DurableObject {
 			const daysMap = doc.getMap("days") as Y.Map<Y.Map<unknown>>;
 			const setsMap = doc.getMap("sets") as Y.Map<Y.Map<unknown>>;
 			const artistsMap = doc.getMap("artists") as Y.Map<Y.Map<unknown>>;
+			const resolutionsMap = doc.getMap("billingResolutions");
 
 			// Remove stale entries
 			const newStageIds = new Set(lineup.stages.map((s) => s.id));
@@ -1957,9 +1969,19 @@ export class FestivalDO extends DurableObject {
 				m.set("day", set.day);
 				m.set("stage", set.stage);
 				m.set("artist", set.artist);
+				m.set("sourceBilling", set.sourceBilling ?? set.artist);
 				if (set.artistMbid) m.set("artistMbid", set.artistMbid);
 				else m.delete("artistMbid");
 				m.set("artistIds", JSON.stringify(set.artistIds ?? []));
+				if (set.billingResolutionId) {
+					m.set("billingResolutionId", set.billingResolutionId);
+				} else {
+					m.delete("billingResolutionId");
+				}
+				m.set("artistCredits", JSON.stringify(set.artistCredits ?? []));
+				if (set.presentedTitle) m.set("presentedTitle", set.presentedTitle);
+				else m.delete("presentedTitle");
+				m.set("performanceQualifiers", JSON.stringify(set.performanceQualifiers ?? []));
 				m.set("startMin", set.startMin);
 				m.set("durationMin", set.durationMin);
 				m.set("genre", set.genre);
@@ -1977,6 +1999,17 @@ export class FestivalDO extends DurableObject {
 						artistsMap.set(artist.id, m);
 					}
 					writeArtistProfile(m, artist);
+				}
+			}
+			if (lineup.billingResolutions) {
+				const newResolutionIds = new Set(
+					lineup.billingResolutions.map((resolution) => resolution.id),
+				);
+				for (const key of [...resolutionsMap.keys()]) {
+					if (!newResolutionIds.has(key)) resolutionsMap.delete(key);
+				}
+				for (const resolution of lineup.billingResolutions) {
+					resolutionsMap.set(resolution.id, JSON.stringify(resolution));
 				}
 			}
 		});
@@ -2014,6 +2047,109 @@ export class FestivalDO extends DurableObject {
 				);
 			}
 		});
+	}
+
+	async applyArtistResolution(
+		festivalId: string,
+		resolution: ArtistBillingResolution,
+		profiles: ArtistProfile[],
+		setIds: string[],
+	): Promise<"applied" | "already_applied" | "stale"> {
+		if (!this.#secretKey || !this.#publicKey) throw new Error("Keypair not initialized");
+		if (this.#festivalId !== festivalId) throw new Error("Festival identity mismatch");
+		if (!this.#publicStateDoc) this.#loadPublicStateDoc();
+		const currentValue = this.#publicStateDoc?.getMap("billingResolutions").get(resolution.id);
+		let currentResolutionMatches = false;
+		if (typeof currentValue === "string") {
+			let current: ArtistBillingResolution;
+			try {
+				current = JSON.parse(currentValue) as ArtistBillingResolution;
+			} catch (error) {
+				throw new Error("stored artist resolution is invalid", { cause: error });
+			}
+			if (current.method === "manual" && resolution.method !== "manual") return "stale";
+			if (current.version > resolution.version) return "stale";
+			currentResolutionMatches =
+				current.version === resolution.version &&
+				current.inputHash === resolution.inputHash &&
+				current.processorVersion === resolution.processorVersion;
+		}
+
+		const profileById = new Map(profiles.map((profile) => [profile.id, profile]));
+		const artistIds = [...new Set(resolution.credits.map((credit) => credit.artistId))].sort(
+			(left, right) => left.localeCompare(right),
+		);
+		if (artistIds.some((artistId) => !profileById.has(artistId))) {
+			throw new Error("artist resolution is missing a canonical profile");
+		}
+		const currentSets = this.#publicStateDoc?.getMap("sets") as Y.Map<Y.Map<unknown>> | undefined;
+		const targetSetIds = setIds.filter((setId) => currentSets?.get(setId) instanceof Y.Map);
+		if (targetSetIds.length === 0) {
+			throw new Error("artist resolution did not match any target sets");
+		}
+		for (const setId of targetSetIds) {
+			const setMap = currentSets?.get(setId);
+			if (!setMap) continue;
+			const sourceBilling = String(setMap.get("sourceBilling") ?? setMap.get("artist") ?? "");
+			const sourceMbid = setMap.get("artistMbid");
+			const billingKey = parseArtistBilling(
+				sourceBilling,
+				typeof sourceMbid === "string" ? sourceMbid : undefined,
+			).billingKey;
+			if (billingKey !== resolution.billingKey) {
+				throw new Error("artist resolution no longer matches the target set");
+			}
+		}
+		const serializedArtistIds = JSON.stringify(artistIds);
+		const serializedCredits = JSON.stringify(resolution.credits);
+		const serializedQualifiers = JSON.stringify(resolution.performanceQualifiers);
+		const allTargetsApplied = targetSetIds.every((setId) => {
+			const setMap = currentSets?.get(setId);
+			return (
+				setMap instanceof Y.Map &&
+				setMap.get("artistIds") === serializedArtistIds &&
+				setMap.get("billingResolutionId") === resolution.id &&
+				setMap.get("artistCredits") === serializedCredits &&
+				setMap.get("performanceQualifiers") === serializedQualifiers &&
+				setMap.get("presentedTitle") === resolution.presentedTitle
+			);
+		});
+		const currentArtists = this.#publicStateDoc?.getMap("artists");
+		const allProfilesApplied = profiles.every(
+			(profile) => currentArtists?.get(profile.id) instanceof Y.Map,
+		);
+		if (currentResolutionMatches && allTargetsApplied && allProfilesApplied) {
+			return "already_applied";
+		}
+
+		await this.#mutatePublicDoc((doc) => {
+			const artistsMap = doc.getMap("artists") as Y.Map<Y.Map<unknown>>;
+			for (const profile of profiles) {
+				let artistMap = artistsMap.get(profile.id);
+				if (!artistMap || !(artistMap instanceof Y.Map)) {
+					artistMap = new Y.Map();
+					artistsMap.set(profile.id, artistMap);
+				}
+				writeArtistProfile(artistMap, profile);
+			}
+			doc.getMap("billingResolutions").set(resolution.id, JSON.stringify(resolution));
+
+			const setsMap = doc.getMap("sets") as Y.Map<Y.Map<unknown>>;
+			for (const setId of targetSetIds) {
+				const setMap = setsMap.get(setId);
+				if (!setMap || !(setMap instanceof Y.Map)) continue;
+				setMap.set("artistIds", serializedArtistIds);
+				setMap.set("billingResolutionId", resolution.id);
+				setMap.set("artistCredits", serializedCredits);
+				if (resolution.presentedTitle) {
+					setMap.set("presentedTitle", resolution.presentedTitle);
+				} else {
+					setMap.delete("presentedTitle");
+				}
+				setMap.set("performanceQualifiers", serializedQualifiers);
+			}
+		});
+		return "applied";
 	}
 
 	// -----------------------------------------------------------------------

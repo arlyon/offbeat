@@ -21,6 +21,8 @@ export interface ArtistEnrichmentCandidate {
 export interface ArtistEnrichmentMessage extends ArtistEnrichmentCandidate {
 	jobId: string;
 	sourceKey: string;
+	billingKey: string;
+	contextBillings: string[];
 }
 
 export type ArtistEnrichmentOutcome =
@@ -78,7 +80,9 @@ export class ArtistProviderError extends Error {
 
 export function isAmbiguousArtistBilling(value: string): boolean {
 	const billing = value.normalize("NFKC").trim();
-	return /(?:\s(?:b2b|vs\.?|presents?|x)\s|\s[&+]\s|\s\/\s)/i.test(billing);
+	return /(?:\s(?:b2b|vs\.?|presents?|x|feat(?:uring)?\.?|ft\.?|with)\s|\s[&+]\s|\s\/\s)/i.test(
+		billing,
+	);
 }
 
 export function artistEnrichmentSourceKey(billing: string, mbid?: string): string {
@@ -109,11 +113,12 @@ export async function enrichArtist(
 		fetch?: typeof fetch;
 		now?: () => Date;
 		beforeMusicBrainzRequest?: () => Promise<void>;
+		allowAmbiguousBilling?: boolean;
 	},
 ): Promise<ArtistEnrichmentOutcome> {
 	const billing = candidate.billing.normalize("NFKC").trim();
 	if (!billing) return { status: "unresolved", reason: "empty_billing" };
-	if (!candidate.mbid && isAmbiguousArtistBilling(billing)) {
+	if (!options.allowAmbiguousBilling && isAmbiguousArtistBilling(billing)) {
 		return { status: "unresolved", reason: "ambiguous_billing" };
 	}
 
@@ -136,6 +141,19 @@ export async function enrichArtist(
 	const name = stringValue(artist.name).trim();
 	if (!mbid || !MBID_PATTERN.test(mbid) || !name || name.length > MAX_ARTIST_NAME_LENGTH) {
 		throw new ArtistProviderError("MusicBrainz returned an invalid artist", false);
+	}
+	if (candidate.mbid) {
+		const verifiedNames = [
+			name,
+			...(Array.isArray(artist.aliases)
+				? artist.aliases.map((alias) => stringValue(alias.name))
+				: []),
+		];
+		if (
+			!verifiedNames.some((value) => normalizeArtistName(value) === normalizeArtistName(billing))
+		) {
+			return { status: "unresolved", reason: "mbid_name_mismatch" };
+		}
 	}
 
 	const retrievedAt = (options.now ?? (() => new Date()))().toISOString();
@@ -279,6 +297,30 @@ async function fetchWikidataEntity(
 	}
 }
 
+async function readBoundedProviderText(response: Response): Promise<string> {
+	if (!response.body) return "";
+	const reader = response.body.getReader();
+	const chunks: Uint8Array[] = [];
+	let total = 0;
+	while (true) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		total += value.byteLength;
+		if (total > MAX_PROVIDER_RESPONSE_BYTES) {
+			await reader.cancel();
+			throw new ArtistProviderError("Provider response is too large", false);
+		}
+		chunks.push(value);
+	}
+	const bytes = new Uint8Array(total);
+	let offset = 0;
+	for (const chunk of chunks) {
+		bytes.set(chunk, offset);
+		offset += chunk.byteLength;
+	}
+	return new TextDecoder().decode(bytes);
+}
+
 async function fetchProviderJson<T>(
 	url: URL,
 	userAgent: string,
@@ -301,10 +343,7 @@ async function fetchProviderJson<T>(
 		if (Number.isFinite(contentLength) && contentLength > MAX_PROVIDER_RESPONSE_BYTES) {
 			throw new ArtistProviderError("Provider response is too large", false);
 		}
-		const text = await response.text();
-		if (new TextEncoder().encode(text).byteLength > MAX_PROVIDER_RESPONSE_BYTES) {
-			throw new ArtistProviderError("Provider response is too large", false);
-		}
+		const text = await readBoundedProviderText(response);
 		try {
 			return JSON.parse(text) as T;
 		} catch (error) {

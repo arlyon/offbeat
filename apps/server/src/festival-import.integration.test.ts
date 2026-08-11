@@ -356,9 +356,16 @@ describe("registered-user Clashfinder imports", () => {
 			}
 		}
 
-		// Artist profiles and their set references must survive the same signed
+		// Exact source billing and structured resolution metadata share the signed
 		// FestivalState checkpoint path consumed by offline clients.
 		expect(seededState).toBeDefined();
+		const seededDoc = new Y.Doc();
+		Y.applyUpdate(seededDoc, seededState!);
+		const seededSet = [...seededDoc.getMap<Y.Map<unknown>>("sets").values()][0];
+		expect(seededSet?.get("artist")).toBe("Artist One");
+		expect(seededSet?.get("sourceBilling")).toBe("Artist One");
+		expect(seededSet?.get("artistCredits")).toBe("[]");
+		expect(seededSet?.get("performanceQualifiers")).toBe("[]");
 		await assertArtistProfileRoundTrip(published.festival.id, seededState!);
 
 		const duplicateBody = JSON.stringify({ clashfinder: "community2027" });

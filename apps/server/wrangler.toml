@@ -39,7 +39,10 @@ retry_delay = 15
 [vars]
 RP_ID = "offbeat-server.arlyon.workers.dev"
 MUSICBRAINZ_USER_AGENT = "Offbeat/1.0 (https://github.com/arlyon/offbeat)"
+ARTIST_RESOLUTION_MODEL = "deepseek-v4-flash"
 
+# Artist resolution is enabled only when AI_GATEWAY_BASE_URL is configured and
+# DEEPSEEK_API_KEY plus TAVILY_API_KEY are installed with `wrangler secret put`.
 # Clashfinder API credentials - set these with:
 #   wrangler secret put CLASHFINDER_USERNAME
 #   wrangler secret put CLASHFINDER_PRIVATE_KEY

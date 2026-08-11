@@ -1,5 +1,33 @@
+import { ed25519 } from "@noble/curves/ed25519.js";
 import { type Unstable_DevWorker, unstable_dev } from "wrangler";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+
+const ADMIN_SECRET = new Uint8Array(32).fill(7);
+const ADMIN_PUBLIC_HEX = bytesToHex(ed25519.getPublicKey(ADMIN_SECRET));
+
+function bytesToHex(bytes: Uint8Array): string {
+	return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function artistAdminHeaders(
+	method: string,
+	path: string,
+	body = "",
+	nonce = crypto.randomUUID(),
+): Promise<Record<string, string>> {
+	const timestamp = String(Math.floor(Date.now() / 1000));
+	const digest = new Uint8Array(
+		await crypto.subtle.digest("SHA-256", new TextEncoder().encode(body)),
+	);
+	const message = `${method}\n${path}\n${timestamp}\n${nonce}\n${bytesToHex(digest)}`;
+	return {
+		"Content-Type": "application/json",
+		"X-Admin-Key": ADMIN_PUBLIC_HEX,
+		"X-Admin-Sig": bytesToHex(ed25519.sign(new TextEncoder().encode(message), ADMIN_SECRET)),
+		"X-Admin-Timestamp": timestamp,
+		"X-Admin-Nonce": nonce,
+	};
+}
 
 let worker: Unstable_DevWorker;
 
@@ -42,6 +70,22 @@ describe("MainDO API", () => {
 		it("GET /festivals/:id/lineup returns 404 for an unknown festival", async () => {
 			const resp = await worker.fetch("/festivals/nonexistent/lineup");
 			expect(resp.status).toBe(404);
+		});
+
+		it("protects artist resolution review and backfill with admin authentication", async () => {
+			const review = await worker.fetch("/festivals/nonexistent/artist-resolutions");
+			expect(review.status).toBe(401);
+			const backfill = await worker.fetch("/artist-resolutions/backfill", { method: "POST" });
+			expect(backfill.status).toBe(401);
+		});
+
+		it("rejects oversized artist override bodies at the public worker boundary", async () => {
+			const response = await worker.fetch("/festivals/nonexistent/artist-resolutions", {
+				method: "PUT",
+				headers: { "Content-Type": "application/json" },
+				body: "x".repeat(70 * 1024),
+			});
+			expect(response.status).toBe(413);
 		});
 	});
 
@@ -177,15 +221,42 @@ describe("MainDO API", () => {
 				return;
 			}
 
-			const key = "b".repeat(64);
 			const resp = await worker.fetch("/admins", {
 				method: "PUT",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ publicKey: key }),
+				body: JSON.stringify({ publicKey: ADMIN_PUBLIC_HEX }),
 			});
 			expect(resp.status).toBe(200);
 			const data = (await resp.json()) as { ok: boolean };
 			expect(data.ok).toBe(true);
+		});
+
+		it("binds artist admin requests to method, path, body, timestamp, and nonce", async () => {
+			const path = "/festivals/nonexistent/artist-resolutions";
+			const nonce = crypto.randomUUID();
+			const headers = await artistAdminHeaders("GET", path, "", nonce);
+			const first = await worker.fetch(path, { headers });
+			expect(first.status).toBe(404);
+			const replay = await worker.fetch(path, { headers });
+			expect(replay.status).toBe(409);
+
+			const crossMethodHeaders = await artistAdminHeaders("GET", path);
+			const crossMethod = await worker.fetch(path, {
+				method: "PUT",
+				headers: crossMethodHeaders,
+				body: JSON.stringify({ billingKey: "name:test", credits: [] }),
+			});
+			expect(crossMethod.status).toBe(401);
+
+			const signedBody = JSON.stringify({ billingKey: "name:test", credits: [] });
+			const substitutedBody = JSON.stringify({ billingKey: "name:other", credits: [] });
+			const bodyHeaders = await artistAdminHeaders("PUT", path, signedBody);
+			const substituted = await worker.fetch(path, {
+				method: "PUT",
+				headers: bodyHeaders,
+				body: substitutedBody,
+			});
+			expect(substituted.status).toBe(401);
 		});
 
 		it("PUT /admins rejects second admin without auth headers", async () => {
