@@ -15,6 +15,41 @@ pub struct DevServer {
     _persist_dir: tempfile::TempDir,
 }
 
+fn command_succeeds(program: &str, args: &[&str]) -> bool {
+    Command::new(program)
+        .args(args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+fn wrangler_dev_command() -> Command {
+    if command_succeeds("pnpm", &["--version"]) {
+        let mut command = Command::new("pnpm");
+        command.args(["wrangler", "dev"]);
+        return command;
+    }
+
+    if command_succeeds("corepack", &["--version"]) {
+        let mut command = Command::new("corepack");
+        command.args(["pnpm", "wrangler", "dev"]);
+        return command;
+    }
+
+    let mut command = Command::new("npm");
+    command.args([
+        "exec",
+        "--yes",
+        "--package=pnpm@10.33.0",
+        "--",
+        "pnpm",
+        "wrangler",
+        "dev",
+    ]);
+    command
+}
+
 impl DevServer {
     /// The WebSocket base URL, e.g. `ws://127.0.0.1:PORT`
     pub fn ws_url(&self) -> String {
@@ -55,10 +90,14 @@ impl DevServer {
         // Ephemeral storage directory — each test gets a clean slate
         let persist_dir = tempfile::tempdir().expect("failed to create temp dir");
 
-        let mut child = Command::new("pnpm")
+        let clashfinder_fixture = serde_json::from_str::<serde_json::Value>(include_str!(
+            "../../../packages/protocol/fixtures/clashfinder/lost-village-2026.json"
+        ))
+        .expect("test Clashfinder fixture should be valid JSON")
+        .to_string();
+
+        let mut child = wrangler_dev_command()
             .args([
-                "wrangler",
-                "dev",
                 "--port",
                 &port.to_string(),
                 "--ip",
@@ -67,6 +106,12 @@ impl DevServer {
                 "0",
                 "--persist-to",
                 persist_dir.path().to_str().unwrap(),
+                "--var",
+                "RP_ID:localhost",
+                "--var",
+                "DEV_BYPASS_WEBAUTHN:true",
+                "--var",
+                &format!("CLASHFINDER_TEST_FIXTURE:{clashfinder_fixture}"),
             ])
             .current_dir(&server_dir)
             .stdout(Stdio::piped())

@@ -1,6 +1,3 @@
-[env]
-ANDROID_NDK_HOME = "{{env.HOME}}/.local/share/mise/installs/android-sdk/20.0/ndk/28.2.13676358"
-
 [tools]
 flutter = "3.44.0"
 java = "21"
@@ -27,9 +24,10 @@ wait
 
 [tasks.sdkmanager]
 run = [
-    "sdkmanager 'ndk;28.2.13676358'",
-    "sdkmanager 'platforms;android-36'",
-    "sdkmanager 'cmdline-tools;latest'",
-    "sdkmanager 'platform-tools'",
-    "sdkmanager 'build-tools;36.0.0'",
+  "yes | sdkmanager --licenses",
+  "yes | sdkmanager 'ndk;28.2.13676358'",
+  "yes | sdkmanager 'platforms;android-36'",
+  "yes | sdkmanager 'cmdline-tools;latest'",
+  "yes | sdkmanager 'platform-tools'",
+  "yes | sdkmanager 'build-tools;36.0.0'",
 ]

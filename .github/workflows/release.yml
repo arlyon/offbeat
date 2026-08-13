@@ -1,0 +1,215 @@
+name: Mobile release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  android:
+    name: Android signed app bundle
+    runs-on: ubuntu-24.04
+    environment: production
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac
+        with:
+          cache: false
+          install_args: "flutter java rust android-sdk"
+
+      - name: Install Android build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+          mise run sdkmanager
+          android_home="$(mise where android-sdk)"
+          echo "ANDROID_HOME=$android_home" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$android_home" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$android_home/ndk/28.2.13676358" \
+            >> "$GITHUB_ENV"
+
+      - name: Verify Android wiki corpus
+        working-directory: apps/mobile
+        run: |
+          flutter pub get
+          dart run tool/build_wiki.dart --platform android --check
+
+      - name: Restore Android upload key
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          mkdir -p apps/mobile/android/app
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > \
+            apps/mobile/android/app/offbeat-upload.jks
+          cat > apps/mobile/android/key.properties <<EOF
+          storePassword=$ANDROID_KEYSTORE_PASSWORD
+          keyPassword=$ANDROID_KEY_PASSWORD
+          keyAlias=$ANDROID_KEY_ALIAS
+          storeFile=offbeat-upload.jks
+          EOF
+
+      - name: Build signed Android app bundle
+        working-directory: apps/mobile
+        env:
+          OFFBEAT_SERVER_URL: ${{ vars.OFFBEAT_SERVER_URL }}
+          OFFBEAT_RP_ID: ${{ vars.OFFBEAT_RP_ID }}
+          OFFBEAT_SERVER_PUBKEY: ${{ vars.OFFBEAT_SERVER_PUBKEY }}
+        run: |
+          flutter pub get
+          flutter build appbundle --release \
+            --build-name="${GITHUB_REF_NAME#v}" \
+            --build-number="$GITHUB_RUN_NUMBER" \
+            --dart-define=OFFBEAT_SERVER_URL="$OFFBEAT_SERVER_URL" \
+            --dart-define=OFFBEAT_RP_ID="$OFFBEAT_RP_ID" \
+            --dart-define=OFFBEAT_SERVER_PUBKEY="$OFFBEAT_SERVER_PUBKEY"
+
+      - name: Upload signed Android app bundle artefact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: offbeat-android-${{ github.ref_name }}
+          path: apps/mobile/build/app/outputs/bundle/release/app-release.aab
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Install fastlane
+        run: gem install fastlane -N --version 2.238.0
+
+      - name: Upload to Google Play
+        env:
+          GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: >-
+            ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+          GOOGLE_PLAY_TRACK: ${{ vars.GOOGLE_PLAY_TRACK }}
+        run: |
+          json_key="$RUNNER_TEMP/google-play-service-account.json"
+          printf '%s' "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON" > "$json_key"
+          fastlane supply \
+            --aab \
+              apps/mobile/build/app/outputs/bundle/release/app-release.aab \
+            --track "$GOOGLE_PLAY_TRACK" \
+            --package_name dev.arlyon.offbeat \
+            --json_key "$json_key" \
+            --release_status completed \
+            --metadata_path apps/mobile/fastlane/metadata/android \
+            --sync_image_upload true
+
+  ios:
+    name: iOS TestFlight
+    if: ${{ vars.RELEASE_IOS == 'true' }}
+    runs-on: macos-15
+    environment: production
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac
+        with:
+          cache: false
+          install_args: "flutter rust"
+
+      - name: Install iOS build tools
+        run: brew install protobuf
+
+      - name: Verify iOS wiki corpus
+        working-directory: apps/mobile
+        run: dart run tool/verify_ios_wiki.dart
+
+      - name: Install Apple distribution signing
+        env:
+          IOS_CERTIFICATE_P12_BASE64: ${{ secrets.IOS_CERTIFICATE_P12_BASE64 }}
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          IOS_PROVISIONING_PROFILE_BASE64: >-
+            ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+        run: |
+          signing_path="$RUNNER_TEMP/signing"
+          profile_path="$HOME/Library/MobileDevice/Provisioning Profiles"
+          mkdir -p "$signing_path" "$profile_path"
+          printf '%s' "$IOS_CERTIFICATE_P12_BASE64" | base64 --decode > \
+            "$signing_path/certificate.p12"
+          printf '%s' "$IOS_PROVISIONING_PROFILE_BASE64" | base64 --decode > \
+            "$signing_path/offbeat.mobileprovision"
+          keychain_path="$RUNNER_TEMP/build.keychain-db"
+          security create-keychain -p "$IOS_CERTIFICATE_PASSWORD" \
+            "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$IOS_CERTIFICATE_PASSWORD" \
+            "$keychain_path"
+          security import "$signing_path/certificate.p12" \
+            -P "$IOS_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 \
+            -k "$keychain_path"
+          security list-keychain -d user -s "$keychain_path" login.keychain-db
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$IOS_CERTIFICATE_PASSWORD" "$keychain_path"
+          cp "$signing_path/offbeat.mobileprovision" "$profile_path/"
+          security cms -D -i "$signing_path/offbeat.mobileprovision" > \
+            "$signing_path/profile.plist"
+          profile_uuid=$(/usr/libexec/PlistBuddy -c 'Print :UUID' \
+            "$signing_path/profile.plist")
+          cat >> apps/mobile/ios/Flutter/Release.xcconfig <<EOF
+          DEVELOPMENT_TEAM=$APPLE_TEAM_ID
+          CODE_SIGN_STYLE=Manual
+          CODE_SIGN_IDENTITY=Apple Distribution
+          PROVISIONING_PROFILE_SPECIFIER=$profile_uuid
+          EOF
+
+      - name: Build signed iOS archive and IPA
+        working-directory: apps/mobile
+        env:
+          OFFBEAT_SERVER_URL: ${{ vars.OFFBEAT_SERVER_URL }}
+          OFFBEAT_RP_ID: ${{ vars.OFFBEAT_RP_ID }}
+          OFFBEAT_SERVER_PUBKEY: ${{ vars.OFFBEAT_SERVER_PUBKEY }}
+        run: |
+          flutter pub get
+          flutter build ipa --release \
+            --build-name="${GITHUB_REF_NAME#v}" \
+            --build-number="$GITHUB_RUN_NUMBER" \
+            --dart-define=OFFBEAT_SERVER_URL="$OFFBEAT_SERVER_URL" \
+            --dart-define=OFFBEAT_RP_ID="$OFFBEAT_RP_ID" \
+            --dart-define=OFFBEAT_SERVER_PUBKEY="$OFFBEAT_SERVER_PUBKEY"
+
+      - name: Verify iOS signing identity
+        run: |
+          security find-identity -v -p codesigning \
+            "$RUNNER_TEMP/build.keychain-db"
+
+      - name: Upload IPA artefact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: offbeat-ios-${{ github.ref_name }}
+          path: apps/mobile/build/ios/ipa/*.ipa
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload to TestFlight
+        env:
+          APP_STORE_CONNECT_ISSUER_ID: >-
+            ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_PRIVATE_KEY: >-
+            ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+        run: |
+          api_key_dir="$HOME/.appstoreconnect/private_keys"
+          mkdir -p "$api_key_dir"
+          printf '%s' "$APP_STORE_CONNECT_PRIVATE_KEY" > \
+            "$api_key_dir/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8"
+          xcrun altool --upload-app --type ios \
+            --file apps/mobile/build/ios/ipa/*.ipa \
+            --apiKey "$APP_STORE_CONNECT_KEY_ID" \
+            --apiIssuer "$APP_STORE_CONNECT_ISSUER_ID"

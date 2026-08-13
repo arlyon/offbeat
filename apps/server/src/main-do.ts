@@ -1345,7 +1345,7 @@ export class MainDO extends DurableObject {
 		return rows[0] ? this.#getFestival(rows[0].id) : null;
 	}
 
-	async #fetchClashfinderForImport(clashfinderId: string): Promise<ClashfinderApiResponse> {
+	async #fetchClashfinder(clashfinderId: string): Promise<ClashfinderApiResponse> {
 		const env = this.env as Record<string, string | undefined>;
 		if (
 			env.RP_ID === "localhost" &&
@@ -2771,7 +2771,7 @@ export class MainDO extends DurableObject {
 			}
 
 			try {
-				const apiResponse = await this.#fetchClashfinderForImport(clashfinderId);
+				const apiResponse = await this.#fetchClashfinder(clashfinderId);
 				const validated = validateClashfinderImport(clashfinderId, apiResponse);
 				const previewId = crypto.randomUUID();
 				const now = Math.floor(Date.now() / 1000);
@@ -3001,17 +3001,16 @@ export class MainDO extends DurableObject {
 				return new Response("Festival already exists", { status: 409 });
 			}
 
-			// Fetch lineup from Clashfinder API
-			const cfUsername = (env as Record<string, string>).CLASHFINDER_USERNAME;
-			const cfKey = (env as Record<string, string>).CLASHFINDER_PRIVATE_KEY;
-			if (!cfUsername || !cfKey) {
-				return new Response("Clashfinder credentials not configured", { status: 500 });
+			// Fetch lineup from Clashfinder API, or from a local fixture in CI/dev tests.
+			let apiResponse: ClashfinderApiResponse;
+			try {
+				apiResponse = await this.#fetchClashfinder(src.clashfinderId);
+			} catch (error) {
+				if (error instanceof Error && error.message === "Clashfinder credentials not configured") {
+					return new Response(error.message, { status: 500 });
+				}
+				throw error;
 			}
-
-			const apiResponse = await fetchClashfinder(src.clashfinderId, {
-				username: cfUsername,
-				privateKey: cfKey,
-			});
 			const lineup = parseClashfinderApi(src.festivalId, apiResponse, {
 				name: src.name,
 				location: src.location,
@@ -3148,17 +3147,16 @@ export class MainDO extends DurableObject {
 				return new Response("Festival has no clashfinder_id configured", { status: 400 });
 			}
 
-			// Fetch updated lineup from Clashfinder API
-			const cfUsername = (env as Record<string, string>).CLASHFINDER_USERNAME;
-			const cfKey = (env as Record<string, string>).CLASHFINDER_PRIVATE_KEY;
-			if (!cfUsername || !cfKey) {
-				return new Response("Clashfinder credentials not configured", { status: 500 });
+			// Fetch updated lineup from Clashfinder API, or from a local fixture in CI/dev tests.
+			let apiResponse: ClashfinderApiResponse;
+			try {
+				apiResponse = await this.#fetchClashfinder(clashfinderId);
+			} catch (error) {
+				if (error instanceof Error && error.message === "Clashfinder credentials not configured") {
+					return new Response(error.message, { status: 500 });
+				}
+				throw error;
 			}
-
-			const apiResponse = await fetchClashfinder(clashfinderId, {
-				username: cfUsername,
-				privateKey: cfKey,
-			});
 			const lineup = parseClashfinderApi(id, apiResponse, {
 				name: festival.name as string,
 				location: festival.location as string,
