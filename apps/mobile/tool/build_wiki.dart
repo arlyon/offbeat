@@ -27,12 +27,13 @@ final _markdownLinkPattern = RegExp(r'\]\(([^)]+)\)');
 
 void main(List<String> arguments) {
   final checkOnly = arguments.contains('--check');
+  final platform = _platformArgument(arguments);
   final root = Directory.current;
   final pagesDirectory = Directory('${root.path}/assets/wiki/pages');
   final generatedDirectory = Directory(
     '${root.path}/assets/wiki/generated/psychonautwiki',
   );
-  final output = File('${root.path}/assets/wiki/index.json');
+  final output = File(_outputPath(arguments, root));
   if (!pagesDirectory.existsSync()) {
     stderr.writeln('Missing ${pagesDirectory.path}');
     exitCode = 1;
@@ -46,7 +47,8 @@ void main(List<String> arguments) {
         .where((file) => file.path.endsWith('.md'))
         .map(_parsePage)
         .toList(growable: false);
-    final generatedRecords = generatedDirectory.existsSync()
+    final generatedRecords =
+        platform == _WikiPlatform.android && generatedDirectory.existsSync()
         ? generatedDirectory
               .listSync()
               .whereType<File>()
@@ -57,15 +59,18 @@ void main(List<String> arguments) {
     generatedRecords.sort(
       (left, right) => (left['id'] as String).compareTo(right['id'] as String),
     );
-    _validateCorpus(pages, generatedRecords);
+    final platformPages = platform == _WikiPlatform.ios
+        ? pages.map(_withoutGeneratedReferences).toList(growable: false)
+        : pages;
+    _validateCorpus(platformPages, generatedRecords);
     final supportedCountries =
-        pages
+        platformPages
             .expand((page) => page.metadata['countryCodes'] as List<dynamic>)
             .cast<String>()
             .toSet()
             .toList(growable: false)
           ..sort();
-    final sortedPages = [...pages]
+    final sortedPages = [...platformPages]
       ..sort((left, right) {
         final order = (left.metadata['order'] as int).compareTo(
           right.metadata['order'] as int,
@@ -106,11 +111,63 @@ void main(List<String> arguments) {
 
     output.parent.createSync(recursive: true);
     output.writeAsStringSync(contents);
-    stdout.writeln('Wrote ${output.path} with ${pages.length} pages.');
+    stdout.writeln(
+      'Wrote ${output.path} with ${platformPages.length} pages for ${platform.name}.',
+    );
   } on FormatException catch (error) {
     stderr.writeln('Wiki build failed: ${error.message}');
     exitCode = 1;
   }
+}
+
+enum _WikiPlatform { android, ios }
+
+_WikiPlatform _platformArgument(List<String> arguments) {
+  final index = arguments.indexOf('--platform');
+  final value = index >= 0 && index + 1 < arguments.length
+      ? arguments[index + 1]
+      : arguments
+                .cast<String?>()
+                .firstWhere(
+                  (argument) => argument?.startsWith('--platform=') ?? false,
+                  orElse: () => null,
+                )
+                ?.substring('--platform='.length) ??
+            'android';
+  return switch (value) {
+    'android' => _WikiPlatform.android,
+    'ios' => _WikiPlatform.ios,
+    _ => throw const FormatException('--platform must be android or ios'),
+  };
+}
+
+String _outputPath(List<String> arguments, Directory root) {
+  final index = arguments.indexOf('--output');
+  if (index >= 0 && index + 1 < arguments.length) return arguments[index + 1];
+  final inline = arguments.cast<String?>().firstWhere(
+    (argument) => argument?.startsWith('--output=') ?? false,
+    orElse: () => null,
+  );
+  return inline?.substring('--output='.length) ??
+      '${root.path}/assets/wiki/index.json';
+}
+
+({Map<String, dynamic> metadata, String markdown, String path})
+_withoutGeneratedReferences(
+  ({Map<String, dynamic> metadata, String markdown, String path}) page,
+) {
+  if ((page.metadata['generatedRefs'] as List<dynamic>).isEmpty) return page;
+  final metadata = {...page.metadata, 'generatedRefs': <String>[]};
+  const heading = '\n## Imported reference data';
+  final headingOffset = page.markdown.indexOf(heading);
+  final markdown = headingOffset < 0
+      ? page.markdown
+      : '${page.markdown.substring(0, headingOffset).trimRight()}\n\n'
+            '## Information limits\n\n'
+            'OFFBEAT does not provide dose, route or duration reference data on iOS. '
+            'Product identity, strength, contamination, interactions and individual response '
+            'remain uncertain. Do not delay emergency care while trying to identify a substance.';
+  return (metadata: metadata, markdown: markdown, path: page.path);
 }
 
 ({Map<String, dynamic> metadata, String markdown, String path}) _parsePage(

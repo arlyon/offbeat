@@ -1,0 +1,5 @@
+Offbeat is a festival timeline tracker built for real festival conditions.
+
+Plan your day, keep track of artists and stages, and stay useful when mobile signal or WiFi gets patchy. Offbeat is local-first, with offline festival data and peer-to-peer sync designed for groups on site.
+
+Early TestFlight and internal testing builds are for validating the core experience before a public launch.
