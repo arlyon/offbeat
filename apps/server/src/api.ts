@@ -17,17 +17,19 @@ type Env = {
 		ARTIST_RESOLUTION_MODEL?: string;
 		DEEPSEEK_API_KEY?: string;
 		TAVILY_API_KEY?: string;
+		ANDROID_CERT_SHA256?: string;
 	};
 };
 
-const ANDROID_PACKAGE = "com.offbeat.offbeat_mobile";
-const ANDROID_SHA256 =
-	"B8:03:AB:79:63:E7:3B:91:6F:CE:BE:25:33:34:BC:87:BE:A3:08:4B:8C:CE:B8:A2:4E:80:A5:7D:F5:F3:AF:BA";
+const ANDROID_PACKAGE = "dev.arlyon.offbeat";
+const DEFAULT_ANDROID_SHA256 =
+	"07:46:72:3D:F4:72:56:63:D5:DC:41:C3:36:FC:CB:A7:54:EE:EF:E5:48:B1:52:02:F8:40:13:46:C5:FB:BF:A6";
 
 const app = new Hono<Env>();
 
 // /.well-known/assetlinks.json — Android Digital Asset Links for passkey domain verification
 app.get("/.well-known/assetlinks.json", (c) => {
+	const sha256 = c.env.ANDROID_CERT_SHA256 ?? DEFAULT_ANDROID_SHA256;
 	return c.json([
 		{
 			relation: [
@@ -37,7 +39,7 @@ app.get("/.well-known/assetlinks.json", (c) => {
 			target: {
 				namespace: "android_app",
 				package_name: ANDROID_PACKAGE,
-				sha256_cert_fingerprints: [ANDROID_SHA256],
+				sha256_cert_fingerprints: [sha256],
 			},
 		},
 	]);

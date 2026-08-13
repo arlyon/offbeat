@@ -1,0 +1,109 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  mobile:
+    name: Mobile checks
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: jdx/mise-action@v2
+        with:
+          cache: true
+
+      - name: Install mobile build tools
+        run: |
+          brew install protobuf
+          mise run sdkmanager
+
+      - name: Verify offline wiki corpus
+        working-directory: apps/mobile
+        run: dart run tool/build_wiki.dart --platform android --check
+
+      - name: Verify iOS wiki corpus
+        working-directory: apps/mobile
+        run: dart run tool/verify_ios_wiki.dart
+
+      - name: Run Flutter tests and analysis
+        working-directory: apps/mobile
+        run: |
+          flutter pub get
+          flutter test
+          flutter analyze lib test tool
+
+      - name: Build Android release without signing
+        working-directory: apps/mobile
+        run: flutter build appbundle --release
+
+      - name: Build iOS release without signing
+        working-directory: apps/mobile
+        run: flutter build ios --release --no-codesign --config-only
+
+  rust:
+    name: Rust checks
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: jdx/mise-action@v2
+        with:
+          cache: true
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install Rust build tools
+        run: |
+          brew install protobuf
+          rustup component add clippy
+
+      - name: Install server dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint Rust
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test Rust
+        run: cargo test --workspace
+
+  server:
+    name: Server checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check server and protocol packages
+        run: pnpm check

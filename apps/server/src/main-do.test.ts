@@ -434,7 +434,7 @@ describe("MainDO API", () => {
 			}[];
 			expect(data.length).toBe(1);
 			expect(data[0].target.namespace).toBe("android_app");
-			expect(data[0].target.package_name).toBe("com.offbeat.offbeat_mobile");
+			expect(data[0].target.package_name).toBe("dev.arlyon.offbeat");
 			expect(data[0].target.sha256_cert_fingerprints.length).toBe(1);
 		});
 	});

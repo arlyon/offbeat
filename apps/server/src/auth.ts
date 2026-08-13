@@ -14,7 +14,7 @@ import {
 // Configuration
 // ---------------------------------------------------------------------------
 
-const _ANDROID_PACKAGE = "com.offbeat.offbeat_mobile";
+const _ANDROID_PACKAGE = "dev.arlyon.offbeat";
 
 /** RP ID — the domain passkeys are bound to.
  *  In dev: "localhost". In production: "offbeat.app". */
