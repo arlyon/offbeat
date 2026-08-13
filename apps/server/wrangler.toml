@@ -38,6 +38,8 @@ retry_delay = 15
 
 [vars]
 RP_ID = "offbeat-server.arlyon.workers.dev"
+ANDROID_APK_KEY_HASH = "B0ZyPfRyVmPV3EHDNvzLp1Tu7-VIsVIC-EATRsX7v6Y"
+ANDROID_CERT_SHA256 = "07:46:72:3D:F4:72:56:63:D5:DC:41:C3:36:FC:CB:A7:54:EE:EF:E5:48:B1:52:02:F8:40:13:46:C5:FB:BF:A6"
 MUSICBRAINZ_USER_AGENT = "Offbeat/1.0 (https://github.com/arlyon/offbeat)"
 ARTIST_RESOLUTION_MODEL = "deepseek-v4-flash"
 AI_GATEWAY_BASE_URL = "https://gateway.ai.cloudflare.com/v1/050f47a87be246734396e92a3579604d/offbeat/deepseek"
