@@ -2,6 +2,7 @@ name = "offbeat-server"
 compatibility_date = "2025-05-01"
 compatibility_flags = ["nodejs_compat"]
 main = "src/index.ts"
+workers_dev = true
 routes = [{ pattern = "offbeat.arlyon.dev", custom_domain = true }]
 
 [[durable_objects.bindings]]
