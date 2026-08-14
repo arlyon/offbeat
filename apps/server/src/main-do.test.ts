@@ -437,5 +437,13 @@ describe("MainDO API", () => {
 			expect(data[0].target.package_name).toBe("dev.arlyon.offbeat");
 			expect(data[0].target.sha256_cert_fingerprints.length).toBe(1);
 		});
+
+		it("GET /.well-known/apple-app-site-association returns iOS web credentials", async () => {
+			const resp = await worker.fetch("/.well-known/apple-app-site-association");
+			expect(resp.status).toBe(200);
+			expect(await resp.json()).toEqual({
+				webcredentials: { apps: ["KB9978A3CW.dev.arlyon.offbeat"] },
+			});
+		});
 	});
 });

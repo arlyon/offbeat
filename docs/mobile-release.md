@@ -34,8 +34,9 @@ The current upload certificate SHA-256 fingerprint is:
 
 The generated `ios-distribution.csr` is a certificate request, not an Apple
 signing certificate. In Apple Developer, create an **Apple Distribution**
-certificate with it and create an **App Store** provisioning profile for
-`com.offbeat.offbeatMobile`. Follow the local README to export the resulting
+certificate with it and create an **App Store Connect** provisioning profile for
+`dev.arlyon.offbeat` with the **Associated Domains** capability. Follow the local
+README to export the resulting
 certificate as a password-protected P12.
 
 Create an App Store Connect API key with the **App Manager** role, download its

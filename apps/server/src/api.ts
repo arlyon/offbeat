@@ -18,10 +18,13 @@ type Env = {
 		DEEPSEEK_API_KEY?: string;
 		TAVILY_API_KEY?: string;
 		ANDROID_CERT_SHA256?: string;
+		APPLE_TEAM_ID?: string;
 	};
 };
 
 const ANDROID_PACKAGE = "dev.arlyon.offbeat";
+const APPLE_BUNDLE_ID = "dev.arlyon.offbeat";
+const DEFAULT_APPLE_TEAM_ID = "KB9978A3CW";
 const DEFAULT_ANDROID_SHA256 =
 	"07:46:72:3D:F4:72:56:63:D5:DC:41:C3:36:FC:CB:A7:54:EE:EF:E5:48:B1:52:02:F8:40:13:46:C5:FB:BF:A6";
 
@@ -43,6 +46,16 @@ app.get("/.well-known/assetlinks.json", (c) => {
 			},
 		},
 	]);
+});
+
+// /.well-known/apple-app-site-association — iOS passkey domain verification
+app.get("/.well-known/apple-app-site-association", (c) => {
+	const teamId = c.env.APPLE_TEAM_ID ?? DEFAULT_APPLE_TEAM_ID;
+	return c.json({
+		webcredentials: {
+			apps: [`${teamId}.${APPLE_BUNDLE_ID}`],
+		},
+	});
 });
 
 function getMainDO(env: Env["Bindings"]) {
