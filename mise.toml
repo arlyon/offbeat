@@ -1,6 +1,7 @@
 [tools]
 flutter = "3.44.0"
 java = "21"
+ruby = "3.3"
 rust = "latest"
 wrangler = "latest"
 cloudflared = "latest"

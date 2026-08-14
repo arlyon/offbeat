@@ -117,6 +117,23 @@ Re-running a failed release therefore produces a higher build number.
 The push and pull-request workflow validates release configuration without
 creating full binary artefacts. Full signed builds only run for version tags.
 
+## Local TestFlight upload
+
+Prove the signed IPA locally before creating a release tag. Install the bundle
+and upload the existing IPA through the same fastlane lane used by CI:
+
+```sh
+cd apps/mobile
+bundle install
+APP_STORE_CONNECT_KEY_ID=... \
+APP_STORE_CONNECT_ISSUER_ID=... \
+APP_STORE_CONNECT_KEY_PATH=/absolute/path/to/AuthKey_KEY_ID.p8 \
+IOS_IPA_PATH=/absolute/path/to/offbeat_mobile.ipa \
+bundle exec fastlane ios upload_testflight
+```
+
+The lane uploads only and does not distribute to external tester groups.
+
 ## Local signed Android build
 
 Do not create `android/key.properties` from shared values. Copy the generated
