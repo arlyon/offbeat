@@ -1,0 +1,1 @@
+Initial release with festival timelines, starred sets, clash alerts, groups, and offline support.

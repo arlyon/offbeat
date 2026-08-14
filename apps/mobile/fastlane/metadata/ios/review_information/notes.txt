@@ -1,0 +1,5 @@
+Offbeat uses first-party passkeys and does not offer third-party or social login. No pre-created demo account is required: the reviewer can register a passkey on the test device.
+
+Festival discovery is available from the Festivals screen. Open a festival to review the visual schedule, starred sets, clash view and Now view. Group invitations use QR codes; camera access is requested only when the reviewer opens the QR scanner. Check-ins are manually selected stages or text labels and do not use device location services.
+
+Cached festival data remains available offline. Peer-to-peer group synchronisation and chat are best exercised with two devices, but the schedule and offline browsing flows can be reviewed on one device.

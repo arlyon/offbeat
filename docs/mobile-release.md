@@ -134,6 +134,35 @@ bundle exec fastlane ios upload_testflight
 
 The lane uploads only and does not distribute to external tester groups.
 
+## App Store metadata and screenshots
+
+The localized en-GB and en-US listing content is under
+`apps/mobile/fastlane/metadata/ios`; screenshots are under
+`apps/mobile/fastlane/screenshots`. Upload them to the editable App Store version
+without uploading a binary or submitting for review:
+
+```sh
+cd apps/mobile
+APP_STORE_CONNECT_KEY_ID=... \
+APP_STORE_CONNECT_ISSUER_ID=... \
+APP_STORE_CONNECT_KEY_PATH=/absolute/path/to/AuthKey_KEY_ID.p8 \
+  bundle exec fastlane ios upload_store_metadata version:X.Y.Z
+```
+
+This is a remote App Store Connect mutation. Review the generated metadata and
+obtain explicit approval before running it. The app icon shown by TestFlight and
+the App Store is supplied by the signed binary.
+
+Generate deterministic store screenshots with a booted simulator or emulator:
+
+```sh
+apps/mobile/tool/generate_store_screenshots.sh DEVICE_ID iphone_69
+apps/mobile/tool/generate_store_screenshots.sh DEVICE_ID ipad_13
+apps/mobile/tool/generate_store_screenshots.sh DEVICE_ID android_phone
+apps/mobile/tool/generate_store_screenshots.sh DEVICE_ID android_tablet_7
+apps/mobile/tool/generate_store_screenshots.sh DEVICE_ID android_tablet_10
+```
+
 ## Local signed Android build
 
 Do not create `android/key.properties` from shared values. Copy the generated
@@ -160,6 +189,5 @@ sudo xcodebuild -runFirstLaunch
 brew install cocoapods
 ```
 
-This workstation currently has only Xcode Command Line Tools, so iOS archive
-creation cannot be tested locally. The release workflow must be exercised after
-Apple signing material is configured.
+This workstation has the full Xcode application selected and has successfully
+built, exported, validated, and uploaded a signed TestFlight IPA locally.

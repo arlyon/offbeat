@@ -1,0 +1,19 @@
+Offbeat is a local-first festival companion for lineups, personal schedules, and coordinating with friends when mobile networks become unreliable.
+
+PLAN YOUR FESTIVAL
+• Browse festival days, stages, and set times
+• View the lineup as a visual timeline
+• Star the artists you want to see
+• Spot schedule clashes before they catch you out
+• See what is playing now and what comes next
+
+STAY TOGETHER
+• Create festival groups and invite friends with a QR code
+• Share manual stage and meeting-point check-ins
+• See the sets your group has starred
+• Chat with your group and in festival channels
+
+BUILT FOR FESTIVAL CONDITIONS
+Festival information is cached on your device. Offbeat is designed to remain useful when internet access is slow, intermittent, or unavailable, and to sync again when a route becomes available.
+
+Availability of festival data and peer-to-peer features can vary by event, device, and connection conditions.
