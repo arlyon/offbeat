@@ -71,11 +71,19 @@ jobs:
         run: |
           flutter pub get
           flutter build appbundle --release \
+            --target-platform android-arm64 \
             --build-name="${GITHUB_REF_NAME#v}" \
             --build-number="$GITHUB_RUN_NUMBER" \
             --dart-define=OFFBEAT_SERVER_URL="$OFFBEAT_SERVER_URL" \
             --dart-define=OFFBEAT_RP_ID="$OFFBEAT_RP_ID" \
             --dart-define=OFFBEAT_SERVER_PUBKEY="$OFFBEAT_SERVER_PUBKEY"
+
+      - name: Verify arm64-only Android bundle
+        run: |
+          aab=apps/mobile/build/app/outputs/bundle/release/app-release.aab
+          abis=$(unzip -Z1 "$aab" | awk -F/ \
+            '/^base\/lib\/[^/]+\/[^/]+$/ {print $3}' | sort -u)
+          test "$abis" = arm64-v8a
 
       - name: Upload signed Android app bundle artefact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

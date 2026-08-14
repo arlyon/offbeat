@@ -42,6 +42,13 @@ android {
         }
     }
 
+    packaging {
+        jniLibs {
+            // Some dependencies publish extra ABIs despite the app's ABI filter.
+            excludes += setOf("lib/armeabi-v7a/**", "lib/x86_64/**")
+        }
+    }
+
     signingConfigs {
         create("release") {
             keyAlias = keystoreProperties.getProperty("keyAlias")
