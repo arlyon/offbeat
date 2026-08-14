@@ -89,6 +89,10 @@ Set these non-secret environment variables too:
 The production variables are compiled into the app. They are configuration, not
 secrets, but must be correct. Never rely on the development defaults.
 
+Set the repository-level variable `RELEASE_IOS=true` after all Apple secrets and
+variables are ready. It must be repository-level because GitHub evaluates the iOS
+job condition before loading the `production` environment.
+
 ## Release
 
 1. Ensure CI is green on `main`.
