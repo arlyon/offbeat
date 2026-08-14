@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import type { ArtistEnrichmentMessage } from "./artist-enrichment";
 import { MAX_IMPORT_REQUEST_BYTES } from "./festival-import";
+import { renderSitePage } from "./site";
 
 type Env = {
 	Bindings: {
@@ -29,6 +30,18 @@ const DEFAULT_ANDROID_SHA256 =
 	"07:46:72:3D:F4:72:56:63:D5:DC:41:C3:36:FC:CB:A7:54:EE:EF:E5:48:B1:52:02:F8:40:13:46:C5:FB:BF:A6";
 
 const app = new Hono<Env>();
+
+const siteHeaders = {
+	"Cache-Control": "public, max-age=300",
+	"Content-Security-Policy":
+		"default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; " +
+		"base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+	"X-Content-Type-Options": "nosniff",
+};
+
+app.get("/", (c) => c.html(renderSitePage("home"), 200, siteHeaders));
+app.get("/support", (c) => c.html(renderSitePage("support"), 200, siteHeaders));
+app.get("/privacy", (c) => c.html(renderSitePage("privacy"), 200, siteHeaders));
 
 // /.well-known/assetlinks.json — Android Digital Asset Links for passkey domain verification
 app.get("/.well-known/assetlinks.json", (c) => {

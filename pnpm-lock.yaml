@@ -45,6 +45,9 @@ importers:
       tsx:
         specifier: ^4.19.0
         version: 4.22.3
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
       vitest:
         specifier: ^3.2.0
         version: 3.2.4(tsx@4.22.3)
@@ -1400,6 +1403,11 @@ packages:
     engines: {node: '>=14.17'}
     hasBin: true
 
+  typescript@5.9.3:
+    resolution: {integrity: sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==}
+    engines: {node: '>=14.17'}
+    hasBin: true
+
   undici@7.24.8:
     resolution: {integrity: sha512-6KQ/+QxK49Z/p3HO6E5ZCZWNnCasyZLa5ExaVYyvPxUwKtbCPMKELJOqh7EqOle0t9cH/7d2TaaTRRa6Nhs4YQ==}
     engines: {node: '>=20.18.1'}
@@ -2584,6 +2592,8 @@ snapshots:
       '@turbo/windows-arm64': 2.9.14
 
   typescript@5.4.5: {}
+
+  typescript@5.9.3: {}
 
   undici@7.24.8: {}
 

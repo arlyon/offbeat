@@ -7,6 +7,7 @@ wrangler = "latest"
 cloudflared = "latest"
 android-sdk = "latest"
 "cargo:flutter_rust_bridge_codegen" = "latest"
+pnpm = "10.33.0"
 
 [tasks.tunnel]
 description = "Start cloudflared tunnel for local dev"
