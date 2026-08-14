@@ -41,7 +41,7 @@ dependencies:
   offbeat_bridge:
     path: rust_builder
   qr_flutter: ^4.1.0
-  mobile_scanner: ^6.0.0
+  mobile_scanner: ^7.4.0
   app_links: ^6.0.0
   permission_handler: ^12.0.0
   url_launcher: ^6.3.2
