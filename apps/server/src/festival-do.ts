@@ -18,6 +18,7 @@ import {
 } from "@offbeat/protocol";
 import * as Y from "yjs";
 import { generateKeypair, sign, signFestivalUpdate, verify } from "./signing";
+import { forecastDaysThrough } from "./weather-window";
 
 const RELAY_ACK_CAPABILITY_TOPIC = "__offbeat/relay-ack/v1";
 const MAX_CHAT_CATCHUP = 100;
@@ -28,6 +29,8 @@ const MAX_SEQUENCE_CATCHUP = 100;
 const MAX_SEQUENCE_CATCHUP_BYTES = 1024 * 1024;
 const MAX_CLIENT_FRAME_BYTES = 512 * 1024;
 const MAX_REMOTE_LAMPORT_ADVANCE = 1_000_000n;
+const WEATHER_REFRESH_MS = 24 * 60 * 60 * 1000;
+const ALARM_INTERVAL_MS = 15 * 60 * 1000;
 const EQUIVOCATED_HEAD_ID = "__offbeat/equivocated__";
 const AUTH_CHALLENGE_TTL_SECONDS = 60;
 
@@ -113,6 +116,9 @@ export class FestivalDO extends DurableObject {
 	#festivalId: string | null = null;
 	#lat: number | null = null;
 	#lon: number | null = null;
+	#weatherStartsAt: string | null = null;
+	#weatherEndsAt: string | null = null;
+	#weatherFetchStartsAt: string | null = null;
 	#publicStateDoc: Y.Doc | null = null;
 	#env: Record<string, unknown>;
 
@@ -563,6 +569,31 @@ export class FestivalDO extends DurableObject {
 		this.#festivalId = ((await this.ctx.storage.get("festival_id")) as string) ?? null;
 		this.#lat = ((await this.ctx.storage.get("lat")) as number) ?? null;
 		this.#lon = ((await this.ctx.storage.get("lon")) as number) ?? null;
+		this.#weatherStartsAt = ((await this.ctx.storage.get("weather_starts_at")) as string) ?? null;
+		this.#weatherEndsAt = ((await this.ctx.storage.get("weather_ends_at")) as string) ?? null;
+		this.#weatherFetchStartsAt =
+			((await this.ctx.storage.get("weather_fetch_starts_at")) as string) ?? null;
+	}
+
+	#configResponse() {
+		return {
+			opensAt: this.#opensAt,
+			closesAt: this.#closesAt,
+			festivalId: this.#festivalId,
+			lat: this.#lat,
+			lon: this.#lon,
+			weatherStartsAt: this.#weatherStartsAt,
+			weatherEndsAt: this.#weatherEndsAt,
+			weatherFetchStartsAt: this.#weatherFetchStartsAt,
+		};
+	}
+
+	#alarmEndsAt(): number | null {
+		const candidates = [this.#closesAt, this.#weatherEndsAt]
+			.filter((value): value is string => value !== null)
+			.map((value) => new Date(value).getTime())
+			.filter(Number.isFinite);
+		return candidates.length > 0 ? Math.max(...candidates) : null;
 	}
 
 	/** Returns true if the current time is within the [opensAt, closesAt] window.
@@ -972,7 +1003,7 @@ export class FestivalDO extends DurableObject {
 			});
 		}
 
-		// PUT /config — set the event window and location
+		// PUT /config — set the event, weather, and location configuration
 		if (request.method === "PUT" && url.pathname === "/config") {
 			const body = (await request.json()) as {
 				opensAt?: string;
@@ -980,6 +1011,9 @@ export class FestivalDO extends DurableObject {
 				festivalId?: string;
 				lat?: number;
 				lon?: number;
+				weatherStartsAt?: string;
+				weatherEndsAt?: string;
+				weatherFetchStartsAt?: string;
 			};
 			if (body.opensAt) {
 				this.#opensAt = body.opensAt;
@@ -1001,24 +1035,24 @@ export class FestivalDO extends DurableObject {
 				this.#lon = body.lon;
 				await this.ctx.storage.put("lon", body.lon);
 			}
-			return Response.json({
-				opensAt: this.#opensAt,
-				closesAt: this.#closesAt,
-				festivalId: this.#festivalId,
-				lat: this.#lat,
-				lon: this.#lon,
-			});
+			if (body.weatherStartsAt) {
+				this.#weatherStartsAt = body.weatherStartsAt;
+				await this.ctx.storage.put("weather_starts_at", body.weatherStartsAt);
+			}
+			if (body.weatherEndsAt) {
+				this.#weatherEndsAt = body.weatherEndsAt;
+				await this.ctx.storage.put("weather_ends_at", body.weatherEndsAt);
+			}
+			if (body.weatherFetchStartsAt) {
+				this.#weatherFetchStartsAt = body.weatherFetchStartsAt;
+				await this.ctx.storage.put("weather_fetch_starts_at", body.weatherFetchStartsAt);
+			}
+			return Response.json(this.#configResponse());
 		}
 
 		// GET /config — read the current config
 		if (request.method === "GET" && url.pathname === "/config") {
-			return Response.json({
-				opensAt: this.#opensAt,
-				closesAt: this.#closesAt,
-				festivalId: this.#festivalId,
-				lat: this.#lat,
-				lon: this.#lon,
-			});
+			return Response.json(this.#configResponse());
 		}
 
 		// PUT /admins — register an admin public key (hex-encoded Ed25519 verifying key).
@@ -2272,36 +2306,41 @@ export class FestivalDO extends DurableObject {
 	/** DO alarm handler — fetches weather, prunes stale peers, and reschedules. */
 	async alarm() {
 		const now = new Date();
-
-		// Guard: stop if past closesAt (festival over)
-		if (this.#closesAt && now.toISOString() > this.#closesAt) {
-			console.log("[alarm] festival closed, not rescheduling");
+		const alarmEndsAt = this.#alarmEndsAt();
+		if (alarmEndsAt !== null && now.getTime() > alarmEndsAt) {
+			console.log("[alarm] festival weather and event windows closed, not rescheduling");
 			return;
 		}
 
-		// Guard: if before opensAt - 24h, reschedule for that time
-		if (this.#opensAt) {
-			const earlyOpen = new Date(this.#opensAt);
-			earlyOpen.setDate(earlyOpen.getDate() - 1);
-			if (now < earlyOpen) {
-				console.log(`[alarm] too early, rescheduling for ${earlyOpen.toISOString()}`);
-				await this.ctx.storage.setAlarm(earlyOpen.getTime());
-				return;
-			}
+		let weatherFetchStartsAt = this.#weatherFetchStartsAt
+			? new Date(this.#weatherFetchStartsAt)
+			: null;
+		// Backward-compatible fallback until an existing DO receives the new weather config.
+		if (!weatherFetchStartsAt && this.#opensAt) {
+			weatherFetchStartsAt = new Date(this.#opensAt);
+			weatherFetchStartsAt.setUTCDate(weatherFetchStartsAt.getUTCDate() - 1);
+		}
+		if (weatherFetchStartsAt && now < weatherFetchStartsAt) {
+			console.log(
+				`[alarm] before weather loading window, rescheduling for ${weatherFetchStartsAt.toISOString()}`,
+			);
+			await this.ctx.storage.setAlarm(weatherFetchStartsAt.getTime());
+			return;
 		}
 
-		// Always prune stale peers (every 15 min)
+		// Peer pruning remains frequent while the festival resources are active.
 		try {
 			await this.#pruneStalePeers();
 		} catch (err) {
 			console.error("[alarm] peer pruning failed:", err);
 		}
 
-		// Fetch weather every 6 hours (check last weather update time)
-		if (this.#lat !== null && this.#lon !== null && this.#festivalId) {
+		const weatherWindowOpen =
+			(!weatherFetchStartsAt || now >= weatherFetchStartsAt) &&
+			(!this.#weatherEndsAt || now.toISOString() <= this.#weatherEndsAt);
+		if (weatherWindowOpen && this.#lat !== null && this.#lon !== null && this.#festivalId) {
 			const lastWeather = (await this.ctx.storage.get("last_weather_alarm")) as number | undefined;
-			const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
-			if (!lastWeather || now.getTime() - lastWeather >= SIX_HOURS_MS) {
+			if (!lastWeather || now.getTime() - lastWeather >= WEATHER_REFRESH_MS) {
 				try {
 					const weather = await this.#fetchWeather();
 					await this.#writeWeatherToDoc(weather);
@@ -2313,27 +2352,22 @@ export class FestivalDO extends DurableObject {
 			}
 		}
 
-		// Reschedule in 15 minutes if still within window
-		const FIFTEEN_MIN = 15 * 60 * 1000;
-		const next = new Date(now.getTime() + FIFTEEN_MIN);
-		if (!this.#closesAt || next.toISOString() <= this.#closesAt) {
+		const next = new Date(now.getTime() + ALARM_INTERVAL_MS);
+		if (alarmEndsAt === null || next.getTime() <= alarmEndsAt) {
 			await this.ctx.storage.setAlarm(next.getTime());
 			console.log(`[alarm] next alarm at ${next.toISOString()}`);
 		}
 	}
 
-	/** Fetch hourly weather from Open-Meteo, capped to 1 day after festival closes. */
+	/** Fetch hourly weather from Open-Meteo through the configured weather window. */
 	async #fetchWeather(): Promise<WeatherData> {
 		const lat = this.#lat;
 		const lon = this.#lon;
 		if (lat === null || lon === null) {
 			throw new Error("Festival coordinates are not configured");
 		}
-		let forecastDays = 7;
-		if (this.#closesAt) {
-			const msLeft = new Date(this.#closesAt).getTime() - Date.now();
-			forecastDays = Math.max(1, Math.min(7, Math.ceil(msLeft / 86_400_000)));
-		}
+		const forecastEnd = this.#weatherEndsAt ?? this.#closesAt;
+		const forecastDays = forecastEnd ? forecastDaysThrough(forecastEnd) : 16;
 		const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=temperature_2m,precipitation_probability,weather_code,wind_speed_10m&forecast_days=${forecastDays}&timezone=auto`;
 		const resp = await fetch(url);
 		if (!resp.ok) {
@@ -2364,19 +2398,21 @@ export class FestivalDO extends DurableObject {
 			const weatherMap = doc.getMap("weather") as Y.Map<Y.Map<unknown>>;
 			const hourlyMap = doc.getMap("hourly") as Y.Map<Y.Map<unknown>>;
 
-			// Determine which hourly entries to keep/add
+			// Keep past observations inside the festival window and replace future forecasts.
 			const nowIso = new Date().toISOString().slice(0, 16);
-			const cutoff = this.#closesAt ? this.#closesAt.slice(0, 16) : null;
-
-			// Remove stale future entries (they'll be replaced by fresh forecast)
+			const windowStart = this.#weatherStartsAt?.slice(0, 16) ?? null;
+			const windowEnd = (this.#weatherEndsAt ?? this.#closesAt)?.slice(0, 16) ?? null;
 			for (const key of [...hourlyMap.keys()]) {
-				if (key >= nowIso) hourlyMap.delete(key);
+				if ((windowStart && key < windowStart) || (windowEnd && key > windowEnd) || key >= nowIso) {
+					hourlyMap.delete(key);
+				}
 			}
 
-			// Add fresh hourly entries
+			// Store only the attendee-facing weather window.
 			for (let i = 0; i < weather.hourly.time.length; i++) {
 				const t = weather.hourly.time[i];
-				if (cutoff && t > cutoff) break;
+				if (windowStart && t < windowStart) continue;
+				if (windowEnd && t > windowEnd) break;
 				const m = new Y.Map();
 				m.set("temp", weather.hourly.temperature_2m[i]);
 				m.set("precip", weather.hourly.precipitation_probability[i]);
@@ -2400,15 +2436,20 @@ export class FestivalDO extends DurableObject {
 		console.log(`[writeWeatherToDoc] wrote weather for festival/${this.#festivalId}/state`);
 	}
 
-	/** Arm the weather alarm. If no alarm is set, triggers immediately. */
+	/** Arm the weather alarm, pulling an obsolete later alarm forward when needed. */
 	async armWeatherAlarm() {
+		const now = Date.now();
+		const configuredStart = this.#weatherFetchStartsAt
+			? new Date(this.#weatherFetchStartsAt).getTime()
+			: now;
+		const desired = Number.isFinite(configuredStart) ? Math.max(now, configuredStart) : now;
 		const existing = await this.ctx.storage.getAlarm();
-		if (existing) {
+		if (existing && existing <= desired + ALARM_INTERVAL_MS) {
 			console.log(`[armWeatherAlarm] alarm already set for ${new Date(existing).toISOString()}`);
 			return;
 		}
-		await this.ctx.storage.setAlarm(Date.now());
-		console.log("[armWeatherAlarm] armed — triggering immediately");
+		await this.ctx.storage.setAlarm(desired);
+		console.log(`[armWeatherAlarm] armed for ${new Date(desired).toISOString()}`);
 	}
 }
 

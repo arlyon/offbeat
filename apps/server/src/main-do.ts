@@ -3068,6 +3068,24 @@ export class MainDO extends DurableObject {
 			}
 
 			const body = (await request.json()) as Record<string, unknown>;
+			if (
+				body.lat !== undefined &&
+				(typeof body.lat !== "number" ||
+					!Number.isFinite(body.lat) ||
+					body.lat < -90 ||
+					body.lat > 90)
+			) {
+				return new Response("lat must be a finite WGS84 latitude", { status: 400 });
+			}
+			if (
+				body.lon !== undefined &&
+				(typeof body.lon !== "number" ||
+					!Number.isFinite(body.lon) ||
+					body.lon < -180 ||
+					body.lon > 180)
+			) {
+				return new Response("lon must be a finite WGS84 longitude", { status: 400 });
+			}
 			const value = (key: string) => (body[key] === undefined ? current[key] : body[key]);
 			this.sql.exec(
 				`UPDATE festivals SET

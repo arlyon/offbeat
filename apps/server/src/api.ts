@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { ArtistEnrichmentMessage } from "./artist-enrichment";
 import { MAX_IMPORT_REQUEST_BYTES } from "./festival-import";
 import { renderSitePage } from "./site";
+import { festivalWeatherWindow } from "./weather-window";
 
 type Env = {
 	Bindings: {
@@ -459,9 +460,11 @@ app.put("/festivals/:id/artist-resolutions", async (c) => {
 });
 
 // PUT /festivals/:id — update festival metadata (admin-only)
-app.put("/festivals/:id", (c) => {
+app.put("/festivals/:id", async (c) => {
 	const id = c.req.param("id");
-	return forwardToMainDO(c.env, `/festivals/${id}`, c.req.raw);
+	const response = await forwardToMainDO(c.env, `/festivals/${id}`, c.req.raw);
+	if (response.ok) await ensureFestivalConfig(c.env, id, false, true);
+	return response;
 });
 
 // DELETE /festivals/:id — delete a festival (admin-only)
@@ -693,6 +696,7 @@ async function ensureFestivalConfig(
 	env: Env["Bindings"],
 	festivalId: string,
 	requireLineup = false,
+	refreshConfig = false,
 ) {
 	const doId = env.FESTIVAL_DO.idFromName(festivalId);
 	const stub = env.FESTIVAL_DO.get(doId);
@@ -703,12 +707,31 @@ async function ensureFestivalConfig(
 		opensAt: string | null;
 		closesAt: string | null;
 		festivalId: string | null;
+		weatherStartsAt: string | null;
+		weatherEndsAt: string | null;
+		weatherFetchStartsAt: string | null;
 	};
+	let lineup: { days: Array<{ num: number; month: string; year: number }> } | undefined;
+	const needsConfig =
+		refreshConfig ||
+		!config.opensAt ||
+		!config.closesAt ||
+		!config.weatherStartsAt ||
+		!config.weatherEndsAt ||
+		!config.weatherFetchStartsAt ||
+		config.festivalId !== festivalId;
 
-	if (!config.opensAt || !config.closesAt || config.festivalId !== festivalId) {
+	if (needsConfig) {
 		const festUrl = requireUrl(`http://internal/festivals/${festivalId}`);
-		const festResp = await mainStub.fetch(new Request(festUrl.toString()));
+		const lineupUrl = requireUrl(`http://internal/festivals/${festivalId}/lineup`);
+		const [festResp, lineupResp] = await Promise.all([
+			mainStub.fetch(new Request(festUrl.toString())),
+			mainStub.fetch(new Request(lineupUrl.toString())),
+		]);
 		if (!festResp.ok) return;
+		if (lineupResp.ok) lineup = (await lineupResp.json()) as typeof lineup;
+		else if (requireLineup) throw new Error(`Festival lineup unavailable for ${festivalId}`);
+
 		const fest = (await festResp.json()) as {
 			startDate: string;
 			endDate: string;
@@ -716,10 +739,11 @@ async function ensureFestivalConfig(
 			lon?: number;
 		};
 		const opens = new Date(fest.startDate);
-		opens.setDate(opens.getDate() - 1);
+		opens.setUTCDate(opens.getUTCDate() - 1);
 		const closes = new Date(fest.endDate);
-		closes.setDate(closes.getDate() + 1);
-		closes.setHours(23, 59, 59, 999);
+		closes.setUTCDate(closes.getUTCDate() + 1);
+		closes.setUTCHours(23, 59, 59, 999);
+		const weatherWindow = lineup?.days.length ? festivalWeatherWindow(lineup.days) : undefined;
 		await stub.fetch(
 			new Request(configUrl.toString(), {
 				method: "PUT",
@@ -729,6 +753,9 @@ async function ensureFestivalConfig(
 					festivalId,
 					lat: fest.lat,
 					lon: fest.lon,
+					weatherStartsAt: weatherWindow?.startsAt,
+					weatherEndsAt: weatherWindow?.endsAt,
+					weatherFetchStartsAt: weatherWindow?.fetchStartsAt,
 				}),
 				headers: { "Content-Type": "application/json" },
 			}),
@@ -743,13 +770,13 @@ async function ensureFestivalConfig(
 		seedLineup(festivalId: string, lineup: unknown): Promise<void>;
 	};
 	if (!(await festivalStub.hasSeededLineup(festivalId))) {
-		const lineupUrl = requireUrl(`http://internal/festivals/${festivalId}/lineup`);
-		const lineupResp = await mainStub.fetch(new Request(lineupUrl.toString()));
-		if (lineupResp.ok) {
-			await festivalStub.seedLineup(festivalId, await lineupResp.json());
-		} else if (requireLineup) {
-			throw new Error(`Festival lineup unavailable for ${festivalId}`);
+		if (!lineup) {
+			const lineupUrl = requireUrl(`http://internal/festivals/${festivalId}/lineup`);
+			const lineupResp = await mainStub.fetch(new Request(lineupUrl.toString()));
+			if (lineupResp.ok) lineup = (await lineupResp.json()) as typeof lineup;
+			else if (requireLineup) throw new Error(`Festival lineup unavailable for ${festivalId}`);
 		}
+		if (lineup) await festivalStub.seedLineup(festivalId, lineup);
 	}
 	await (stub as unknown as { armWeatherAlarm(): Promise<void> }).armWeatherAlarm();
 }

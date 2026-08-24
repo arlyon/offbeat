@@ -1,4 +1,5 @@
 #!/usr/bin/env npx tsx
+/// <reference path="./node-runtime.d.ts" />
 /**
  * Register a single festival from a JSON file via Clashfinder.
  *
@@ -20,7 +21,9 @@
  *   "city": "London",
  *   "country": "GB",
  *   "genres": ["Electronic", "Indie"],
- *   "clashfinderId": "myfestival2026"
+ *   "clashfinderId": "myfestival2026",
+ *   "lat": 51.5369,
+ *   "lon": -0.0394
  * }
  */
 
@@ -35,6 +38,8 @@ interface FestivalInput {
 	country: string;
 	genres: string[];
 	clashfinderId: string;
+	lat?: number;
+	lon?: number;
 }
 
 function hexToBytes(hex: string): Uint8Array {
@@ -122,6 +127,9 @@ Example:
 	console.log(`  Location: ${festival.location}, ${festival.city}, ${festival.country}`);
 	console.log(`  Clashfinder: ${festival.clashfinderId}`);
 	console.log(`  Genres: ${festival.genres.join(", ")}`);
+	if (festival.lat !== undefined && festival.lon !== undefined) {
+		console.log(`  Coordinates: ${festival.lat}, ${festival.lon}`);
+	}
 
 	if (dryRun) {
 		console.log("\n[Dry run] Would register festival via Clashfinder");
@@ -143,6 +151,8 @@ Example:
 			city: festival.city,
 			country: festival.country,
 			genres: festival.genres,
+			lat: festival.lat,
+			lon: festival.lon,
 		},
 	};
 

@@ -55,7 +55,7 @@ OFFBEAT shows an hourly forecast for the selected festival when valid weather da
 
 **Not available:** push weather alerts, lightning detection, flood or heat warnings, official warning feeds, evacuation instructions, a manual refresh button, or a freshness warning that automatically hides stale data.
 
-The sheet displays at most the next 72 available hourly rows from the current time. That is a UI window, not a promise that 72 future hours always exist.
+The sheet displays the available hourly rows through the end of the festival weather window. Upstream forecast availability can still shorten that range.
 
 ## Prerequisites
 
@@ -69,7 +69,7 @@ The forecast is associated with the configured festival coordinates, not the pho
 
 The server requests Open-Meteo hourly temperature at 2 m, precipitation probability, weather code and wind speed at 10 m, using the forecast timezone returned for the festival coordinates.
 
-The server alarm is coded to run during the configured festival window, beginning up to one day before opening, and to check weather freshness every 15 minutes. It fetches a new forecast when the previous successful weather fetch is at least six hours old. A failed fetch leaves the prior document in place and does not create a user alert.
+The attendee weather window begins one day before the first programmed lineup day and ends one day after the last programmed lineup day. The server begins loading that forecast seven days before the weather window and refreshes it after the previous successful fetch is at least 24 hours old. A failed fetch leaves the prior document in place and retries on a later alarm without creating a user alert.
 
 This cadence is server behavior, not a guarantee. Alarm scheduling, connectivity, coordinates or the upstream service can prevent an update. Always inspect the displayed `UPDATED` time.
 
@@ -111,8 +111,8 @@ The forecast coordinates and update traffic are not private group data.
 ## Constraints
 
 - Forecast accuracy, timing and local conditions are not guaranteed.
-- The server stops rescheduling after the configured festival close.
-- Future rows are capped by upstream forecast availability and festival-close filtering.
+- The server stops weather refreshes after the attendee weather window closes.
+- Future rows are capped by Open-Meteo's forecast availability and the configured weather-window boundary.
 - There are no severe-weather notifications or official warnings in OFFBEAT.
 - Cached weather must never override venue evacuation, shelter or closure instructions.
 - A missing pill must not be interpreted as safe weather.

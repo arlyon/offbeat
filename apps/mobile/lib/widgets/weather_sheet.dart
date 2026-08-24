@@ -3,7 +3,6 @@
 // Scrollable hourly strip with temp + icon + precip bars
 // Updated-at timestamp
 
-import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../theme/tokens.dart';
 import '../src/rust/api/dto.dart';
@@ -80,7 +79,7 @@ class WeatherSheet extends StatelessWidget {
           child: ListView.builder(
             controller: scrollController,
             padding: const EdgeInsets.symmetric(horizontal: 18),
-            itemCount: math.min(hourly.time.length - startIdx, 72), // ~3 days
+            itemCount: hourly.time.length - startIdx,
             itemBuilder: (context, i) {
               final idx = startIdx + i;
               return _HourRow(hourly: hourly, index: idx, isFirst: i == 0);

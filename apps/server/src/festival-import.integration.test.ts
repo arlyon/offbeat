@@ -307,7 +307,12 @@ describe("registered-user Clashfinder imports", () => {
 
 		const config = await worker.fetch(`/festivals/${published.festival.id}/config`);
 		expect(config.status).toBe(200);
-		expect(await config.json()).toMatchObject({ festivalId: published.festival.id });
+		expect(await config.json()).toMatchObject({
+			festivalId: published.festival.id,
+			weatherStartsAt: "2027-06-11T00:00:00.000Z",
+			weatherEndsAt: "2027-06-13T23:59:59.999Z",
+			weatherFetchStartsAt: "2027-06-04T00:00:00.000Z",
+		});
 		const festivals = (await (await worker.fetch("/festivals")).json()) as Array<{ id: string }>;
 		expect(festivals.some((festival) => festival.id === published.festival.id)).toBe(true);
 

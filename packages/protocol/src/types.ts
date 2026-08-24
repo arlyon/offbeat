@@ -13,6 +13,8 @@ export interface Festival {
 	clashfinderId?: string; // Clashfinder event ID for lineup refresh
 	publicKey: string;
 	updatedAt: string; // ISO string
+	lat?: number; // WGS84 venue latitude
+	lon?: number; // WGS84 venue longitude
 }
 
 export interface Stage {
